@@ -147,7 +147,12 @@ For **Direct** method (82 rows, 71 data-entry):
   once within a period/entity's cash activities. Repetition in a note, another
   statement or an indirect noncash addback is not duplicate cash allocation.
   Preserve source-supported low-value lease presentation bridges and explain
-  both legs. Equal section totals do not establish correct classification.
+  both legs in the payment fact's evidence: name the source payment and page,
+  the live template subtotal where it is adjusted, and where it is deducted
+  later. State the source and template amounts for any affected subtotal;
+  verify the final operating and closing cash totals. Do not claim a bridge
+  unless the live formulas prove both legs. Equal section totals do not
+  establish correct classification.
 
 - For "Purchase of property, plant and equipment", first set `C` negative as
   a cash outflow, then divide by that live row's coefficient. For an ordinary

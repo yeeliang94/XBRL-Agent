@@ -1919,7 +1919,7 @@ async def _run_reviewer_pass(
                         result["status"] == "unresolved"
                         for result in outcome["investigation_resolutions"])
                     if unresolved:
-                        outcome["error"] = "reviewer_investigation_unresolved"
+                        outcome["needs_review"] = True
                     outcome["review_stage"] = (
                         "investigation_unresolved" if unresolved
                         else "investigation_complete")
@@ -1989,12 +1989,13 @@ async def _run_reviewer_pass(
                 "phase": "triage_complete",
                 "message": "AI review triage found no specific issue to investigate.",
             })
-        elif spot_mode is not None and not outcome.get("error"):
+        elif spot_mode is not None and not outcome.get("error") and not outcome.get("needs_review"):
             outcome["review_stage"] = "investigation_complete"
         await _emit("complete", {
             "success": outcome.get("error") is None,
             "error": outcome.get("error"),
             "review_stage": outcome.get("review_stage"),
+            "flag": "AI review completed; a source question needs your review." if outcome.get("needs_review") else None,
             "writes_performed": deps.writes_performed,
             "flags_raised": deps.flags_raised,
             "turns_used": turn_count, "max_turns": max_turns,
@@ -3253,16 +3254,8 @@ async def _lifespan(app: FastAPI):
         logger.warning("notes formatter task reconciliation failed at startup",
                        exc_info=True)
 
-    # Retire extraction runs left `running` by a dead process (UX-QA #2). The
-    # run executes inside a streaming request that dies with the process, so a
-    # surviving `running` row is a History dead-end (Download/Delete disabled,
-    # no live indicator). At startup EVERY `running` row is orphaned — no
-    # stream can have started yet (this runs before requests are served and
-    # `active_runs` is empty) — so reap all of them (`max_age_hours=0`), not
-    # just old ones. Reaping only >6h rows left a crash-then-immediate-restart
-    # orphan `running` until the next late restart (peer review). Flipping to
-    # `aborted` upholds the lifecycle contract (gotcha #10) across restarts.
-    # Best-effort — must not block startup.
+    # Recover abandoned rows immediately while respecting a live CLI or web
+    # process owning the same audit database through its OS-held run lock.
     try:
         from db import repository as repo
         conn = _open_audit_conn()
@@ -3603,25 +3596,13 @@ def _model_runtime_snapshot(
 
 
 def _auto_review_enabled() -> bool:
-    """Whether the reviewer pass auto-runs after extraction (canonical mode).
-
-    Controlled by ``XBRL_AUTO_REVIEW`` (default on). When off, a run with
-    failing cross-checks / open conflicts simply finishes and the user
-    triggers the reviewer manually from the Review tab. Read fresh from the
-    environment each call so a Settings toggle takes effect without restart.
-    """
-    return os.environ.get("XBRL_AUTO_REVIEW", "true").lower() == "true"
+    """Automatic figures review is mandatory; legacy disable settings are inert."""
+    return True
 
 
 def _notes_auto_review_enabled() -> bool:
-    """Whether the notes reviewer pass auto-runs after the merge (default on).
-
-    Controlled by ``XBRL_NOTES_AUTO_REVIEW``. Independent of ``XBRL_AUTO_REVIEW``
-    (which gates the FACE reviewer). When off, a notes run finishes without the
-    reviewer and the user triggers it manually from the Notes tab. Read fresh
-    each call so a Settings toggle takes effect without restart.
-    """
-    return os.environ.get("XBRL_NOTES_AUTO_REVIEW", "true").lower() == "true"
+    """Automatic notes review is mandatory; legacy disable settings are inert."""
+    return True
 
 
 def _should_auto_format_pdf_notes(
@@ -5265,6 +5246,8 @@ async def run_multi_agent_stream(
             # no-ops and the row stays 'running' forever, violating
             # gotcha #10 (every exit path reaches a terminal status).
             run_id = existing_run_id
+            from db.run_ownership import claim
+            claim(db_conn, run_id)
             try:
                 # Also refresh the canonical `runs.orchestration` column
                 # — list/detail read the column, not the JSON (peer-
@@ -5313,6 +5296,7 @@ async def run_multi_agent_stream(
                     output_dir=output_dir,
                     config=run_config.model_dump(),
                     scout_enabled=run_config.use_scout,
+                    owned=True,
                     orchestration=getattr(run_config, "orchestration", "split"),
                 )
                 db_conn.commit()
@@ -5603,9 +5587,11 @@ async def run_multi_agent_stream(
                     if key not in {"message", "technical_message"}
                 },
             )
-            _ensure_system_pseudo_agent()
+            is_notes_phase = payload.get("phase") in {"formatting_notes", "cleaning_notes", "checking_notes"}
+            if not is_notes_phase:
+                _ensure_system_pseudo_agent()
             # DB persistence — stamped copy, lazily-created SYSTEM row.
-            if _system_run_agent_id is not None:
+            if _system_run_agent_id is not None and not is_notes_phase:
                 try:
                     persist_event({
                         "event": "error",
@@ -5737,6 +5723,16 @@ async def run_multi_agent_stream(
                     "event_queue full; pipeline_stage=%s dropped", stage,
                 )
 
+        def _pending_events():
+            """Drain queued events without treating task sentinels as progress."""
+            while True:
+                try:
+                    event = event_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                if event is not None:
+                    yield event
+
         async def _drain_while_running(task: asyncio.Task):
             """Yield queued events while ``task`` runs, then flush the tail.
 
@@ -5755,13 +5751,7 @@ async def run_multi_agent_stream(
                 if event is None:
                     continue
                 yield event
-            while True:
-                try:
-                    event = event_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-                if event is None:
-                    continue
+            for event in _pending_events():
                 yield event
 
         # A normal web run owns its scout pass. The pre-run scan remains an
@@ -6469,13 +6459,7 @@ async def run_multi_agent_stream(
         # Push to queue + drain so the event rides the standard
         # GeneratorExit-tolerant yield path.
         _emit_stage("merging")
-        while True:
-            try:
-                evt = event_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            if evt is None:
-                continue
+        for evt in _pending_events():
             persist_event(evt)
             if client_connected:
                 try:
@@ -6543,13 +6527,7 @@ async def run_multi_agent_stream(
                 "errors": list(merge_result.errors),
             })
             # Drain the event we just pushed.
-            while True:
-                try:
-                    evt = event_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-                if evt is None:
-                    continue
+            for evt in _pending_events():
                 persist_event(evt)
                 if client_connected:
                     try:
@@ -6893,13 +6871,7 @@ async def run_multi_agent_stream(
         # everything is already in the queue). Persist for audit and
         # yield to the SSE client. Same pattern as _drain_while_running
         # but no task to wait on — the events are already there.
-        while True:
-            try:
-                evt = event_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            if evt is None:
-                continue
+        for evt in _pending_events():
             persist_event(evt)
             if client_connected:
                 try:
@@ -7176,6 +7148,17 @@ async def run_multi_agent_stream(
                     )
             return validator_outcome, validator_cancelled_without_outcome
 
+        def _record_review_not_applicable(role: str, message: str) -> None:
+            if db_conn is not None and run_id is not None:
+                review_id = repo.create_run_agent(db_conn, run_id, statement_type=role)
+                repo.finish_run_agent(db_conn, review_id, status="skipped")
+                run_agent_ids_by_agent_id[role.lower()] = review_id
+                db_conn.commit()
+            event_queue.put_nowait({"event": "status", "data": {
+                "agent_id": role.lower(), "agent_role": role,
+                "phase": "skipped", "message": message,
+            }})
+
         notes_review_lifecycle_task: Optional[asyncio.Task] = None
         notes_outputs = {}
         if merge_result.success and notes_result is not None:
@@ -7190,10 +7173,14 @@ async def run_multi_agent_stream(
                 if not getattr(e, "is_numeric", False)
             }
             have_prose_sheet = any(t in notes_outputs for t in _prose_types)
-            if have_prose_sheet and (_notes_auto_review_enabled() or prepared_snapshot is not None):
+            if have_prose_sheet:
                 notes_review_lifecycle_task = asyncio.create_task(
                     _run_auto_notes_review(notes_outputs),
                 )
+
+        if notes_review_lifecycle_task is None:
+            _record_review_not_applicable(NOTES_VALIDATOR_AGENT_ID,
+                "No extracted prose disclosures are available for notes review.")
 
         # Phase 3: if any reviewer-actionable hard cross-check failed, spawn
         # the correction agent once. It edits canonical face facts; on completion
@@ -7218,33 +7205,25 @@ async def run_multi_agent_stream(
             ]
             has_issues = bool(reviewer_failures) or bool(canonical_conflicts)
             should_correct = has_issues
-            # Reviewer auto-trigger toggle (Settings → XBRL_AUTO_REVIEW). When
-            # off, a run with failures/conflicts simply finishes and the user
-            # triggers the reviewer manually from the Review tab.
-            if not _auto_review_enabled():
-                logger.info(
-                    "auto-review disabled (XBRL_AUTO_REVIEW=false) — skipping "
-                    "reviewer for run %s; manual re-review still available", run_id,
-                )
-                should_correct = False
-            # Every clean run receives a short, source-grounded triage. A
-            # specific anomaly is handed to a focused investigation. The
-            # auto-review toggle still governs known failed checks/conflicts.
+            # Every applicable run receives review: investigate known issues,
+            # otherwise perform bounded source-grounded triage.
             spot_check_mode: Optional[str] = None
             # A clean run with no face facts (notes-only, or a mocked run)
             # has nothing to triage; the reviewer would refuse it and wrongly
             # land the run completed_with_errors.
-            if not hard_failures and not has_issues and _run_has_facts(AUDIT_DB_PATH, run_id) is not False:
+            if not has_issues and not hard_failures and _run_has_facts(AUDIT_DB_PATH, run_id) is not False:
                 spot_check_mode = "light"
                 should_correct = True
                 logger.info(
                     "run %s clean — launching reviewer triage", run_id,
                 )
+            if not should_correct:
+                _record_review_not_applicable(CORRECTION_AGENT_ID,
+                    "Failed notes cross-checks require notes review; clean-run figures triage is not applicable."
+                    if hard_failures else "No extracted figures are available for AI review.")
             if should_correct:
-                # Create + register the CORRECTION run_agent row lazily —
-                # only when we actually launch the agent — so runs without
-                # failures don't churn out a "skipped" audit row and the
-                # counts match the number of real agents that did work.
+                # Create + register the CORRECTION audit row when review launches.
+                # Inapplicable reviews receive a separate terminal skipped row.
                 if db_conn is not None and run_id is not None:
                     try:
                         correction_run_agent_id = repo.create_run_agent(
@@ -7341,6 +7320,8 @@ async def run_multi_agent_stream(
                         try:
                             if correction_outcome.get("error"):
                                 status = "failed"
+                            elif correction_outcome.get("needs_review"):
+                                status = "completed_with_errors"
                             else:
                                 status = "completed"
                             # RUN-REVIEW P2-3: even when correction failed,
@@ -7373,6 +7354,7 @@ async def run_multi_agent_stream(
                                 # v17 (item 9): classify the reviewer outcome.
                                 error_type=_error_type_for_outcome(
                                     _co.get("error")),
+                                error_message="AI review completed; a source question needs your review." if _co.get("needs_review") else _co.get("error"),
                             )
                             # Plan agent-efficiency Step 0.1: the reviewer used to
                             # collect per-turn rows and discard them — only the
@@ -7520,13 +7502,7 @@ async def run_multi_agent_stream(
                         })
                     # Drain the error event(s) we may have enqueued so the
                     # client + DB see them in order.
-                    while True:
-                        try:
-                            _evt = event_queue.get_nowait()
-                        except asyncio.QueueEmpty:
-                            break
-                        if _evt is None:
-                            continue
+                    for _evt in _pending_events():
                         persist_event(_evt)
                         if client_connected:
                             try:
@@ -7650,13 +7626,7 @@ async def run_multi_agent_stream(
                     _emit_cross_check_summary(
                         cross_check_results, "post_correction", event_queue,
                     )
-                    while True:
-                        try:
-                            evt = event_queue.get_nowait()
-                        except asyncio.QueueEmpty:
-                            break
-                        if evt is None:
-                            continue
+                    for evt in _pending_events():
                         persist_event(evt)
                         if client_connected:
                             try:
@@ -7712,13 +7682,7 @@ async def run_multi_agent_stream(
             # The lifecycle task has already finished, so its normal queue
             # drain cannot deliver a refresh error enqueued above. Flush that
             # tail before terminal status/run_complete.
-            while True:
-                try:
-                    evt = event_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-                if evt is None:
-                    continue
+            for evt in _pending_events():
                 persist_event(evt)
                 if client_connected:
                     try:
@@ -7742,11 +7706,144 @@ async def run_multi_agent_stream(
                     }}
                 return
 
-        # PDF notes use one styling author. Extraction stores content/table
-        # geometry, then this standard pass reads the PDF and applies the
-        # standardised mTool-safe profile. Word uploads keep their verbatim
-        # source-styling path and never enter this block.
+        # Finalize content before source integrity and appearance verification.
+        # Its receipts preserve original HTML and exact source-backed omissions.
+        notes_cleanup_incomplete = False
+        if merge_result.success and notes_result is not None:
+            from notes_types import NOTES_REGISTRY as _CLEANUP_NOTES_REG
+            _cleanup_sheets = sorted({
+                _CLEANUP_NOTES_REG[r.template_type].sheet_name
+                for r in notes_result.agent_results
+                if r.workbook_path and not _CLEANUP_NOTES_REG[r.template_type].is_numeric
+            })
+            if _cleanup_sheets:
+                from notes.cleanup_agent import run_notes_cleanup
+                import task_registry
+                _cleanup_model_name = _notes_formatter_model_name() or model_name
+                _cleanup_task = asyncio.create_task(run_notes_cleanup(
+                    run_id=run_id, db_path=str(AUDIT_DB_PATH),
+                    pdf_path=str(session_dir / "uploaded.pdf"), sheets=_cleanup_sheets,
+                    model_name=_cleanup_model_name,
+                    model_factory=lambda: _create_proxy_model(_cleanup_model_name, proxy_url, api_key),
+                    output_dir=output_dir,
+                    on_progress=lambda completed, total, removed: _emit_stage(
+                        "cleaning_notes",
+                        message=(f"Notes cleanup complete: {removed} banners or repeated headings removed."
+                                 if removed is not None else f"Checking {total} note fields for page banners and repeated headings."),
+                        completed=completed, total=total,
+                    ),
+                ))
+                task_registry.register(session_id, "NOTES_CLEANUP", _cleanup_task)
+                try:
+                    async for event in _drain_while_running(_cleanup_task):
+                        persist_event(event)
+                        if client_connected:
+                            try:
+                                yield event
+                            except (asyncio.CancelledError, GeneratorExit):
+                                client_connected = False
+                    _cleanup_outcome = await _cleanup_task
+                    notes_cleanup_incomplete = not _cleanup_outcome["ok"]
+                    _emit_stage("cleaning_notes", status="failed" if notes_cleanup_incomplete else "succeeded",
+                        message=_cleanup_outcome.get("error") or "Note content finalized; original wording and cleanup evidence retained.")
+                    if _cleanup_outcome.get("changed_rows"):
+                        try:
+                            await asyncio.to_thread(
+                                _refresh_merged_notes_workbook, run_id=run_id,
+                                db_path=str(AUDIT_DB_PATH), merged_workbook_path=merged_path,
+                                filing_level=run_config.filing_level,
+                            )
+                        except Exception:
+                            artifact_current = False
+                            logger.exception("Could not refresh workbook after notes cleanup for run %s", run_id)
+                            _enqueue_system_error({
+                                "type": "canonical_notes_refresh_degraded", "phase": "cleaning_notes",
+                                "message": "Cleaned notes are saved, but the merged workbook could not be refreshed.",
+                            })
+                except asyncio.CancelledError:
+                    if _safe_mark_finished(db_conn, run_id, "aborted"):
+                        terminal_status = "aborted"
+                    if client_connected:
+                        yield {"event": "error", "data": {
+                            "message": "Run cancelled during notes cleanup",
+                            "bucket": ERROR_BUCKET_FATAL,
+                        }}
+                    return
+                except Exception:
+                    notes_cleanup_incomplete = True
+                    logger.exception("Final notes cleanup failed for run %s; saved notes retained", run_id)
+                finally:
+                    task_registry.unregister(session_id, "NOTES_CLEANUP")
+                if notes_cleanup_incomplete:
+                    _enqueue_system_error({
+                        "type": "notes_cleanup_incomplete", "phase": "cleaning_notes",
+                        "message": "Notes cleanup did not finish. Saved notes are available for review.",
+                    })
+
+        # Check the run against its frozen source reading, AFTER the notes
+        # reviewer — the reviewer's relinks and dispositions are part of what
+        # is being counted. Wrapped so a check failure never changes the run's
+        # terminal status by crashing (gotcha #20).
+        if notes_result is not None:
+            _emit_stage("checking_notes", message="Checking source completeness and repairing recorded gaps.")
+        # Deliver this stage before its model-free source assessment starts.
+        for event in _pending_events():
+            persist_event(event)
+            if client_connected:
+                try:
+                    yield event
+                except (asyncio.CancelledError, GeneratorExit):
+                    client_connected = False
+        try:
+            notes_integrity_outcome = await asyncio.to_thread(
+                _run_notes_integrity_check,
+                run_id, notes_source_generation_id, notes_integrity_mode,
+                notes_boundary_report,
+            )
+            # Step 7.2 — one targeted retry over exactly the missing blocks,
+            # then re-check. No second retry: an unrepairable gap goes to
+            # review rather than round the loop again.
+            notes_integrity_outcome = await asyncio.to_thread(
+                _retry_missing_source_blocks,
+                run_id, notes_source_generation_id, notes_integrity_mode,
+                notes_integrity_outcome, notes_boundary_report,
+            )
+            if (notes_integrity_outcome or {}).get("retry_repaired_cells"):
+                await asyncio.to_thread(
+                    _refresh_merged_notes_workbook, run_id=run_id,
+                    db_path=str(AUDIT_DB_PATH), merged_workbook_path=merged_path,
+                    filing_level=run_config.filing_level,
+                )
+            # Remaining gaps belong to the draft's review list. The first notes
+            # review already saw source findings; do not repeat a full paid pass.
+
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Notes integrity check failed; the run keeps its other "
+                "outcomes and reports no verdict",
+                exc_info=True, extra={"session_id": session_id},
+            )
+            notes_integrity_outcome = None
+        if notes_result is not None:
+            if notes_source_generation_id is None:
+                _emit_stage("checking_notes", status="skipped",
+                    message="No frozen source transcript is available for completeness checking.")
+            else:
+                integrity_incomplete = notes_integrity_outcome is None or bool(
+                    notes_integrity_outcome.get("requires_review") or notes_integrity_outcome.get("tips_status"))
+                integrity_message = (
+                    "Source completeness remains unresolved. Review the notes findings."
+                    if integrity_incomplete else "Source completeness checked after content repairs."
+                )
+                _emit_stage("checking_notes", status="failed" if integrity_incomplete else "succeeded",
+                    message=integrity_message)
+                if integrity_incomplete:
+                    _enqueue_system_error({"type": "notes_integrity_incomplete", "phase": "checking_notes",
+                        "message": integrity_message})
+
         notes_formatting_incomplete = False
+        # PDF styling checks final content/table geometry against the source.
+        # Word uploads retain their source styling and skip this formatter.
         if _should_auto_format_pdf_notes(
             session_dir,
             merge_succeeded=merge_result.success,
@@ -7819,12 +7916,15 @@ async def run_multi_agent_stream(
                         _enqueue_system_error({
                             "type": "notes_formatting_incomplete",
                             "phase": "formatting_notes",
-                            "message": (
-                                "Some notes could not be fully formatted. Extracted "
-                                "content is saved. Review the Notes tab and retry "
-                                "formatting for the affected sheets."
+                            "message": "Extracted content is saved. Notes needing appearance review: " + "; ".join(
+                                f"{sheet}: {outcome.get('error') or outcome.get('summary') or 'assessment incomplete'}"
+                                for sheet, outcome in _format_outcome.get("sheets", {}).items()
+                                if not outcome.get("ok")
                             ),
+                            "sheets": _format_outcome.get("sheets", {}),
                         })
+                    _emit_stage("formatting_notes", status="failed" if notes_formatting_incomplete else "succeeded",
+                        message="Appearance checking finished; review the affected notes." if notes_formatting_incomplete else "Notes appearance verified.")
                     logger.info(
                         "automatic PDF notes formatting completed run=%s "
                         "formatted=%s partial=%s failed=%s skipped=%s",
@@ -7863,87 +7963,9 @@ async def run_multi_agent_stream(
                         session_id, NOTES_FORMATTER_AGENT_ID,
                     )
 
-        # Content cleanup is a separate author after the style-only formatter.
-        # Its receipts preserve original HTML and exact source-backed omissions.
-        notes_cleanup_incomplete = False
-        if merge_result.success and notes_result is not None:
-            from notes_types import NOTES_REGISTRY as _CLEANUP_NOTES_REG
-            _cleanup_sheets = sorted({
-                _CLEANUP_NOTES_REG[r.template_type].sheet_name
-                for r in notes_result.agent_results
-                if r.workbook_path and not _CLEANUP_NOTES_REG[r.template_type].is_numeric
-            })
-            if _cleanup_sheets:
-                from notes.cleanup_agent import run_notes_cleanup
-                import task_registry
-                _cleanup_model_name = _notes_formatter_model_name() or model_name
-                _cleanup_task = asyncio.create_task(run_notes_cleanup(
-                    run_id=run_id, db_path=str(AUDIT_DB_PATH),
-                    pdf_path=str(session_dir / "uploaded.pdf"), sheets=_cleanup_sheets,
-                    model_name=_cleanup_model_name,
-                    model_factory=lambda: _create_proxy_model(_cleanup_model_name, proxy_url, api_key),
-                    output_dir=output_dir,
-                    on_progress=lambda completed, total, removed: _emit_stage(
-                        "cleaning_notes",
-                        message=(f"Notes cleanup complete: {removed} banners or repeated headings removed."
-                                 if removed is not None else f"Checking {total} note fields for page banners and repeated headings."),
-                        completed=completed, total=total,
-                    ),
-                ))
-                task_registry.register(session_id, "NOTES_CLEANUP", _cleanup_task)
-                try:
-                    async for event in _drain_while_running(_cleanup_task):
-                        persist_event(event)
-                        if client_connected:
-                            try:
-                                yield event
-                            except (asyncio.CancelledError, GeneratorExit):
-                                client_connected = False
-                    _cleanup_outcome = await _cleanup_task
-                    notes_cleanup_incomplete = not _cleanup_outcome["ok"]
-                    if _cleanup_outcome.get("changed_rows"):
-                        try:
-                            await asyncio.to_thread(
-                                _refresh_merged_notes_workbook, run_id=run_id,
-                                db_path=str(AUDIT_DB_PATH), merged_workbook_path=merged_path,
-                                filing_level=run_config.filing_level,
-                            )
-                        except Exception:
-                            artifact_current = False
-                            logger.exception("Could not refresh workbook after notes cleanup for run %s", run_id)
-                            _enqueue_system_error({
-                                "type": "canonical_notes_refresh_degraded", "phase": "cleaning_notes",
-                                "message": "Cleaned notes are saved, but the merged workbook could not be refreshed.",
-                            })
-                except asyncio.CancelledError:
-                    if _safe_mark_finished(db_conn, run_id, "aborted"):
-                        terminal_status = "aborted"
-                    if client_connected:
-                        yield {"event": "error", "data": {
-                            "message": "Run cancelled during notes cleanup",
-                            "bucket": ERROR_BUCKET_FATAL,
-                        }}
-                    return
-                except Exception:
-                    notes_cleanup_incomplete = True
-                    logger.exception("Final notes cleanup failed for run %s; saved notes retained", run_id)
-                finally:
-                    task_registry.unregister(session_id, "NOTES_CLEANUP")
-                if notes_cleanup_incomplete:
-                    _enqueue_system_error({
-                        "type": "notes_cleanup_incomplete", "phase": "cleaning_notes",
-                        "message": "Notes cleanup did not finish. Saved notes are available for review.",
-                    })
-
         # Formatting finishes after the extraction drain. Deliver any final
         # stage/error events before the terminal event, including failures.
-        while True:
-            try:
-                event = event_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            if event is None:
-                continue
+        for event in _pending_events():
             persist_event(event)
             if client_connected:
                 try:
@@ -8094,7 +8116,7 @@ async def run_multi_agent_stream(
         reviewer_failed = bool(
             correction_outcome and correction_outcome.get("error")
             and correction_outcome.get("error") != "reviewer_exhausted"
-        )
+        ) or bool(correction_outcome and correction_outcome.get("needs_review"))
         # Notes coverage checklist (docs/PLAN-notes-coverage-and-routing.md
         # Phase 6 Step 9): after the reviewer pass, any unresolved MISSING row
         # or uninvestigated SUSPECTED-GAP, or an unavailable notes inventory,
@@ -8104,40 +8126,6 @@ async def run_multi_agent_stream(
             validator_outcome.get("coverage")
             if isinstance(validator_outcome, dict) else None
         )
-        # Check the run against its frozen source reading, AFTER the notes
-        # reviewer — the reviewer's relinks and dispositions are part of what
-        # is being counted. Wrapped so a check failure never changes the run's
-        # terminal status by crashing (gotcha #20).
-        try:
-            notes_integrity_outcome = await asyncio.to_thread(
-                _run_notes_integrity_check,
-                run_id, notes_source_generation_id, notes_integrity_mode,
-                notes_boundary_report,
-            )
-            # Step 7.2 — one targeted retry over exactly the missing blocks,
-            # then re-check. No second retry: an unrepairable gap goes to
-            # review rather than round the loop again.
-            notes_integrity_outcome = await asyncio.to_thread(
-                _retry_missing_source_blocks,
-                run_id, notes_source_generation_id, notes_integrity_mode,
-                notes_integrity_outcome, notes_boundary_report,
-            )
-            if (notes_integrity_outcome or {}).get("retry_repaired_cells"):
-                await asyncio.to_thread(
-                    _refresh_merged_notes_workbook, run_id=run_id,
-                    db_path=str(AUDIT_DB_PATH), merged_workbook_path=merged_path,
-                    filing_level=run_config.filing_level,
-                )
-            # Remaining gaps belong to the draft's review list. The first notes
-            # review already saw source findings; do not repeat a full paid pass.
-
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "Notes integrity check failed; the run keeps its other "
-                "outcomes and reports no verdict",
-                exc_info=True, extra={"session_id": session_id},
-            )
-            notes_integrity_outcome = None
         notes_coverage_unresolved = (
             (_notes_coverage_enabled() or prepared_snapshot is not None)
             and _notes_coverage_tips_status(_coverage)
@@ -8362,6 +8350,9 @@ async def run_multi_agent_stream(
                 exc_info=True,
             )
         if db_conn is not None:
+            from db.run_ownership import release
+            if run_id is not None:
+                release(db_conn, run_id)
             try:
                 db_conn.close()
             except Exception:

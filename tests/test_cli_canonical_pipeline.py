@@ -147,7 +147,7 @@ def test_cli_run_agent_drives_canonical_pipeline(cli_env, first_financial_statem
             "mfrs-company-sofp-cunoncu-v1": "SOFP",
             "mfrs-company-sopl-function-v1": "SOPL",
         }
-        agents = conn.execute("SELECT * FROM run_agents").fetchall()
+        agents = conn.execute("SELECT * FROM run_agents WHERE statement_type IN ('SCOUT', 'SOFP', 'SOPL')").fetchall()
         assert len(agents) == 3
         assert {agent["statement_type"]: agent["variant"] for agent in agents
                 if agent["statement_type"] != "SCOUT"} == {

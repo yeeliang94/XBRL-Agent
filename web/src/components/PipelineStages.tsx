@@ -25,7 +25,7 @@ function runStageIndex(stage: PipelineStage | null | undefined): number | null {
   if (!stage) return null;
   if (["scouting", "reading_source", "extracting"].includes(stage)) return 2;
   if (stage === "merging" || stage === "cross_checking") return 3;
-  if (["correcting", "reviewing", "re_checking", "reviewing_notes", "formatting_notes", "cleaning_notes", "validating_notes"].includes(stage)) return 4;
+  if (["correcting", "reviewing", "re_checking", "reviewing_notes", "formatting_notes", "cleaning_notes", "checking_notes", "validating_notes"].includes(stage)) return 4;
   if (stage === "done") return 5;
   return null;
 }
@@ -41,6 +41,7 @@ function preparationStageIndex(phase: PreparationPhase | null | undefined): numb
 function agentPhaseIndex(phase: EventPhase | null): number {
   if (!phase) return -1;
   const indexes: Record<EventPhase, number> = {
+    skipped: 4,
     starting: 2,
     scouting: 2,
     started: 2,

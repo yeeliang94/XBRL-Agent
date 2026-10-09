@@ -1209,6 +1209,12 @@ export function ConceptsPage({
           </section>
         )}
 
+        {!notesActive && activeTemplate?.includes("socf") && <details style={{ margin: "8px 0", fontSize: 13, color: pwc.grey700 }}>
+          <summary>Cash-flow calculation notes</summary>
+          <p>Template subtotals can differ from the source presentation when a payment is adjusted before a subtotal and deducted later.
+            Check the payment’s source evidence and final cash totals before accepting the difference.</p>
+        </details>}
+
         {!notesActive && attentionOpen && attentionCount > 0 && (
           <section data-testid="review-attention-panel" style={styles.attentionPanel}>
             {failingChecks.length > 0 && (

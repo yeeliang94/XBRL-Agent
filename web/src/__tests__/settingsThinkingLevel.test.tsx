@@ -115,17 +115,16 @@ describe("thinking level in Settings", () => {
     expect((body.default_models as Record<string, string>).scout).toBe("");
   });
 
-  test("review and tolerance settings are submitted through the form", async () => {
-    const notesReview = await screen.findByLabelText(
-      /Automatically review extracted notes/i,
-    );
-    fireEvent.click(notesReview);
-    fireEvent.change(screen.getByLabelText(/Cross-check tolerance/i), {
+  test("tolerance settings are submitted without retired review switches", async () => {
+    const tolerance = await screen.findByLabelText(/Cross-check tolerance/i);
+    expect(screen.queryByLabelText(/Automatically review extracted notes/i)).toBeNull();
+    fireEvent.change(tolerance, {
       target: { value: "2.5" },
     });
 
     const body = await save();
-    expect(body.notes_auto_review).toBe(false);
+    expect(body).not.toHaveProperty("notes_auto_review");
+    expect(body).not.toHaveProperty("auto_review");
     expect(body.notes_coverage).toBe(true);
     expect(body.tolerance_rm).toBe(2.5);
     expect(body.default_models).toBeUndefined();

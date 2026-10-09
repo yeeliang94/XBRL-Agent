@@ -468,7 +468,19 @@ def fill_workbook(
                     )
                 else:
                     msg += " Check the exact label text from read_template()."
-                reject(mapping, msg)
+                # A date placeholder is cell content, not a column-A label.
+                # Retain its proven destination solely for retry reconciliation;
+                # still refuse the label write and require explicit coordinates.
+                period_cell = ws.cell(row=1, column=mapping.col)
+                period_retry = (
+                    isinstance(mapping.value, str)
+                    and _normalize_label(str(period_cell.value or "")) == _normalize_label(mapping.field_label)
+                    and re.fullmatch(r"\d{2}/\d{2}/YYYY\s*-\s*\d{2}/\d{2}/YYYY", str(period_cell.value))
+                    and ws.cell(row=1, column=1).value is None
+                )
+                if period_retry:
+                    msg += " This is the reporting-period placeholder; use row=1, the same col, and field_label=''."
+                reject(mapping, msg, candidate_rows=[1] if period_retry else None)
                 continue
         elif mapping.row is not None:
             target_row = mapping.row

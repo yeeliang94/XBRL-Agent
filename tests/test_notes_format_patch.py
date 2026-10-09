@@ -454,6 +454,54 @@ _GOOD_PATCH = json.dumps({
 })
 
 
+@pytest.mark.asyncio
+async def test_missing_source_pages_do_not_block_other_notes(monkeypatch, formatter_db):
+    from db import repository as repo
+    db_path, _, run_id = formatter_db
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113,
+            label="Missing evidence", html=_TABLE_HTML, source_pages=[])
+    fake = _FakeAgent([_GOOD_PATCH])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert result["changed_rows"] == 1
+    assert result["failed_rows"] == [113]
+    assert not result["ok"]
+    with repo.db_session(db_path) as conn:
+        cells = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
+    assert cells[113].html == _TABLE_HTML
+    assert cells[112].html != _TABLE_HTML
+
+
+
+def test_formatter_recovers_missing_pages_from_exact_active_placements(formatter_db):
+    from db import repository as repo
+    from notes import source_repository as sources
+    from notes.source_models import SourceBlock
+    db_path, _, run_id = formatter_db
+    with repo.db_session(db_path) as conn:
+        generation = sources.begin_generation(conn, run_id, input_kind="prepared_document")
+        sources.write_blocks(conn, generation, [SourceBlock(block_id="source", page=7,
+            block_kind="paragraph", reading_order=0, canonical_html="<p>Text</p>")])
+        sources.set_cell_placements(conn, run_id, generation, _SHEET, 112, ["source"])
+        conn.execute("UPDATE notes_cells SET source_generation_id=?,source_pages=NULL WHERE run_id=?", (generation, run_id))
+        assert repo.list_formatter_cells_for_run(conn, run_id)[0].source_pages == [7]
+        sources.deactivate_placements_for_sheet(conn, generation, _SHEET)
+        assert repo.list_formatter_cells_for_run(conn, run_id)[0].source_pages == []
+
+
+def test_note_update_preserves_omitted_source_pages_and_invalidates_formatting(formatter_db):
+    from db import repository as repo
+    db_path, _, run_id = formatter_db
+    with repo.db_session(db_path) as conn:
+        repo.cas_update_notes_cell_html(conn, run_id=run_id, sheet=_SHEET, row=112,
+            expected_html=_TABLE_HTML, new_html=_TABLE_HTML, style_source="formatter")
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=112,
+            label="Disclosure", html="<p>Changed by review</p>")
+        cell = repo.list_notes_cells_for_run(conn, run_id)[0]
+    assert cell.source_pages == [3]
+    assert cell.style_source == "unstyled"
+
+
 class _FakeResult:
     def __init__(self, output: str, history=()):
         self.output = output
@@ -619,14 +667,17 @@ async def test_failed_visual_recheck_saves_only_unrelated_passed_note(monkeypatc
     calls = []
     async def check(**kwargs):
         calls.append(set(kwargs["rows"]))
-        return {112: "Comparative closing rule still missing."}, {"tables": [
-            {"row": 112, "table": 0, "status": "needs_correction"},
+        finding = "Obsolete initial finding." if len(calls) == 1 else "Comparative closing rule still missing."
+        return {112: finding}, {"tables": [
+            {"row": 112, "table": 0, "status": "needs_correction", "reason": finding},
         ]}
     fake = _FakeAgent([json.dumps(patch), json.dumps({"sheet": _SHEET, "cells": []})])
     result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
     assert not result["ok"] and result["changed_rows"] == 1
     assert result["error_type"] == "visual_review_failed"
     assert result["failed_rows"] == [112]
+    assert result["row_errors"][112] == "Comparative closing rule still missing."
+    assert result["visual_review"]["tables"][0]["reason"] == "Obsolete initial finding."
     assert calls == [{112, 113}, {112}]
     assert fake.calls == 2  # no third correction
     with repo.db_session(db) as conn:
@@ -692,12 +743,16 @@ async def test_visual_budgets_preserve_verified_rows(monkeypatch, formatter_db, 
     assert result["changed_rows"] == len(expected_saved)
     assert result["ok"] is (stage == "formatter_full")
     assert result["prompt_tokens"] == fake.calls * 10 + len(checks) * 20
+    with repo.db_session(db) as conn:
+        ledger = conn.execute("SELECT SUM(input_tokens) FROM model_usage_calls WHERE run_id=? AND role='NOTES_FORMATTING'", (run_id,)).fetchone()
+        assert ledger[0] == result["prompt_tokens"]
     if stage != "formatter_full":
         assert result["error_type"] == "visual_review_failed"
         assert set(result["failed_rows"]) == {112, 113} - expected_saved
         assert "request budget" in result["row_errors"][112]
-    if stage in {"correction", "recheck"}:
-        assert "Closing balance" in result["row_errors"][112]
+    if stage == "recheck":
+        assert "Closing balance" not in result["row_errors"][112]
+        assert "budget" in result["row_errors"][112].lower()
     with repo.db_session(db) as conn:
         saved = {c.row for c in repo.list_notes_cells_for_run(conn, run_id) if c.html != _TABLE_HTML}
         assert saved == expected_saved
@@ -730,6 +785,7 @@ async def test_noop_visual_decision_does_not_certify_concurrent_edit(monkeypatch
         monkeypatch, formatter_db, fake, visual_check=edited_during_check,
     )
     assert result["changed_rows"] == 0 and result["skipped_rows"] == [112]
+    assert not result["ok"] and not result["verified_rows"]
     assert "edited during formatting" in result["summary"]
 
 
@@ -1109,6 +1165,7 @@ def test_resolve_notes_table_theme_precedence(monkeypatch, formatter_db):
     db_path, _pdf, run_id = formatter_db
     from notes.table_theme import HOUSE_NOTES_TABLE_STYLE
 
+    monkeypatch.delenv("XBRL_NOTES_APPEARANCE_OVERRIDES", raising=False)
     monkeypatch.delenv("XBRL_NOTES_TABLE_STYLE", raising=False)
     assert (fa._resolve_notes_table_theme(str(db_path), run_id)
             == HOUSE_NOTES_TABLE_STYLE)
@@ -1191,12 +1248,17 @@ async def test_formatter_writes_trace_on_success_and_failure(monkeypatch, format
 
 @pytest.mark.asyncio
 async def test_formatter_result_carries_token_fields(monkeypatch, formatter_db):
+    from db import repository as repo
     fake = _FakeAgent([_GOOD_PATCH])
     result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
     for key in ("prompt_tokens", "completion_tokens",
                 "cache_read_tokens", "cache_write_tokens"):
         assert key in result
         assert isinstance(result[key], int)
+    db, _pdf_path, run_id = formatter_db
+    with repo.db_session(db) as conn:
+        row = conn.execute("SELECT variant FROM run_agents WHERE run_id=? AND statement_type='NOTES_FORMATTING'", (run_id,)).fetchone()
+        assert row["variant"] == _SHEET
 
 
 @pytest.mark.asyncio
@@ -1224,7 +1286,7 @@ async def test_formatter_skips_row_edited_during_pass(monkeypatch, formatter_db,
 
     fake = _FakeAgent([_GOOD_PATCH], on_call=edit_mid_pass)
     result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
-    assert result["ok"] is True
+    assert result["ok"] is False
     assert result["changed_rows"] == 0
     assert result["skipped_rows"] == [112]
     assert "skipped" in result["summary"]
@@ -1278,7 +1340,7 @@ async def test_formatter_never_resurrects_deleted_rows(monkeypatch, formatter_db
 
     fake = _FakeAgent([_GOOD_PATCH], on_call=delete_mid_pass)
     result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
-    assert result["ok"] is True
+    assert result["ok"] is False
     assert result["changed_rows"] == 0
     assert result["skipped_rows"] == [112]
     with repo.db_session(db_path) as conn:
@@ -1472,3 +1534,35 @@ def test_formatter_refuses_to_certify_malformed_row_nesting():
             "target": {"table": 0, "cell": {"r": 1, "c": 2}},
             "style": {"text_align": "right"},
         }]}]})
+
+
+@pytest.mark.parametrize("merged_style", ["", ' style="border: 1px hidden #000000"'])
+def test_amount_rules_do_not_spread_across_merged_revenue_heading(merged_style):
+    from bs4 import BeautifulSoup
+    html = ('<table><tr><td>Management fees</td><td>10</td><td>9</td></tr>'
+            f'<tr><td colspan="3"{merged_style}>Timing of revenue recognition</td></tr>'
+            '<tr><td>Over time</td><td>10</td><td>9</td></tr></table>')
+    def patch(col, style):
+        return {"cells": [{"row": 127, "operations": [{
+            "target": {"table": 0, "cell": {"r": 1, "c": col}}, "style": style}]}]}
+    painted = apply_sheet_patch({127: html}, patch(2, {"border_bottom": {"width": "2px"}})).rows[127]
+    cells = BeautifulSoup(painted, 'html.parser').find_all('td')
+    assert 'border-bottom: 2px solid' in cells[1].get('style', '')
+    assert 'border-top: 2px' not in cells[3].get('style', '')
+    assert 'border-top: 1px hidden' not in cells[3].get('style', '')
+    cleared = apply_sheet_patch({127: painted}, patch(3, {"clear_border": ["bottom"]})).rows[127]
+    cells = BeautifulSoup(cleared, 'html.parser').find_all('td')
+    assert 'border-bottom: 2px solid' in cells[1].get('style', '')
+    assert 'border-top: 2px' not in cells[3].get('style', '')
+    assert 'border-top: 1px hidden' not in cells[3].get('style', '')
+
+
+def test_short_vertical_edge_does_not_spread_along_rowspan():
+    from bs4 import BeautifulSoup
+    html = '<table><tr><td>A</td><td rowspan="2">Merged</td></tr><tr><td>B</td></tr></table>'
+    patch = {"cells": [{"row": 1, "operations": [{
+        "target": {"table": 0, "cell": {"r": 1, "c": 1}},
+        "style": {"border_right": {"width": "2px"}}}]}]}
+    cells = BeautifulSoup(apply_sheet_patch({1: html}, patch).rows[1], 'html.parser').find_all('td')
+    assert 'border-right: 2px solid' in cells[0].get('style', '')
+    assert 'border-left' not in cells[1].get('style', '')

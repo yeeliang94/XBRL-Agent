@@ -280,8 +280,8 @@ def _mirror_border_writes(
     elements: list[Tag], side_writes: dict[str, str],
 ) -> None:
     """Replay ``side_writes`` (the border sides one operation set on ``elements``)
-    onto each targeted cell's shared-edge neighbour, so the collapsed edge shows
-    the intended border on BOTH sides. Only ``th``/``td`` are edges; a ``range:
+    onto shared-edge neighbours whose entire opposing edge is covered. Partial
+    edges stay on smaller cells without spreading into merged neighbours. Only ``th``/``td`` are edges; a ``range:
     table`` target (the table element itself) has no shared edges and is skipped.
     Grids are built once per table across the operation's cells."""
     grids: dict[int, tuple[dict[tuple[int, int], Tag],
@@ -295,12 +295,51 @@ def _mirror_border_writes(
         grid_key = id(table)
         grid, positions = grids.get(grid_key) or _build_grid(table)
         grids[grid_key] = (grid, positions)
-        for (r, c) in positions.get(id(cell), []):
-            for side, value in side_writes.items():
-                dr, dc, opp = _NEIGHBOUR[side]
+        occupied = positions.get(id(cell), [])
+        if not occupied:
+            continue
+        top, bottom = min(r for r, _ in occupied), max(r for r, _ in occupied)
+        left, right = min(c for _, c in occupied), max(c for _, c in occupied)
+        for side, value in side_writes.items():
+            dr, dc, opp = _NEIGHBOUR[side]
+            for r, c in occupied:
+                # Only the outer perimeter of a spanning cell owns an edge.
+                if ((side == "top" and r != top) or (side == "bottom" and r != bottom)
+                        or (side == "left" and c != left) or (side == "right" and c != right)):
+                    continue
                 neighbour = grid.get((r + dr, c + dc))
-                if neighbour is not None and neighbour is not cell:
+                if neighbour is None or neighbour is cell:
+                    continue
+                axis = 1 if side in ("top", "bottom") else 0
+                start, end = (left, right) if axis == 1 else (top, bottom)
+                neighbour_extent = [pos[axis] for pos in positions[id(neighbour)]]
+                # A partial edge cannot be represented on a wider merged cell.
+                # Keep it on the targeted cell instead of extending the rule.
+                if min(neighbour_extent) >= start and max(neighbour_extent) <= end:
                     _set_cell_side(neighbour, opp, value)
+                else:
+                    existing = _parse_style(neighbour.get("style") or "")
+                    previous = existing.get(f"border-{opp}", existing.get("border"))
+                    if previous and " none " not in previous:
+                        # Preserve the rest of an existing wide edge on its
+                        # smaller opposing cells, then release the wide edge.
+                        nr = [p[0] for p in positions[id(neighbour)]]
+                        nc = [p[1] for p in positions[id(neighbour)]]
+                        boundary = {"top": min(nr), "bottom": max(nr),
+                                    "left": min(nc), "right": max(nc)}[opp]
+                        for rr, cc in positions[id(neighbour)]:
+                            if (rr if axis == 1 else cc) != boundary:
+                                continue
+                            other = grid.get((rr - dr, cc - dc))
+                            if other is None or other is cell or any(other is element for element in elements):
+                                continue
+                            other_extent = [p[axis] for p in positions[id(other)]]
+                            if (min(other_extent) < min(neighbour_extent)
+                                    or max(other_extent) > max(neighbour_extent)):
+                                raise FormatPatchError("Partial border intersects incompatible merged edges")
+                            _set_cell_side(other, side, previous)
+                        _set_cell_side(neighbour, opp, "0px none #000000")
+
 
 
 def _resolve_target(soup: BeautifulSoup, target: dict[str, Any]) -> Iterable[Tag]:

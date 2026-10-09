@@ -134,11 +134,15 @@ SESSION_SECRET=                # REQUIRED in prod (startup fails without it); de
 
 ### PydanticAI model construction (V2-compatible API)
 
+Live model construction uses `server.py::_create_proxy_model()`, which owns
+provider routing and the transport guards in invariant 2. The examples below
+illustrate the provider API; preserve that factory when changing callers.
+
 ```python
-# Proxy path (OpenAI-compatible)
-from pydantic_ai.models.openai import OpenAIChatModel
+# OpenAI proxy path (Responses API; direct OpenAI uses the same model class)
+from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.providers.openai import OpenAIProvider
-model = OpenAIChatModel(name, provider=OpenAIProvider(base_url=url, api_key=key))
+model = OpenAIResponsesModel(name, provider=OpenAIProvider(base_url=url, api_key=key))
 
 # Direct Google
 from pydantic_ai.models.google import GoogleModel
@@ -432,6 +436,10 @@ element named in a screenshot. Specifically:
 - Put actions beside the object they affect. Global appearance belongs in
   Settings. Do not use an unexplained three-dot menu, unclickable tab-like
   label, empty section, or duplicate navigation heading as visual storage.
+  Notes rechecks use one compact notice beside the action without internal row
+  numbers. Edit/copy controls wrap with clear vertical spacing. Only peer fields
+  own separators; nested note wrappers add no extra rules. Pinned by
+  `web/src/__tests__/NotesReviewTab.test.tsx` and `designSystemParity.test.ts`.
 - Align titles, tabs, work surfaces, and footers to shared page boundaries.
   Long notes and lists must reach their end. Read-only tables stay inside their
   pane with meaningful description columns prioritised; edit mode may scroll
@@ -443,7 +451,11 @@ element named in a screenshot. Specifically:
   notes formatting, saving, and final workbook preparation. A completed
   workstream count must never imply the full run is ready while downstream work
   continues. Formatting activity is complete only after an observed formatting
-  pass finishes without an incomplete-formatting event. Failed/partial passes
+  pass finishes without an incomplete-formatting event. Formatting and content
+  finalization publish explicit terminal stage outcomes; source completeness has
+  its own `checking_notes` activity. Phase messages preserve existing counters.
+  Stage failures persist in run events with their own details rather than creating
+  a misleading setup worker. Failed/partial passes
   remain failed, stopped passes remain stopped, and a pass that never ran is
   not shown as complete. Pinned by `web/src/__tests__/ExtractPage.test.tsx`.
 
@@ -562,6 +574,10 @@ still-running child, and appends a durable `run_complete` event with
 `phase=restart_reconciliation` before the caller commits. A restarted
 process must never expose a terminal parent with a running child or no
 terminal event. Pinned by `tests/test_stale_run_reaper.py`.
+Live CLI and web runs hold an OS file lock for their audit row until teardown.
+Startup recovery excludes these owned runs and child tasks; the OS releases
+ownership on process death, so young crash orphans can still recover immediately.
+This uses local files beside the shared database and no schema migration.
 
 **Artifact currentness participates in success.** A retained scratch or
 merged workbook may remain downloadable after a canonical face export or
@@ -696,8 +712,9 @@ MPERS (private-entity) run inherited. Pinned by
 New web uploads start durable document preparation automatically, then a unified
 Scout document map. Capture combines orientation and transcription, keeps independent
 page checks, and uses up to fifteen concurrent requests under the shared
-process-wide limit of fifteen. Capture and independent verification combine up
-to two ready pages per request, with explicit page IDs and image indexes. Each
+process-wide limit of fifteen. Capture combines up to two ready pages per
+request, with explicit page IDs and image indexes. Independent verification
+checks one original PDF page and its candidate HTML per request (invariant 31). Each
 page retains its own rotation, content, assessment, uncertainty and checkpoint.
 Unmatched pages flush after a bounded wait; blank and already assessed pages do
 not require a partner. Missing, malformed or duplicate page receipts fall back
@@ -874,6 +891,13 @@ dictionary — pure LLM judgement.
 
 Key invariants:
 
+- Numeric notes writers use the original filing template's writable leaf rows
+  even when updating a scratch workbook. Abstract headings cannot receive values.
+  A canonical projection gap marks the notes agent failed while retaining captured
+  facts. Numeric system prompts seed the same unit-bearing hierarchy as
+  read_template, so skipping that tool does not hide Number versus Amount fields.
+  Pinned by `tests/test_notes_writer.py`, `tests/test_notes_projection.py` and
+  `tests/test_notes_agent_catalog_integration.py`.
 - **Sheet 12 (`LIST_OF_NOTES`) fans out** into `N` sub-agents; `N` is
   model-aware via `pricing.resolve_notes_parallel(model)`.
 - **A later same-note/same-row Sheet-12 write is a revision.** Within one
@@ -1102,6 +1126,12 @@ Full walkthrough: [docs/MPERS.md](docs/MPERS.md).
 
 ### 16. Notes cells are HTML; Excel download regenerates from the DB
 
+Shared border writes preserve physical edge extent. A partial amount-cell rule
+cannot extend across a wider merged heading (or taller rowspan). Existing wider
+edges are distributed to smaller opposing cells before releasing the wide edge,
+so unselected segments remain intact. Formatter and editor implement the same
+rule, pinned by format-patch and cellFormatting behavior tests.
+
 Verified source headings retain semantic h1–h6 levels through sanitization,
 source rendering, the editor, review display, clipboard and mTool decoration.
 New author-written section headings still use the established h3 convention.
@@ -1222,12 +1252,15 @@ Key invariants:
 - **A targeted agent retry replaces existing sheet rows:** the coordinator calls
   `delete_notes_cells_for_run_sheet(run_id, sheet)` before writing a fresh batch.
   The post-run notes re-extraction action and its edited-count endpoint were removed.
-- **The HTML tag whitelist in `prompts/_notes_base.md` must match the sanitiser's
-  `ALLOWED_TAGS`** (`notes/html_sanitize.py`) — a divergence silently strips
-  markup the prompt invited.
-- **Inline `style=` is a VALIDATED whitelist on TABLE tags only** (notes WYSIWYG,
-  docs/PRD-notes-wysiwyg-formatting.md); off the table `style=` is stripped
-  wholesale, so **prose in the DB stays style-free**. The gate is tag-aware
+- **Agent-emittable HTML tags must be a subset of the sanitiser's
+  `ALLOWED_TAGS`** (`notes/html_sanitize.py`). Keep the whitelist in
+  `prompts/_notes_base.md` within that set so invited markup survives. The
+  sanitiser also permits human-editor marks and source heading levels.
+- **Inline `style=` uses a validated, tag-aware whitelist** (notes WYSIWYG,
+  docs/PRD-notes-wysiwyg-formatting.md). On agent-authored payloads,
+  `notes/writer.py::_strip_non_table_styles` removes non-table styles, keeping
+  agent-authored prose style-free. Human-editor writes retain permitted
+  paragraph alignment, indentation and colour. The sanitiser gate is tag-aware
   (`_STYLE_PROPS_BY_TAG`): fill / per-side `border-*` / `text-align` on table
   tags, `color` on `<span>`, `background-color`+`color` on `<mark>`,
   `text-align`/`margin-left` (indent) on `<p>/<h3>/<li>`, `width`/`min-width` on
@@ -1321,7 +1354,16 @@ Key invariants:
     `tests/test_notes_format_patch.py`,
     `test_db_schema_v26.py`/`_v27.py`.
     Manual retry accepts `unstyled`/`floor` cells and older cells with no
-    style provenance; automatic PDF formatting uses only `unstyled`/`floor`.
+    style provenance; stale verification retries also select affected `formatter`
+    cells. Automatic PDF formatting uses only `unstyled`/`floor`.
+    Successful per-note receipts in task result JSON bind canonical HTML, prepared
+    output, source pages and source generation. Status reads detect later edits,
+    reviewer writes, source changes and output-setting changes; stale notes expose
+    a targeted retry. Targeted retries preserve unrelated verification receipts.
+    Omitted page lists preserve existing evidence; missing legacy lists can recover
+    only from the cell's exact active source placements. A note without evidence
+    stays unresolved without blocking other selected notes. Pinned by
+    `tests/test_notes_format_patch.py` and `tests/test_notes_formatter_routes.py`.
     If a filled sheet has no candidates, it reports
     `no_unfinished_rows` rather than claiming the sheet is empty. A successful
     automatic pass does not expose a routine retry button; the editor remains
@@ -1356,8 +1398,11 @@ Key invariants:
     eight-request allowance, aggregated into the same token telemetry only after
     correction finishes. Budget exhaustion leaves affected rows unresolved and
     preserves unrelated rows that already passed. Duplicate/omitted assessments
-    and rejected corrections retain their original findings; rejected corrections
-    are logged. Manual summaries and automatic stage
+    retain unresolved findings; rejected corrections are logged. Completed
+    rechecks replace current errors with the latest outstanding findings while
+    initial findings remain in trace history. Corrections receive a fresh labeled
+    coordinate manifest. Formatter/checker usage is recorded once per part as
+    a NOTES_FORMATTING audit entry, including completed responses before failure. Manual summaries and automatic stage
     events surface checking, correction and rechecking. The check does not
     certify native Word or mTool rendering. Pinned by
     `tests/test_notes_visual_review.py` and the visual-save cases in
@@ -1376,15 +1421,20 @@ Key invariants:
     `web/src/__tests__/NotesReviewTab.test.tsx`.
   - **Simplified PDF notes preparation (2026-09-17).** Text PDFs use text
     navigation plus page inspection; scanned pages use existing vision fallback.
-    Both author semantic HTML and table geometry, then run the dedicated formatter
-    automatically after notes review. There is no normal transcription or
+    Both author semantic HTML and table geometry. Automatic notes review is followed
+    by content cleanup, source-integrity assessment and its single bounded repair,
+    then the dedicated formatter and final table appearance check. No content author
+    runs after that check in automatic finalization. The integrity repair reassesses
+    completeness before returning. Pinned by `tests/test_preparation_integration.py`
+    and `tests/test_pdf_notes_auto_format_wiring.py`. There is no normal transcription or
     formatting toggle. Old `XBRL_PDF_SIDECAR` enable values and
     `XBRL_PDF_NOTES_AUTO_FORMAT` disable values are inert; settings APIs accept and ignore
     legacy workflow values from older clients. Historical transcript artifacts and helper
     tests remain readable; Word source HTML is unchanged.
     Every eligible unstyled/floor prose sheet uses the existing guarded claim,
     content/number/geometry verifier, CAS writes, snapshots and bounded formatter.
-  - **Final notes cleanup** is a separate content author after formatting, never
+  - **Final notes cleanup** is a content-finalization pass after review and before
+    source-integrity assessment, bounded source repair, and appearance formatting, never
     a formatter permission. It may delete source-backed page banners and repeated
     continuation headings only. Canonical receipts retain before/after HTML,
     deletions and viewed-page evidence. Original source blocks and placement ids
@@ -1761,7 +1811,7 @@ zones (added 2026-04-27, Phases 5 & 6 of the same plan):
 - **`pipeline_stage`** — coordinator-level stage label, one of
   `scouting | reading_source | extracting | merging |
   cross_checking | reviewing | re_checking | reviewing_notes |
-  formatting_notes | done`. Emitted at every phase boundary in
+  cleaning_notes | checking_notes | formatting_notes | done`. Emitted at every phase boundary in
   `run_multi_agent_stream`. The frontend captures the latest stage
   and labels the corresponding silent gap ("Notes reviewer fixing…",
   "Re-running cross-checks…"). The notes pass emits `reviewing_notes`
@@ -1895,10 +1945,18 @@ current-consumer filtering, and historical readability),
     check's `[group]`/`[company]` tag as an `entity_scope` hint the reviewer must
     honour. Pinned by `tests/test_reviewer_tools.py`,
     `tests/test_reviewer_versioning.py`.
-  - **Auto-trigger toggle `XBRL_AUTO_REVIEW`** (default on) gates the automatic
-    launch on the failure path; off = the user triggers it manually.
-  - **Clean-run triage:** a run with no failing checks or open conflicts always
+  - **Automatic review is mandatory.** Legacy `XBRL_AUTO_REVIEW` and
+    `XBRL_NOTES_AUTO_REVIEW` disable values are inert. Applicable figures receive
+    investigation or bounded triage; prose disclosures receive notes review.
+    Settings rejects the retired `auto_review` and `notes_auto_review` fields
+    without writing; the form does not submit them.
+    A review without applicable extracted content records `skipped` with a reason.
+    Manual review remains available. Pinned by `tests/test_settings_api.py`,
+    `tests/test_server_run_lifecycle.py`, and `tests/test_preparation_integration.py`.
+  - **Clean-run triage:** a run with no hard cross-check failures or open conflicts always
     gets a grounded 6/8-turn triage, independent of `XBRL_AUTO_REVIEW`. The
+    figures reviewer does not investigate notes-to-figures tie-outs; these stay
+    failed for notes and human review and cannot enter clean-run triage.
     triage cannot write or flag. It ends clean or hands at most five specific
     PDF-grounded items to a fresh scoped investigation, which must record a
     result for each item. Verified writes and unresolved human flags are
@@ -3239,9 +3297,9 @@ the one failure this feature has no defence against, so each is pinned.
   the duplicate check was structurally dead — it now reads the ledger.
   The reviewer cannot replace a placed block's usage with an exclusion,
   route, or structured-consumption receipt; it must move or relink the cell.
-  A prepared review with more than 25 open items gets a bounded extension to
-  the five-minute wall-clock limit, up to eight minutes; an explicit override
-  remains fixed and stalled turns still fail.
+  Prepared reviews use invariant 18's shared notes-review time allowance,
+  owned by `notes/reviewer_limits.py`, including extensions for custom base
+  allowances and the configured ceiling. Stalled turns still fail.
 - **Prepared-source placement also drives ordinary notes coverage.** Coverage
   and reviewer routing derive top-level note identity from each live placement's
   frozen source note rather than requiring prepared writes to fabricate legacy

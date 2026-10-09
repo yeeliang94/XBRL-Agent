@@ -70,7 +70,7 @@ import {
 import { copyPreparedHtmlAsRichText } from "../lib/clipboard";
 import { apiFetch } from "../lib/api";
 import { fetchNoteOutput } from "../lib/notesOutput";
-import { PreparedNotesHtml } from "./PreparedNotesHtml";
+import { PreparedNotesHtml, readablePreviewHtml } from "./PreparedNotesHtml";
 import { useNoteOutput } from "./useNoteOutput";
 import { tagNumericCells } from "../lib/tableAlign";
 import { formatGroupedInput } from "../lib/numberFormat";
@@ -1083,6 +1083,9 @@ function SheetSection({
   const [formatStatus, setFormatStatus] = useState<NotesFormatStatus | null>(null);
   const [formatError, setFormatError] = useState<string | null>(null);
   const [formatRequestPending, setFormatRequestPending] = useState(false);
+  const formatInput = useMemo(() => JSON.stringify([
+    theme, sheet.rows.map((cell) => [cell.row, cell.html, cell.source_pages]),
+  ]), [theme, sheet.rows]);
   const [rowSaveStatuses, setRowSaveStatuses] = useState<Record<string, SaveStatus>>({});
   const canFormat = (sheet.kind ?? "prose") === "prose" || sheet.rows.some(
     (cell) => cell.kind === "prose" && !cell.invalid_target && !isBlankHtml(cell.html),
@@ -1131,7 +1134,7 @@ function SheetSection({
     return () => {
       cancelled = true;
     };
-  }, [runId, sheet.sheet, canFormat]);
+  }, [runId, sheet.sheet, canFormat, formatInput]);
 
   useEffect(() => {
     if (formatStatus?.status !== "running") return;
@@ -1227,24 +1230,35 @@ function SheetSection({
   const isFormatting = formatRequestPending || formatStatus?.status === "running";
   const hasUnfinishedFormatWork = formatStatus?.error_type !== "no_unfinished_rows";
   const skippedFormatRows = formatStatus?.skipped_rows ?? [];
+  const needsRecheck = formatStatus?.error_type === "verification_stale";
+  const showFormatAction = canFormat && hasUnfinishedFormatWork && (formatStatus?.status === "idle" || formatStatus?.status === "running" || formatStatus?.error || formatError || skippedFormatRows.length > 0);
   const formatButtonLabel = hasPendingRowSave
     ? "Save pending"
     : isFormatting
       ? "Formatting..."
-      : "Retry formatting";
+      : needsRecheck ? "Recheck formatting" : "Retry formatting";
 
   return (
     <section ref={sectionRef} style={styles.workspaceSheetSection}>
       <span data-testid="sheet-title" style={{ display: "none" }}>{notesSheetDisplayName(sheet.sheet)}</span>
-      {canFormat && hasUnfinishedFormatWork && (formatStatus?.status === "idle" || formatStatus?.status === "running" || formatStatus?.error || formatError || skippedFormatRows.length > 0) && (
-      <div style={{ ...styles.sheetHeadingButton, justifyContent: "flex-end" }}>
+      {(showFormatAction || formatError || formatStatus?.error || skippedFormatRows.length > 0) && (
+      <div style={styles.formatActionRow}>
+        {(formatError || formatStatus?.error || skippedFormatRows.length > 0) && (
+          <div style={{ ...styles.formatSummary, color: needsRecheck ? pwc.grey700 : pwc.errorText }}
+            role={needsRecheck ? "status" : "alert"} data-testid="notes-format-summary">
+            {formatError || (formatStatus?.error
+              ? notesFormatErrorMessage(formatStatus?.error_type, formatStatus.error, formatStatus ?? undefined)
+              : "Some notes changed during formatting and need another check.")}
+          </div>
+        )}
+        {showFormatAction && (
           <button
             type="button"
             className={uiClass.btnGhost}
             style={styles.sheetFormatButton}
             disabled={isFormatting || hasPendingRowSave}
             onClick={handleFormat}
-            aria-label={`Retry formatting ${notesSheetDisplayName(sheet.sheet)}`}
+            aria-label={`${needsRecheck ? "Recheck formatting" : "Retry formatting"} ${notesSheetDisplayName(sheet.sheet)}`}
             title={
               hasPendingRowSave
                 ? "Resolve notes save status before formatting."
@@ -1254,27 +1268,8 @@ function SheetSection({
           >
             {formatButtonLabel}
           </button>
+        )}
       </div>
-      )}
-      {(formatError || formatStatus?.error || skippedFormatRows.length > 0) && (
-        <div
-          style={{
-            ...styles.formatSummary,
-            color: pwc.errorText,
-          }}
-          role="alert"
-          data-testid="notes-format-summary"
-        >
-          <span style={styles.formatSummaryText}>
-            {formatError || (formatStatus?.error
-              ? notesFormatErrorMessage(
-                formatStatus?.error_type,
-                formatStatus.error,
-                formatStatus ?? undefined,
-              )
-              : `${skippedFormatRows.length} row${skippedFormatRows.length === 1 ? " was" : "s were"} not formatted because the content changed during formatting. Retry formatting to include ${skippedFormatRows.length === 1 ? "it" : "them"}.`)}
-          </span>
-        </div>
       )}
       {isFormatting && (
         <div
@@ -1310,7 +1305,7 @@ function SheetSection({
             <p role="status" style={styles.dim}>No fields match this view.</p>
             <button type="button" className={uiClass.btnGhost} onClick={onShowAllFields}>Show all fields</button>
           </div>}
-          {visibleRows.map((cell) => {
+          {visibleRows.map((cell, index) => {
             const row =
             // Numeric notes (sheets 13/14) carry multi-column values, not
             // HTML prose — they get value inputs wired to the facts API
@@ -1369,6 +1364,7 @@ function SheetSection({
             // the height of the longer text and never drifts out of line.
             return (
               <section key={`${runId}:${sheet.sheet}:${cell.row}:pair`} aria-label={cell.label}
+                style={{ borderBottom: index < visibleRows.length - 1 ? `1px solid ${pwc.grey100}` : undefined }}
                 data-cell-row={cell.row} data-testid="notes-review-row">
                 <div style={{ display: "flex", alignItems: "center", gap: pwc.space.sm }}>
                   <h3 style={{ ...styles.cellLabel, margin: 0, flex: 1, minWidth: 0 }}>
@@ -1460,7 +1456,7 @@ function NotePreview({
         {/* Sanitised server-side with the notes whitelist (gotcha #16). */}
         {!human && prepared.output ? <PreparedNotesHtml output={prepared.output} /> : <>
           {!human && <p role="status" style={styles.dim}>{prepared.error ? "Output preview unavailable. Showing saved content." : "Preparing output preview…"}</p>}
-          <div className={`tiptap ProseMirror${human ? " notes-human-content" : ""}`} dangerouslySetInnerHTML={{ __html: content }} />
+          <div className={`tiptap ProseMirror${human ? " notes-human-content" : ""}`} dangerouslySetInnerHTML={{ __html: readablePreviewHtml(content) }} />
           {!human && prepared.error && <button type="button" className={uiClass.btnQuiet} style={ui.buttonQuiet}
             onClick={(event) => { event.stopPropagation(); prepared.retry(); }}>Retry preview</button>}
         </>}
@@ -2856,41 +2852,11 @@ const styles = {
   activeSheetPanel: {
     minWidth: 0,
   } as React.CSSProperties,
-  // The active sheet is a flat section. A neutral bottom divider keeps the
-  // boundary without reintroducing the old card or active orange-rail style.
+  // Peer fields own their separators; nested wrappers stay border-free.
   workspaceSheetSection: {
     display: "flex",
     flexDirection: "column" as const,
-    borderBottom: `1px solid ${pwc.grey200}`,
     background: pwc.white,
-  } as React.CSSProperties,
-  // The <h4> wrapper strips default browser margins so the button
-  // fills the card header cleanly.
-  sheetHeadingWrap: {
-    margin: 0,
-    minWidth: 0,
-  } as React.CSSProperties,
-  // Formatting retry actions stay on the same unfilled surface as the fields.
-  sheetHeadingButton: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    width: "100%",
-    padding: "11px 14px",
-    background: "transparent",
-    border: "none",
-    cursor: "pointer",
-    fontFamily: "inherit",
-    font: "inherit",
-    color: "inherit",
-    textAlign: "left" as const,
-  } as React.CSSProperties,
-  sheetHeadingText: {
-    fontFamily: pwc.fontBody,
-    fontVariantNumeric: "tabular-nums",
-    fontSize: 14,
-    fontWeight: 680,
-    color: pwc.grey900,
   } as React.CSSProperties,
   sheetFormatButton: {
     ...ui.buttonGhost,
@@ -2898,21 +2864,20 @@ const styles = {
     flexShrink: 0,
   } as React.CSSProperties,
   formatSummary: {
+    flex: "1 1 240px",
+    minWidth: 0,
+    fontSize: 14,
+  } as React.CSSProperties,
+  formatActionRow: {
     display: "flex",
     alignItems: "center",
-    gap: 10,
-    padding: "7px 14px",
-    borderTop: `1px solid ${pwc.grey200}`,
-    background: pwc.white,
-    fontSize: 12,
-  } as React.CSSProperties,
-  formatSummaryText: {
-    flex: 1,
-    minWidth: 0,
+    justifyContent: "flex-end",
+    flexWrap: "wrap" as const,
+    gap: pwc.space.sm,
+    padding: "8px 12px 16px",
   } as React.CSSProperties,
   formattingBanner: {
     padding: "7px 14px",
-    borderTop: `1px solid ${pwc.grey200}`,
     background: pwc.grey100,
     fontSize: 12,
     color: pwc.grey700,
@@ -2931,7 +2896,6 @@ const styles = {
     minHeight: 40,
     padding: "8px 12px",
     border: 0,
-    borderBottom: `1px solid ${pwc.grey100}`,
     background: pwc.white,
     textAlign: "left" as const,
     cursor: "pointer",
@@ -2978,7 +2942,6 @@ const styles = {
   } as React.CSSProperties,
   notePreview: {
     padding: `${pwc.space.sm}px 12px ${pwc.space.lg}px`,
-    borderBottom: `1px solid ${pwc.grey100}`,
     minWidth: 0,
   } as React.CSSProperties,
   notePreviewPair: {
@@ -3006,15 +2969,12 @@ const styles = {
     minWidth: 0,
     overflowWrap: "anywhere" as const,
   } as React.CSSProperties,
-  // Flat list rows separated by hairlines — not bordered cards. With the
-  // sheet header carrying the visual weight, rows read as content nested
-  // under the sheet rather than as peer containers.
+  // The enclosing field section owns the single peer separator.
   workspaceCellRow: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr)",
     gap: pwc.space.lg,
     padding: 0,
-    borderBottom: `1px solid ${pwc.grey100}`,
     background: pwc.white,
     scrollMarginTop: 64,
   } as React.CSSProperties,
@@ -3105,8 +3065,10 @@ const styles = {
   cellToolbar: {
     display: "flex",
     alignItems: "center",
-    gap: 6,
-    flexWrap: "nowrap" as const,
+    gap: pwc.space.sm,
+    flexWrap: "wrap" as const,
+    minHeight: 50,
+    padding: "8px 0",
     flexShrink: 0,
   } as React.CSSProperties,
   cellToolbarSpacer: {
@@ -3117,6 +3079,7 @@ const styles = {
     ...ui.buttonSm,
     gap: pwc.space.xs,
     paddingLeft: pwc.space.sm,
+    flexShrink: 0,
   } as React.CSSProperties,
   numericValueCell: {
     minWidth: 0,

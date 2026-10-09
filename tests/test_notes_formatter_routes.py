@@ -168,6 +168,71 @@ def test_running_status_exposes_visual_phase(formatter_client):
     assert response.json()["summary"] == "Rechecking corrected notes against the source PDF…"
 
 
+@pytest.mark.parametrize("change", ["content", "source_pages", "appearance"])
+def test_formatter_status_invalidates_changed_verified_output(formatter_client, change):
+    import json
+    from notes.visual_review import note_verification_identity
+    from notes.formatting_agent import _resolve_notes_table_theme
+    from mtool.notes_decorate import NotesTableStyle
+    client, run_id, server_module = formatter_client
+    sheet = "Notes-Listofnotes"
+    html = "<table><tr><td>Total</td><td>10</td></tr></table>"
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=sheet, row=112,
+            label="Disclosure", html=html, source_pages=[3])
+    style = NotesTableStyle.from_theme(_resolve_notes_table_theme(str(server_module.AUDIT_DB_PATH), run_id))
+    receipt = note_verification_identity(html, style, [3])
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        repo.upsert_notes_format_task(conn, run_id, sheet, "done",
+            result={"ok": True, "verified_rows": {112: receipt}})
+    url = f"/api/runs/{run_id}/notes-format/status"
+    assert client.get(url, params={"sheet": sheet}).json()["result"]["ok"]
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        if change == "appearance":
+            conn.execute("UPDATE runs SET notes_table_style=? WHERE id=?",
+                (json.dumps({"borderStyle": "all", "borderColor": "#ff0000"}), run_id))
+        else:
+            repo.upsert_notes_cell(conn, run_id=run_id, sheet=sheet, row=112, label="Disclosure",
+                html=html.replace("10", "20") if change == "content" else html,
+                source_pages=[4] if change == "source_pages" else None)
+    status = client.get(url, params={"sheet": sheet}).json()
+    assert status["error_type"] == "verification_stale"
+    assert status["failed_rows"] == [112]
+    assert not status["result"]["ok"]
+    assert "Recheck" in status["error"]
+
+
+def test_retry_checks_stale_and_unfinished_notes_and_keeps_other_receipts(formatter_client, monkeypatch):
+    from notes.visual_review import note_verification_identity
+    from notes.formatting_agent import _resolve_notes_table_theme
+    from mtool.notes_decorate import NotesTableStyle
+    client, run_id, server_module = formatter_client
+    sheet = "Notes-Listofnotes"
+    html = "<p>Original disclosure</p>"
+    style = NotesTableStyle.from_theme(_resolve_notes_table_theme(str(server_module.AUDIT_DB_PATH), run_id))
+    receipt = note_verification_identity(html, style, [3])
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        for row in (112, 113, 114):
+            repo.upsert_notes_cell(conn, run_id=run_id, sheet=sheet, row=row,
+                label="Disclosure", html=html, source_pages=[3],
+                style_source="unstyled" if row == 113 else "formatter")
+        repo.upsert_notes_format_task(conn, run_id, sheet, "done",
+            result={"ok": True, "verified_rows": {112: receipt, 114: receipt}})
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=sheet, row=112,
+            label="Disclosure", html="<p>Edited disclosure</p>")
+    async def fake_formatter(**kwargs):
+        assert kwargs["rows"] == [112, 113]
+        with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+            receipts = {cell.row: note_verification_identity(cell.html, style, cell.source_pages)
+                for cell in repo.list_formatter_cells_for_run(conn, run_id) if cell.row in kwargs["rows"]}
+        return {"ok": True, "verified_rows": receipts, "changed_rows": 0}
+    monkeypatch.setattr("notes.formatting_agent.run_notes_formatter", fake_formatter)
+    assert client.post(f"/api/runs/{run_id}/notes-format", json={"sheet": sheet}).status_code == 200
+    status = _poll_done(client, run_id, sheet)
+    assert status["result"]["ok"]
+    assert set(status["result"]["verified_rows"]) == {"112", "113", "114"}
+
+
 def test_notes_formatter_reports_already_formatted_sheet(formatter_client):
     """A retry with no unfinished rows must not claim the sheet is empty."""
     client, run_id, server_module = formatter_client
@@ -437,7 +502,7 @@ def test_notes_formatter_revert_keeps_content_edited_after_formatting(formatter_
     with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
         cells = repo.list_notes_cells_for_run(conn, run_id)
     assert cells[0].html == edited
-    assert cells[0].style_source == "formatter"
+    assert cells[0].style_source == "unstyled"
 
 
 def test_guarded_claims_are_mutually_exclusive(formatter_client):

@@ -23,7 +23,7 @@ import { getHumanFile, type HumanFileRecord } from "../lib/humanFile";
 import type { Denomination } from "../lib/types";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { AgentWorkspace } from "./AgentWorkspace";
-import { notesFormattingActivity, notesCleanupActivity } from "../lib/notesFormattingActivity";
+import { notesFormattingActivity, notesCleanupActivity, notesIntegrityActivity } from "../lib/notesFormattingActivity";
 import { ActivityStream } from "./ActivityStream";
 import type { AgentTabState } from "./AgentTabs";
 import type { AgentTabStatus } from "../lib/types";
@@ -44,7 +44,7 @@ import { notesTabLabel } from "../lib/appReducer";
 import { formatAccounting, formatCost } from "../lib/numberFormat";
 import { denominationLabel, pseudoAgentLabel, variantLabel, crossCheckFailureLabel } from "../lib/vocabulary";
 import { isNotes12StatementType } from "../lib/notes";
-import { statementCodeSubtitle, statementCodeOrder } from "../lib/sheetLabels";
+import { statementCodeSubtitle, statementCodeOrder, notesSheetDisplayName } from "../lib/sheetLabels";
 import { describePdfSidecar } from "../lib/pdfSidecar";
 import {
   readRunTabFromUrl,
@@ -244,6 +244,9 @@ function agentDisplayName(agent: RunAgentJson): string {
 }
 
 function agentSemanticUpdates(agent: RunAgentJson): string[] {
+  if (agent.statement_type === "CORRECTION" && agent.status === "completed_with_errors") {
+    return ["AI review completed; a source question needs your review."];
+  }
   const updates: string[] = [];
   const unfinished = agent.status === "failed" || agent.status === "cancelled" || agent.status === "aborted";
   const operatorMessage = (message: string) => unfinished && /^[a-z][a-z0-9_]+$/.test(message)
@@ -291,7 +294,7 @@ interface AgentSummary {
   sourceReference: string | null;
 }
 
-function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, retryPending }: { panelId: string; tabId: string; agent: RunAgentJson; summary: AgentSummary; filingStandard?: unknown; onRetry?: (statementType: string) => void; retryPending?: boolean }) {
+function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, retryPending, formattingCalls = [] }: { panelId: string; tabId: string; agent: RunAgentJson; summary: AgentSummary; filingStandard?: unknown; onRetry?: (statementType: string) => void; retryPending?: boolean; formattingCalls?: RunAgentJson[] }) {
   // Sheet-12 sub-tab selection — mirrors the live ExtractPage path so
   // replay looks identical to live once the operator picks a sub. null =
   // "All" (every sub-agent merged, same as pre-sub-tab behaviour).
@@ -306,6 +309,15 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
   // three drifting local maps were the run-168 QA finding.
   const displayName = agentDisplayName(agent);
   const { updates, sourceReference } = summary;
+  const formattingSheets = new Map<string, string>();
+  if (agent.statement_type === "NOTES_FORMATTING") {
+    for (const event of agent.events) {
+      if (event.event === "pipeline_stage" && event.data.item) {
+        formattingSheets.set(event.data.item, event.data.completed != null
+          ? "Formatting pass finished" : event.data.message ?? "Formatting in progress");
+      }
+    }
+  }
 
   // Notes-12 branch: derive the sub-agent list from the persisted events
   // (live path gets this for free from the reducer). Only render the
@@ -376,14 +388,25 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
       </div>
       <div style={styles.agentSummary}>
         <strong>{agent.status === "cancelled" || agent.status === "aborted" ? "Workstream stopped" : updates[0] ?? agentStatusDisplay(agent.status).label}</strong>
-        <span>{sourceReference ?? "No source page was recorded for this activity."}</span>
+        {(sourceReference || agent.statement_type !== "NOTES_FORMATTING") && <span>{sourceReference ?? "No source page was recorded for this activity."}</span>}
       </div>
-      {agent.error_message && (
+      {agent.error_message && (agent.statement_type !== "CORRECTION" || agent.error_message !== updates[0]) && (
         <div data-testid="agent-error-message" style={styles.agentErrorMessage}>
           <strong>Terminal detail</strong>
           <span>{agent.error_message}</span>
         </div>
       )}
+      {formattingCalls.length > 0 && <details style={styles.agentTechnicalDetails}>
+        <summary style={styles.perfSummary}>Formatting calls</summary>
+        <ul>{formattingCalls.map((call, index) => <li key={call.id}>
+          {call.variant ?? `Call ${index + 1}`} · {agentStatusDisplay(call.status).label}
+          {call.total_tokens != null ? ` · ${call.total_tokens.toLocaleString()} tokens` : ""}
+          {call.error_message ? ` · ${call.error_message}` : ""}
+        </li>)}</ul>
+      </details>}
+      {formattingSheets.size > 0 && <ul aria-label="Notes formatting by sheet">
+        {[...formattingSheets].map(([sheet, message]) => <li key={sheet}>{notesSheetDisplayName(sheet)} · {message}</li>)}
+      </ul>}
       {showSubTabs && <NotesSubTabBar subAgents={subAgents} activeSubId={notes12SubId} onSelect={setNotes12SubId} />}
       <ActivityStream events={events} toolTimeline={toolTimeline} reasoningBlocks={[]}
         isRunning={agent.status === "running"} status={savedAgentStatus(agent.status)}
@@ -425,6 +448,15 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
 }
 
 function recordedAgentStatus(agent: RunAgentJson): string {
+  // Older reviews recorded a completed human escalation as a tool exception.
+  // Only that explicit terminal outcome may be reclassified on read.
+  const terminal = [...agent.events].reverse().find((event) => event.event === "complete"
+    && !("sub_agent_id" in event.data && event.data.sub_agent_id));
+  const terminalData = terminal?.event === "complete" ? terminal.data : null;
+  if (agent.statement_type === "CORRECTION" && agent.status === "failed"
+      && agent.error_type === "tool_exception" && terminalData?.error === "reviewer_investigation_unresolved") {
+    return "completed_with_errors";
+  }
   // Final database outcomes remain authoritative, particularly failures
   // recorded after a model reported success. Running rows can lag the feed
   // until the other extraction agents finish.
@@ -454,12 +486,14 @@ function observedStageAgents(detail: RunDetailJson): RunAgentJson[] {
   const events: RunAgentJson["events"] = [];
   for (const event of detail.run_events ?? []) {
     const stage = event.data.stage;
-    if (event.event === "pipeline_stage" && (stage === "formatting_notes" || stage === "cleaning_notes" || stage === "done")) {
+    if (event.event === "pipeline_stage" && (stage === "formatting_notes" || stage === "cleaning_notes" || stage === "checking_notes" || stage === "done")) {
       events.push({ event: "pipeline_stage", timestamp: event.timestamp, data: {
         stage, started_at: event.timestamp,
         message: typeof event.data.message === "string" ? event.data.message : undefined,
         completed: typeof event.data.completed === "number" ? event.data.completed : undefined,
         total: typeof event.data.total === "number" ? event.data.total : undefined,
+        item: typeof event.data.item === "string" ? event.data.item : undefined,
+        status: event.data.status === "succeeded" || event.data.status === "failed" || event.data.status === "skipped" ? event.data.status : undefined,
       } });
     } else if (event.event === "error" && typeof event.data.message === "string") {
       events.push({ event: "error", timestamp: event.timestamp, data: {
@@ -475,13 +509,14 @@ function observedStageAgents(detail: RunDetailJson): RunAgentJson[] {
   for (const [index, type, stage, outcome] of [
     [-1, "NOTES_FORMATTING", "formatting_notes", notesFormattingActivity(state)],
     [-2, "NOTES_CLEANUP", "cleaning_notes", notesCleanupActivity(state)],
+    [-3, "NOTES_INTEGRITY", "checking_notes", notesIntegrityActivity(state)],
   ] as const) {
-    if (!outcome || detail.agents.some((agent) => agent.statement_type === type)) continue;
+    if (!outcome || (type !== "NOTES_FORMATTING" && detail.agents.some((agent) => agent.statement_type === type))) continue;
     result.push({ id: index, statement_type: type, variant: null, model: null,
       status: outcome.status === "complete" ? "completed" : outcome.status,
       started_at: null, ended_at: null, workbook_path: null, total_tokens: null, total_cost: null,
       events: events.filter((event) => (event.event === "pipeline_stage" && event.data.stage === stage)
-        || (event.event === "error" && event.data.type === (type === "NOTES_FORMATTING" ? "notes_formatting_incomplete" : "notes_cleanup_incomplete"))),
+        || (event.event === "error" && event.data.type === (type === "NOTES_FORMATTING" ? "notes_formatting_incomplete" : type === "NOTES_INTEGRITY" ? "notes_integrity_incomplete" : "notes_cleanup_incomplete"))),
       error_message: outcome.status === "failed" ? outcome.message : null,
     });
   }
@@ -491,8 +526,36 @@ function observedStageAgents(detail: RunDetailJson): RunAgentJson[] {
 function SavedAgentWorkspace({ detail, filingStandard, onRetry, retryPending }: { detail: RunDetailJson; filingStandard?: unknown; onRetry?: (statementType: string) => void; retryPending?: boolean }) {
   const panelId = useId();
   const orderedAgents = useMemo(
-    () => [...detail.agents.map((agent) => ({ ...agent, status: recordedAgentStatus(agent) })), ...observedStageAgents(detail)]
-      .sort((a, b) => agentActivityOrder(a) - agentActivityOrder(b)),
+    () => {
+      const observed = observedStageAgents(detail);
+      const calls = detail.agents.filter((agent) => agent.statement_type === "NOTES_FORMATTING");
+      const formatting = observed.find((agent) => agent.statement_type === "NOTES_FORMATTING");
+      const terminal = formatting ? [...formatting.events].reverse().find((event) => event.event === "pipeline_stage" && event.data.status) : undefined;
+      const laterCalls = terminal ? calls.filter((call) => Date.parse(call.started_at ?? "") > (terminal.timestamp ?? 0) * 1000) : [];
+      const laterIssue = laterCalls.find((call) => call.status === "failed")
+        ?? laterCalls.find((call) => call.status === "running")
+        ?? laterCalls.find((call) => ["cancelled", "aborted"].includes(call.status));
+      if (formatting && laterIssue) {
+        formatting.status = laterIssue.status;
+        formatting.error_message = laterIssue.error_message;
+        formatting.events = [...formatting.events, { event: "status", timestamp: Date.parse(laterIssue.started_at ?? "") / 1000,
+          data: { phase: laterIssue.status === "running" ? "started" : "complete", message: laterIssue.status === "failed" ? "A later formatting pass failed. Review the formatting calls." : laterIssue.status === "running" ? "A later formatting pass is working." : "A later formatting pass stopped." } }];
+      }
+      if (calls.length && !observed.some((agent) => agent.statement_type === "NOTES_FORMATTING")) {
+        const status = calls.some((agent) => agent.status === "failed") ? "failed"
+          : calls.some((agent) => agent.status === "running") ? "running"
+          : calls.some((agent) => ["cancelled", "aborted"].includes(agent.status)) ? "cancelled"
+          : calls.every((agent) => ["completed", "succeeded"].includes(agent.status)) ? "completed" : "pending";
+        observed.push({ ...calls[0], id: -1, variant: null, status, events: calls.flatMap((agent) => agent.events) });
+      }
+      return [...detail.agents.filter((agent) => agent.statement_type !== "NOTES_FORMATTING").map((agent) => {
+        const status = recordedAgentStatus(agent);
+        const legacyReview = status === "completed_with_errors" && agent.status === "failed";
+        return { ...agent, status, error_type: legacyReview ? null : agent.error_type,
+          error_message: legacyReview ? "AI review completed; a source question needs your review." : agent.error_message };
+      }), ...observed]
+      .sort((a, b) => agentActivityOrder(a) - agentActivityOrder(b));
+    },
     [detail],
   );
   const [selectedId, setSelectedId] = useState("");
@@ -520,6 +583,7 @@ function SavedAgentWorkspace({ detail, filingStandard, onRetry, retryPending }: 
       activeTab={selectedAgent ? String(selectedAgent.id) : ""} onTabClick={setSelectedId}>
       {selectedAgent && <AgentCard key={selectedAgent.id} panelId={panelId} tabId={`${panelId}-tab-${selectedAgent.id}`} agent={selectedAgent}
         filingStandard={filingStandard} onRetry={onRetry} retryPending={retryPending}
+        formattingCalls={selectedAgent.statement_type === "NOTES_FORMATTING" ? detail.agents.filter((agent) => agent.statement_type === "NOTES_FORMATTING") : []}
         summary={{ updates: agentSemanticUpdates(selectedAgent), sourceReference: agentSourceReference(selectedAgent) }} />}
     </AgentWorkspace>
   );

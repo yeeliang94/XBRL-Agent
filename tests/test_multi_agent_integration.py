@@ -153,7 +153,7 @@ class TestMultiAgentIntegration:
         assert len(runs) == 1
         assert runs[0]["status"] == "completed"
 
-        agents = conn.execute("SELECT * FROM run_agents ORDER BY id").fetchall()
+        agents = conn.execute("SELECT * FROM run_agents WHERE statement_type IN ('SOFP', 'SOPL') ORDER BY id").fetchall()
         assert len(agents) == 2
         assert agents[0]["statement_type"] == "SOFP"
         assert agents[1]["statement_type"] == "SOPL"
@@ -334,7 +334,7 @@ class TestMultiAgentIntegration:
         conn.row_factory = sqlite3.Row
         try:
             agents = conn.execute(
-                "SELECT id, statement_type FROM run_agents ORDER BY id"
+                "SELECT id, statement_type FROM run_agents WHERE statement_type IN ('SOFP', 'SOPL') ORDER BY id"
             ).fetchall()
             assert len(agents) == 2
             agent_by_stmt = {a["statement_type"]: a["id"] for a in agents}

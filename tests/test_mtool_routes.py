@@ -794,6 +794,7 @@ def test_notes_fill_doc_falls_back_to_firm_default_theme(client, monkeypatch):
     _add_note(db, run_id, "Notes-Listofnotes", 17,
               "Property, plant and equipment",
               "<table><tbody><tr><td>x</td></tr></tbody></table>")
+    monkeypatch.delenv("XBRL_NOTES_APPEARANCE_OVERRIDES", raising=False)
     monkeypatch.setenv("XBRL_NOTES_TABLE_STYLE",
                        '{"borderColor": "#abcdef"}')
     doc = tc.get(f"/api/runs/{run_id}/mtool-notes-fill").json()

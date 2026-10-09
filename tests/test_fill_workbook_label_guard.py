@@ -47,6 +47,36 @@ def _make_company_socie_like(tmp_path) -> str:
 # ---------------------------------------------------------------------------
 
 class TestWriterRejectsBlankRowWrites:
+    def test_period_placeholder_retry_clears_only_that_destination(self, tmp_path):
+        from types import SimpleNamespace
+        from extraction.agent import _update_unresolved_fill_errors
+
+        template = _make_company_socie_like(tmp_path)
+        wb = openpyxl.load_workbook(template)
+        wb.active["B1"] = "01/01/YYYY - 31/12/YYYY"
+        wb.save(template)
+        wb.close()
+        output = str(tmp_path / "filled.xlsx")
+        deps = SimpleNamespace(_unresolved_fill_error_state={}, last_fill_errors=[])
+        rejected = fill_workbook(template, output, [
+            {"sheet": "SOCIE", "field_label": "01/01/YYYY - 31/12/YYYY", "col": 2,
+             "value": "01/07/2024 - 30/06/2025"},
+            {"sheet": "SOCIE", "field_label": "Missing disclosure", "col": 2, "value": 10},
+        ])
+        _update_unresolved_fill_errors(deps, rejected)
+        assert len(deps.last_fill_errors) == 2
+        unrelated = fill_workbook(template, output, [
+            {"sheet": "SOCIE", "row": 1, "col": 3, "value": "01/07/2023 - 30/06/2024"},
+        ])
+        _update_unresolved_fill_errors(deps, unrelated)
+        assert len(deps.last_fill_errors) == 2
+        corrected = fill_workbook(template, output, [
+            {"sheet": "SOCIE", "row": 1, "col": 2, "value": "01/07/2024 - 30/06/2025"},
+        ])
+        _update_unresolved_fill_errors(deps, corrected)
+        assert len(deps.last_fill_errors) == 1
+        assert "Missing disclosure" in deps.last_fill_errors[0]
+
     def test_rejects_row_coord_write_when_col_a_is_blank(self, tmp_path):
         template = _make_company_socie_like(tmp_path)
         output = str(tmp_path / "filled.xlsx")

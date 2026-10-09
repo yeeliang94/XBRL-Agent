@@ -317,6 +317,11 @@ async def update_settings(body: dict, request: Request):
     that touches any such key is refused with 403; a write touching only the
     cosmetic keys (e.g. notes_table_style) is allowed for everyone.
     """
+    if {"auto_review", "notes_auto_review"}.intersection(body):
+        raise HTTPException(
+            status_code=400,
+            detail="Automatic figures and notes review are always enabled and cannot be configured.",
+        )
     if {"spot_check", "spot_check_mode"}.intersection(body):
         raise HTTPException(
             status_code=400,
@@ -502,12 +507,6 @@ async def update_settings(body: dict, request: Request):
                 ),
             )
         updates["XBRL_REASONING_SUMMARY"] = summary
-    if "auto_review" in body:
-        updates["XBRL_AUTO_REVIEW"] = "true" if body["auto_review"] else "false"
-    if "notes_auto_review" in body:
-        updates["XBRL_NOTES_AUTO_REVIEW"] = (
-            "true" if body["notes_auto_review"] else "false"
-        )
     # Notes coverage checklist (docs/PLAN-notes-coverage-and-routing.md). Default on.
     if "notes_coverage" in body:
         updates["XBRL_NOTES_COVERAGE"] = (

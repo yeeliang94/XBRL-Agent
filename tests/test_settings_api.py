@@ -164,9 +164,10 @@ def test_get_settings_shows_masked_key(tmp_path, monkeypatch):
     assert "..." in data["api_key_preview"]
 
 
-def test_auto_review_toggle_round_trips(tmp_path, monkeypatch):
-    """The Settings auto-review toggle persists to XBRL_AUTO_REVIEW and is
-    reflected by GET /api/settings + /api/config (docs/Archive/PLAN-reviewer-agent.md)."""
+@pytest.mark.parametrize("field", ["auto_review", "notes_auto_review"])
+@pytest.mark.parametrize("value", [False, True])
+def test_legacy_review_setting_is_rejected_without_writes(tmp_path, monkeypatch, field, value):
+    """Retired controls cannot silently persist a different value."""
     env_file = tmp_path / ".env"
     monkeypatch.setattr(server, "ENV_FILE", env_file)
     monkeypatch.delenv("XBRL_AUTO_REVIEW", raising=False)
@@ -175,12 +176,14 @@ def test_auto_review_toggle_round_trips(tmp_path, monkeypatch):
     assert client.get("/api/settings").json()["auto_review"] is True
     assert client.get("/api/config").json()["auto_review"] is True
 
-    # Turn it off → persisted + re-read from local settings.
-    resp = client.post("/api/settings", json={"auto_review": False})
-    assert resp.status_code == 200
-    assert "XBRL_AUTO_REVIEW" in server.SETTINGS_FILE.read_text()
-    assert client.get("/api/settings").json()["auto_review"] is False
-    assert server._auto_review_enabled() is False
+    from runtime_settings import read_settings
+    before = read_settings(server.SETTINGS_FILE)
+    resp = client.post("/api/settings", json={field: value, "model": "other-model"})
+    assert resp.status_code == 400
+    assert "always enabled" in resp.json()["detail"]
+    assert read_settings(server.SETTINGS_FILE) == before
+    assert client.get("/api/settings").json()["auto_review"] is True
+    assert server._auto_review_enabled() is True
 
 
 def test_pdf_notes_formatting_cannot_be_disabled_by_legacy_settings(monkeypatch):
@@ -688,11 +691,11 @@ def test_legacy_pdf_settings_do_not_reject_other_settings(tmp_path, monkeypatch,
     _env(tmp_path, monkeypatch)
     response = client.post("/api/settings", json={
         "pdf_sidecar": sidecar, "pdf_notes_auto_format": auto_format,
-        "auto_review": False,
+        "notes_coverage": False,
     })
     assert response.status_code == 200
     settings = client.get("/api/settings").json()
-    assert settings["auto_review"] is False
+    assert settings["auto_review"] is True
     assert "pdf_sidecar" not in settings
     assert "pdf_notes_auto_format" not in settings
     saved = server.SETTINGS_FILE.read_text()
