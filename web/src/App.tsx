@@ -740,11 +740,16 @@ export default function App() {
   const sidebarDocuments = (selectedDocument
     ? [selectedDocument, ...documents.runs.filter((run) => run.id !== documentId)]
     : documents.runs).slice(0, SIDEBAR_DOCUMENT_LIMIT);
-  const contextLabel = state.view === "settings" ? "Settings"
-    : state.view === "concepts" && documentId == null ? "Field labels"
-    : documentId != null ? "Current filing"
-    : state.view === "history" ? "History"
-    : extractMode === "new" ? "Add documents" : "Workspace";
+  // The top bar never repeats the page title. Sub-pages get one back link in
+  // one style; the main pages (Work queue, Add documents, History) leave it empty.
+  const backLink: { label: string; onClick: () => void } | null =
+    state.view === "settings" || (state.view === "concepts" && documentId == null)
+      ? { label: returnPath.match(/\/(?:run|history|concepts)\/\d+/) ? "Back to document" : "Back to work queue", onClick: restoreDocument }
+      : documentId != null
+        ? state.view === "extract"
+          ? { label: "Back to work queue", onClick: () => showDocuments("progress") }
+          : { label: "Back to history", onClick: () => showDocuments("history") }
+        : null;
   return (
     <div className={`app-shell${sidebarCollapsed ? " app-shell--collapsed" : ""}`}
       style={{ ...ui.appShell, ...(sidebarCollapsed ? { gridTemplateColumns: "72px minmax(0, 1fr)" } : {}) }}>
@@ -811,9 +816,7 @@ export default function App() {
       </aside>
       <div className="app-workspace" style={{ minWidth: 0 }}>
       <header className="app-topbar" style={{ ...styles.topbar, zIndex: 30, borderBottom: `1px solid ${pwc.grey200}`, height: 64 }}>
-        {state.view === "settings" || (state.view === "concepts" && state.selectedRunId == null)
-          ? <button type="button" className={uiClass.btnQuiet} style={{ ...ui.buttonQuiet, marginLeft: -10, padding: "0 10px" }} onClick={restoreDocument}><ArrowBack size={20} />Back to {returnPath.match(/\/(?:run|history|concepts)\/\d+/) ? "document" : "work queue"}</button>
-          : <span style={ui.metadata}>{contextLabel}</span>}
+        {backLink && <button type="button" className={uiClass.btnQuiet} style={{ ...ui.buttonQuiet, marginLeft: -10, padding: "0 10px" }} onClick={backLink.onClick}><ArrowBack size={20} />{backLink.label}</button>}
         <div style={{ ...styles.headerRight, marginLeft: "auto" }}>
           {user?.provider !== "dev" && <button type="button" aria-label="Log out" data-tooltip="Log out" onClick={handleLogout} style={styles.logoutButton}><Icon glyph={Logout} size={20} /></button>}
         </div>
