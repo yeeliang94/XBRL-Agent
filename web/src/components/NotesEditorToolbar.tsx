@@ -327,7 +327,7 @@ export function NotesEditorToolbar({ editor }: { editor: Editor }) {
               {button(icon(BorderClear), "Border none", () =>
                 applyCellBorderAll(editor, BORDER_HIDDEN),
               )}
-              {button(<span style={{ fontSize: 16, fontWeight: 680, textDecoration: "underline double", textUnderlineOffset: 3 }}>U</span>, "Double underline", () =>
+              {button(<span style={{ fontSize: 16, fontWeight: 500, textDecoration: "underline double", textUnderlineOffset: 3 }}>U</span>, "Double underline", () =>
                 applyCellDoubleUnderline(editor),
               )}
             </>,

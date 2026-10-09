@@ -1030,7 +1030,7 @@ const styles = {
   runEyebrow: {
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
     color: pwc.orange700,
     marginBottom: pwc.space.xs,
   } as const,
@@ -1179,14 +1179,14 @@ const styles = {
   activityTitle: {
     fontFamily: pwc.fontHeading,
     fontSize: 16,
-    fontWeight: 680,
+    fontWeight: 600,
     color: pwc.grey900,
     whiteSpace: "nowrap" as const,
   } as const,
   activityEyebrow: {
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
     color: pwc.grey700,
     letterSpacing: "0.02em",
     marginBottom: 2,
@@ -1211,7 +1211,7 @@ const styles = {
   toolbarBtnBase: {
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
     borderRadius: pwc.radius.sm,
     padding: `2px ${pwc.space.sm}px`,
     cursor: "pointer",
@@ -1235,7 +1235,7 @@ const styles = {
   } as const,
   errorTitle: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 680,
+    fontWeight: 600,
     color: pwc.errorText,
     fontSize: 14,
     margin: 0,
@@ -1267,7 +1267,7 @@ const styles = {
   } as const,
   partialMergeTitle: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 680,
+    fontWeight: 600,
     color: pwc.warningText,
     fontSize: 14,
     margin: 0,

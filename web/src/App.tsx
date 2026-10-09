@@ -19,8 +19,9 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { TopNav } from "./components/TopNav";
 import { SuccessToast } from "./components/SuccessToast";
 import { Icon, SettingsIcon } from "./components/icons";
-import { ArrowBack, Description, LeftPanelClose, LeftPanelOpen, Logout } from "./components/iconGlyphs";
-import { DocumentsPage, useDocuments, documentStageLabel } from "./pages/DocumentsPage";
+import { ArrowBack, ArrowForward, LeftPanelClose, LeftPanelOpen, Logout } from "./components/iconGlyphs";
+import { StatusIcon } from "./components/StatusIcon";
+import { DocumentsPage, useDocuments, documentStageLabel, documentStageSymbol } from "./pages/DocumentsPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { ExtractPage } from "./pages/ExtractPage";
 import { ConceptsPage } from "./pages/ConceptsPage";
@@ -54,10 +55,6 @@ const styles = {
   topbar: {
     ...ui.appTopbar,
   } as const,
-  settingsButton: {
-    ...ui.buttonQuiet,
-    ...ui.buttonSm,
-  } as const,
   headerRight: {
     display: "flex",
     alignItems: "center",
@@ -75,7 +72,7 @@ const styles = {
   mainFull: {
     maxWidth: "100%",
     margin: "0 auto",
-    padding: `${pwc.space.xl}px ${tokens.space.pageGutter}px 110px`,
+    padding: `${pwc.space.xxl}px ${tokens.space.pageGutter}px 110px`,
     display: "flex",
     flexDirection: "column" as const,
     gap: tokens.space.section,
@@ -760,30 +757,34 @@ export default function App() {
         </div>
         <TopNav view={state.view} extractMode={extractMode} hasDocument={documentId != null}
           onAdd={addDocuments} onViewChange={(view) => showDocuments(view === "history" ? "history" : "progress")} />
-        <nav className="app-document-navigation" aria-label="In-progress documents" style={{ display: "flex", flexDirection: "column", gap: 8, minHeight: 0 }}>
-          {(documents.runs.length > 0 || documentId != null) && <span className="app-navigation-label" style={{ ...ui.metadata, padding: "0 10px" }}>Documents</span>}
-          <div className="app-document-list" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0, overflowY: "auto" }}>
-          {sidebarDocuments.map((run) => <button key={run.id} type="button"
-            aria-current={documentId === run.id && state.view !== "settings" ? "page" : undefined}
-            aria-label={`Open ${run.pdf_filename}`} title={run.pdf_filename} data-tooltip={run.pdf_filename}
-            onClick={() => openDocument(run)}
-            className={`${uiClass.btnQuiet} app-navigation-link`}
-            style={{ ...ui.buttonQuiet, display: "flex", alignItems: "center", justifyContent: "flex-start", gap: 8, padding: 4, fontSize: 13, fontWeight: documentId === run.id ? 600 : 400, flexShrink: 0, minWidth: 0, textAlign: "left", whiteSpace: "normal", background: documentId === run.id && state.view !== "settings" ? pwc.white : "transparent" }}>
-            <Icon glyph={Description} size={20} color={documentId === run.id ? pwc.orange500 : pwc.grey700} />
-            <span className="app-navigation-label" style={{ minWidth: 0, overflowWrap: "anywhere" }}>
-              <span style={{ display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, overflow: "hidden" }}>{run.pdf_filename}</span>
-              {documents.runs.some((item) => item.id === run.id) && <span style={{ ...ui.metadata, display: "block", marginTop: 2 }}>
-                {documentStageLabel(run)}
-              </span>}
-            </span>
-          </button>)}
+        <nav className="app-document-navigation" aria-label="Recent documents" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0 }}>
+          {(documents.runs.length > 0 || documentId != null) && <span className="app-navigation-label" style={{ ...ui.metadata, fontSize: 12, padding: "0 10px 4px" }}>Recent</span>}
+          <div className="app-document-list" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0 }}>
+          {sidebarDocuments.map((run) => {
+            const active = documentId === run.id && state.view !== "settings";
+            const stage = documents.runs.some((item) => item.id === run.id) ? documentStageLabel(run) : null;
+            return <button key={run.id} type="button"
+              aria-current={active ? "page" : undefined}
+              aria-label={`Open ${run.pdf_filename}`} aria-description={stage ?? undefined} title={stage ? `${run.pdf_filename} · ${stage}` : run.pdf_filename} data-tooltip={run.pdf_filename}
+              onClick={() => openDocument(run)}
+              className={`${uiClass.btnQuiet} app-navigation-link`}
+              style={{ ...ui.navLink, ...(active ? ui.navLinkActive : {}), flexShrink: 0, minWidth: 0 }}>
+              <span style={{ display: "inline-flex", width: 20, justifyContent: "center", flexShrink: 0 }}>
+                <StatusIcon symbol={documentStageSymbol(run)} size={18} />
+              </span>
+              <span className="app-navigation-label" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{run.pdf_filename}</span>
+            </button>;
+          })}
           </div>
-          <button type="button" className="app-navigation-link" aria-label="View all documents" title="View all documents" style={{ ...ui.buttonQuiet, flexShrink: 0 }} onClick={() => showDocuments()}>View all<span className="app-navigation-label"> documents</span></button>
+          <button type="button" className={`${uiClass.btnQuiet} app-navigation-link`} aria-label="View all documents" data-tooltip="View all documents"
+            style={{ ...ui.navLink, flexShrink: 0 }} onClick={() => showDocuments()}>
+            <Icon glyph={ArrowForward} size={20} /><span className="app-navigation-label">View all</span>
+          </button>
         </nav>
         <div className="app-rail-footer" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: "auto" }}>
           <button type="button" aria-label="Settings" data-tooltip="Settings"
             aria-current={state.view === "settings" ? "page" : undefined}
-            style={{ ...styles.settingsButton, justifyContent: "flex-start", gap: 10, minHeight: 44, padding: "0 10px", background: state.view === "settings" ? pwc.white : "transparent" }}
+            style={{ ...ui.navLink, ...(state.view === "settings" ? ui.navLinkActive : {}) }}
             className={`${uiClass.btnSubtle} app-navigation-link`}
             onClick={() => { if (confirmNavigationLeave()) dispatch({ type: "SET_VIEW", payload: "settings" }); }}>
             <SettingsIcon /><span className="app-navigation-label">Settings</span>
@@ -792,7 +793,7 @@ export default function App() {
             aria-label={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"}
             data-tooltip={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"}
             aria-expanded={!sidebarCollapsed} aria-controls="app-primary-navigation" onClick={toggleSidebar}
-            style={{ ...ui.buttonQuiet, justifyContent: "flex-start", gap: 10, minHeight: 44, padding: "0 10px" }}>
+            style={ui.navLink}>
             <Icon glyph={sidebarCollapsed ? LeftPanelOpen : LeftPanelClose} size={20} />
             <span className="app-navigation-label">{sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}</span>
           </button>
@@ -807,14 +808,14 @@ export default function App() {
       </aside>
       <div className="app-workspace" style={{ minWidth: 0 }}>
       <header className="app-topbar" style={{ ...styles.topbar, zIndex: 30, borderBottom: `1px solid ${pwc.grey200}`, height: 64 }}>
-        <span style={ui.metadata}>{contextLabel}</span>
+        {state.view === "settings" || (state.view === "concepts" && state.selectedRunId == null)
+          ? <button type="button" className={uiClass.btnQuiet} style={{ ...ui.buttonQuiet, marginLeft: -10, padding: "0 10px" }} onClick={restoreDocument}><ArrowBack size={20} />Back to {returnPath.match(/\/(?:run|history|concepts)\/\d+/) ? "document" : "work queue"}</button>
+          : <span style={ui.metadata}>{contextLabel}</span>}
         <div style={{ ...styles.headerRight, marginLeft: "auto" }}>
           {user?.provider !== "dev" && <button type="button" aria-label="Log out" data-tooltip="Log out" onClick={handleLogout} style={styles.logoutButton}><Icon glyph={Logout} size={20} /></button>}
         </div>
       </header>
       <main id="main-content" tabIndex={-1} className="app-main" style={reviewFocused || state.view === "concepts" ? styles.mainFull : styles.mainHistory}>
-        {(state.view === "settings" || (state.view === "concepts" && state.selectedRunId == null)) &&
-          <button type="button" style={{ ...ui.buttonGhost, alignSelf: "flex-start" }} onClick={restoreDocument}><ArrowBack size={20} />Back to {returnPath.match(/\/(?:run|history|concepts)\/\d+/) ? "document" : "work queue"}</button>}
         {state.view === "settings" && <SettingsPage isAdmin={Boolean(user?.is_admin)} currentEmail={user?.email}
           onFieldLabels={canonicalEnabled ? () => { if (!confirmNavigationLeave()) return; dispatch({ type: "SET_VIEW", payload: "concepts" }); dispatch({ type: "SET_SELECTED_RUN_ID", payload: null }); } : undefined} />}
         {documentList && <DocumentsPage documents={documents} section={state.view === "history" ? "history" : "progress"}

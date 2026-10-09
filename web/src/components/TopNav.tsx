@@ -19,10 +19,8 @@ export function TopNav({ view, extractMode = "queue", hasDocument = false, onVie
     style={{ display: "flex", flexDirection: "column", gap: 4 }}>
     {destinations.map(({ label, href, glyph: Glyph, active, action }) => <a key={href} href={href}
       aria-label={label} data-tooltip={label} aria-current={active ? "page" : undefined}
-      className="app-navigation-link"
-      style={{ ...ui.buttonQuiet, justifyContent: "flex-start", gap: 10, minHeight: 44, padding: "0 10px", textDecoration: "none",
-        color: active ? pwc.black : tokens.color.text.secondary, background: active ? pwc.white : "transparent",
-        fontWeight: active ? pwc.weight.semibold : pwc.weight.regular }}
+      className="pwc-btn-quiet app-navigation-link"
+      style={{ ...ui.navLink, ...(active ? ui.navLinkActive : {}) }}
       onClick={(event) => {
         if (!action || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
         event.preventDefault();

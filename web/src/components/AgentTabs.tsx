@@ -440,7 +440,7 @@ const styles = {
     padding: `0 ${pwc.space.sm}px ${pwc.space.xs}px`,
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
     color: pwc.grey700,
     letterSpacing: "0.02em",
   },
@@ -464,7 +464,7 @@ const styles = {
   },
   tabActive: {
     color: pwc.grey900,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
     background: pwc.grey50,
   },
   tabSkeleton: {

@@ -120,7 +120,7 @@ select:disabled {
     }
 
     select:not([multiple]):not([size]) option:checked {
-      font-weight: 650;
+      font-weight: 500;
     }
 
     select:not([multiple]):not([size]) option:disabled {
@@ -196,10 +196,11 @@ input[type="checkbox"]:disabled:indeterminate {
   }
 }
 
-/* UI emphasis uses the emphasis weight (680). Note content keeps its own
+/* UI emphasis uses the medium weight (500); bold is for headings. Note content
+   and prepared note previews keep their own
    source-styled weights in NotesReviewTab.css. */
-:where(strong, b):not(.notes-review-tab *) {
-  font-weight: 680;
+:where(strong, b):not(.notes-review-tab *, .notes-output-preview *) {
+  font-weight: 500;
 }
 
 /* Working status icon: one slow rotation while work is live; static under
@@ -230,7 +231,7 @@ h2 {
   color: #FFFFFF;
   font-family: "Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 14px;
-  font-weight: 650;
+  font-weight: 500;
   text-decoration: none;
   transform: translateY(-200%);
   transition: transform var(--motion-fast) var(--motion-standard);
@@ -1094,9 +1095,14 @@ details[open] > summary::before {
   .app-rail-brand { padding: 0 !important; justify-content: center; }
   .app-user { padding-left: 0 !important; padding-right: 0 !important; justify-content: center; }
 }
-.app-sidebar [data-tooltip]::after { left: 0; transform: translate(0, 2px); }
+/* Sidebar tooltips appear only when labels are hidden (collapsed rail), to
+   the right of the icon so they never cover the neighbouring item. */
+.app-sidebar [data-tooltip]::after { left: calc(100% + 8px); bottom: auto; top: 50%; transform: translate(0, -50%); }
 .app-sidebar [data-tooltip]:hover::after,
-.app-sidebar [data-tooltip]:focus-visible::after { transform: translate(0, 0); }
+.app-sidebar [data-tooltip]:focus-visible::after { transform: translate(0, -50%); }
+@container app-navigation (min-width: 81px) {
+  .app-sidebar [data-tooltip]::after { display: none; }
+}
 @media (max-width: 1000px) and (min-width: 781px) {
   .app-shell { grid-template-columns: 72px minmax(0, 1fr) !important; }
   .app-rail-toggle { display: none !important; }

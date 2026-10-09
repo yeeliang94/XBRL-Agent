@@ -1548,7 +1548,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                   border: `2px solid ${pwc.grey200}`, borderTop: `2px solid ${pwc.orange500}`,
                   flexShrink: 0, display: "inline-block",
                 }} />
-                <span style={{ ...ui.bodyText, fontWeight: pwc.weight.semibold }}>
+                <span style={{ ...ui.bodyText, fontWeight: pwc.weight.medium }}>
                   {scoutProgress || "Starting document scan…"}
                 </span>
               </div>

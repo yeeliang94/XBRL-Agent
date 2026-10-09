@@ -9,7 +9,7 @@ import { PageHeader } from "../components/PageHeader";
 import { HistoryPage } from "./HistoryPage";
 import { ArrowForward } from "../components/iconGlyphs";
 import { StatusLabel } from "../components/StatusLabel";
-import { runStatusDisplay } from "../lib/runStatus";
+import { runStatusDisplay, STATUS_SYMBOLS, type StatusSymbol } from "../lib/runStatus";
 
 /** One serial poll for the document list and switcher; preparation is durable. */
 export function useDocuments(enabled: boolean) {
@@ -58,6 +58,21 @@ export function useDocuments(enabled: boolean) {
   }, [enabled, visible, pages, revision]);
   return { runs, total, error, loading, refresh,
     loadMore: () => setPages((value) => value + 1) };
+}
+
+/** Status family for a document's current stage — drives the one icon the
+ *  sidebar shows beside a recent document instead of a second line of text. */
+export function documentStageSymbol(run: Pick<RunSummaryJson, "status" | "preparation">): StatusSymbol {
+  if (run.status === "draft") {
+    const prep = run.preparation;
+    if (prep?.status === "failed") return STATUS_SYMBOLS.failure;
+    if (prep?.status === "cancelled") return STATUS_SYMBOLS.inactive;
+    if (prep?.phase === "awaiting_confirmation") return STATUS_SYMBOLS.attention;
+    if (prep?.status === "working" || prep?.status === "retrying" || prep?.status === "queued") return STATUS_SYMBOLS.inProgress;
+    return STATUS_SYMBOLS.inactive;
+  }
+  if (run.status === "running") return STATUS_SYMBOLS.inProgress;
+  return runStatusDisplay(run.status).symbol;
 }
 
 export function documentStageLabel(run: Pick<RunSummaryJson, "status" | "preparation" | "pipeline_stage">): string {

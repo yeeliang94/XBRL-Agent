@@ -1748,7 +1748,7 @@ function ConceptMatrixGrid({
           display: "grid",
           gridTemplateColumns: gridCols,
           background: pwc.grey100,
-          fontWeight: 680,
+          fontWeight: 400,
           fontSize: 14,
           borderBottom: `1px solid ${pwc.grey200}`,
         }}
@@ -1803,7 +1803,7 @@ function ConceptMatrixGrid({
                 background: pwc.grey50,
                 fontFamily: pwc.fontBody,
                 fontSize: 14,
-                fontWeight: 680,
+                fontWeight: 500,
                 borderBottom: `1px solid ${pwc.grey100}`,
               }}
             >
@@ -2599,7 +2599,7 @@ const styles = {
   columnHeaderTitle: {
     fontFamily: pwc.fontHeading,
     fontSize: 16,
-    fontWeight: 680,
+    fontWeight: 600,
     color: tokens.color.text.primary,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
@@ -2609,7 +2609,7 @@ const styles = {
     minHeight: 34,
     padding: `0 ${pwc.space.sm}px`,
     fontSize: 13,
-    fontWeight: 650,
+    fontWeight: 500,
     color: tokens.color.text.secondary,
   } as React.CSSProperties,
   collapsedRail: {
@@ -2631,14 +2631,14 @@ const styles = {
   collapsedRailChevron: {
     fontSize: 14,
     lineHeight: 1,
-    fontWeight: 680,
+    fontWeight: 500,
   } as React.CSSProperties,
   collapsedRailLabel: {
     writingMode: "vertical-rl" as const,
     transform: "rotate(180deg)",
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
     letterSpacing: 0,
   } as React.CSSProperties,
   panelCard: {
@@ -2667,7 +2667,7 @@ const styles = {
   panelHeaderTitle: {
     fontFamily: pwc.fontHeading,
     fontSize: 14,
-    fontWeight: 680,
+    fontWeight: 600,
     color: tokens.color.text.primary,
   } as React.CSSProperties,
   panelChevron: {
@@ -2759,7 +2759,7 @@ const styles = {
     color: pwc.orange500,
     fontFamily: pwc.fontBody,
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
     cursor: "pointer",
   } as React.CSSProperties,
   attentionPanel: {
@@ -2824,7 +2824,7 @@ const styles = {
     height: 32,
   } as React.CSSProperties,
   humanMarker: {
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
     flex: "0 0 auto",
   } as React.CSSProperties,
   humanNumber: {
@@ -2885,7 +2885,7 @@ const styles = {
   evidenceLabel: {
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 650,
+    fontWeight: 500,
     color: pwc.grey500,
     marginBottom: 2,
   } as React.CSSProperties,
@@ -3014,7 +3014,7 @@ const styles = {
     color: pwc.grey500,
     fontFamily: pwc.fontHeading,
     fontSize: 14,
-    fontWeight: 680,
+    fontWeight: 400,
     borderLeft: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   matrixMovementCell: {

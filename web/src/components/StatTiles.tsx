@@ -91,7 +91,7 @@ const styles = {
   label: {
     fontFamily: pwc.fontBody,
     fontSize: 12,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.regular,
     color: tokens.color.text.secondary,
   } as React.CSSProperties,
   detail: {

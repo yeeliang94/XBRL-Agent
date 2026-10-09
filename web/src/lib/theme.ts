@@ -69,11 +69,12 @@ export const pwc = {
   fontBody:    '"Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   fontMono:    '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
 
-  // Weight scale. Product UI uses TWO text weights — regular (body/data) +
-  // semibold (titles/headings/emphasis/labels); medium only on interactive
-  // controls. `light` (300) is retained for token-name stability but is NOT
-  // used in product UI (it reads as a different typeface); never 700+.
-  weight: { light: 300, regular: 400, medium: 650, semibold: 680, bold: 700 },
+  // Weight scale. Bold is reserved for page titles and section headings
+  // (semibold 600). Controls, labels, tabs and selected items use medium 500;
+  // everything else — body, table text, names, figures — stays regular 400.
+  // `light` (300) is kept for token-name stability but is not used in product
+  // UI; never 700+.
+  weight: { light: 300, regular: 400, medium: 500, semibold: 600, bold: 700 },
 
   // Spacing scale (px) — 4px base. xxxl/xxxxl added to match the design
   // system's larger section rhythm (s-7 / s-8).

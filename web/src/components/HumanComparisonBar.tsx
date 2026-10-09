@@ -127,7 +127,7 @@ const styles = {
   } as React.CSSProperties,
   summaryValue: {
     color: pwc.grey900,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.regular,
   } as React.CSSProperties,
   separator: {
     margin: `0 ${pwc.space.sm}px`,

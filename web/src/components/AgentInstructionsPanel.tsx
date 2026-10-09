@@ -141,6 +141,6 @@ const styles = {
   meta: { margin: 0, fontSize: 13, color: tokens.color.text.secondary },
   textarea: { ...ui.textarea, minHeight: 180, width: "100%", lineHeight: 1.5 } as React.CSSProperties,
   actions: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: pwc.space.md, flexWrap: "wrap" } as React.CSSProperties,
-  summary: { cursor: "pointer", fontSize: 14, fontWeight: pwc.weight.semibold },
+  summary: { cursor: "pointer", fontSize: 14, fontWeight: pwc.weight.medium },
   source: { margin: 0, padding: 16, border: `1px solid ${pwc.grey200}`, borderRadius: 8, fontFamily: pwc.fontBody, fontSize: 14, lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 480, overflow: "auto" } as React.CSSProperties,
 };

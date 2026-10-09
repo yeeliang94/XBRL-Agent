@@ -171,7 +171,7 @@ const styles = {
     fontFamily: pwc.fontBody,
     color: pwc.black,
     fontSize: 16,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
     margin: 0,
   } as React.CSSProperties,
   chooseButton: {

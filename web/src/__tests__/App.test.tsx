@@ -236,8 +236,9 @@ describe("App — live activity integration", () => {
     expect(screen.getByRole("button", { name: "Open FINCO.pdf" })).toHaveAttribute("aria-current", "page");
     expect(screen.queryByRole("combobox", { name: "Switch document" })).toBeNull();
     expect(screen.queryByRole("button", { name: "All runs" })).toBeNull();
-    const sidebar = screen.getByRole("navigation", { name: "In-progress documents" });
-    expect(within(sidebar).getByRole("button", { name: "Open SECOND.pdf" })).toHaveTextContent("Mapping document");
+    const sidebar = screen.getByRole("navigation", { name: "Recent documents" });
+    // The stage moves to the status icon and hover text; the row shows only the name.
+    expect(within(sidebar).getByRole("button", { name: "Open SECOND.pdf" })).toHaveAttribute("title", "SECOND.pdf · Mapping document");
     const tabs = await screen.findByRole("tablist", { name: "Run detail sections" });
     expect(within(tabs).getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByTestId("run-detail-agents")).toBeInTheDocument();
