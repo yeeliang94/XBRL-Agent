@@ -51,7 +51,7 @@ describe("XBRL design system is the production authority", () => {
 
   test("keeps notes field hierarchy and coverage in the source inventory", () => {
     expect(designSystem).toContain("plain bold field headings above white note content");
-    expect(designSystem).toContain("Selected Notes items use bold black text and a small right-pointing chevron without a fill");
+    expect(designSystem).toContain("Selected Notes items use the shared Grey 100 selected surface and medium weight");
     expect(designSystem).toContain("Comparison pairs share one field heading and shared grid rows for actions, editing tools and content");
     expect(designSystem).toContain("Open prose fields that hold AI or human content by default as bordered read-only previews");
     expect(designSystem).toContain("keep empty fields collapsed in compact clickable rows");
