@@ -9,6 +9,7 @@ import { NotesReviewTab } from "../components/NotesReviewTab";
 import { ResizableDivider } from "../components/ResizableDivider";
 import { ReconciliationQueue } from "../components/ReconciliationQueue";
 import { PdfSourcePane } from "../components/PdfSourcePane";
+import { fetchPdfPageCount } from "../lib/api";
 import {
   figureSheetDisplayName,
   templateDisplayName,
@@ -385,6 +386,18 @@ export function ConceptsPage({
   const workspaceRef = useRef<HTMLDivElement>(null);
   const pdfMaxWidthRef = useRef(720);
   const [pdfCollapsed, setPdfCollapsed] = useState(initialWorkspace.current.pdfCollapsed ?? false);
+  // A run without a stored PDF folds the source column to its rail so the
+  // figures and notes get the width; opening the rail still explains why.
+  const [pdfMissing, setPdfMissing] = useState(false);
+  const [showMissingPdf, setShowMissingPdf] = useState(false);
+  useEffect(() => {
+    if (runId == null) return;
+    let cancelled = false;
+    void fetchPdfPageCount(runId).then((count) => {
+      if (!cancelled) setPdfMissing(count === null);
+    });
+    return () => { cancelled = true; };
+  }, [runId]);
   // Whether the row carrying the CURRENT selection may scroll itself into
   // view. True only for intentional jumps (row click, reconciliation
   // conflict, cross-check / coverage focus). The initial auto-selection that
@@ -1342,11 +1355,11 @@ export function ConceptsPage({
           source page sit side by side. The resize handle is on the PDF's LEFT
           edge now, so a rightward drag shrinks it — delta sign is flipped
           relative to the Menu handle on the far left. */}
-      {humanActive ? null : pdfCollapsed ? (
+      {humanActive ? null : pdfCollapsed || (pdfMissing && !showMissingPdf) ? (
         <CollapsedRail
           label="Source PDF"
           testId="pdf"
-          onExpand={() => setPdfCollapsed(false)}
+          onExpand={() => { setPdfCollapsed(false); setShowMissingPdf(true); }}
         />
       ) : (
         <>

@@ -30,7 +30,7 @@ export function DiagnosticsExport({ runId }: { runId: number }) {
           {pending ? "Preparing diagnostics…" : "Export diagnostics"}
         </button>
         <span style={{ color: pwc.grey700, fontSize: 13 }}>
-          ZIP of saved traces and logs for this run. May contain financial content.
+          Saved traces and logs. May contain financial content.
         </span>
       </div>
       {error && <p role="alert" style={{ color: pwc.errorText, marginBottom: 0 }}>{error}</p>}

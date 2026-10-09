@@ -759,7 +759,7 @@ export function NotesReviewTab({
               <h2 style={{ ...ui.sectionTitle, margin: 0 }}>mTool worksheets</h2>
             </div>
             <div aria-label="Worksheet and source note list" role="region" style={styles.noteRailBody}>
-            <input type="search" aria-label="Search all note fields" placeholder="Find a field, including empty fields" value={noteSearch}
+            <input type="search" aria-label="Search all note fields" placeholder="Search fields" value={noteSearch}
               onChange={(event) => setNoteSearch(event.target.value)} style={styles.noteRailSearch} />
                 <nav style={{ display: "flex", flexDirection: "column", gap: 4 }} aria-label="Notes sheet navigator">
                   {(sheets ?? []).map((sheet) => {

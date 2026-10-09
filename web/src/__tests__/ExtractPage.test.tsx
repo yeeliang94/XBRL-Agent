@@ -409,7 +409,7 @@ describe("ExtractPage — render-gate regression guards", () => {
     {stage: "cleaning_notes" as const, tab: "notes-cleanup", label: "Notes cleanup"},
     {stage: "checking_notes" as const, tab: "notes-integrity", label: "Notes completeness"},
   ])("surfaces $label as live run activity", ({stage, tab, label}) => {
-    const notesAgent = createAgentState("notes:CORP_INFO", "CORP_INFO", "Notes 10: Corp Info");
+    const notesAgent = createAgentState("notes:CORP_INFO", "CORP_INFO", "Corporate information");
     notesAgent.status = "complete";
     render(<ExtractPage {...makeProps({ state: {
       sessionId: "test-session",

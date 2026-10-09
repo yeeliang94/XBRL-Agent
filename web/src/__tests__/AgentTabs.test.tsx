@@ -483,7 +483,7 @@ describe("AgentTabs", () => {
       sofp_0: { agentId: "sofp_0", label: "SOFP", status: "complete", role: "SOFP" },
       "notes:CORP_INFO": {
         agentId: "notes:CORP_INFO",
-        label: "Notes 10: Corp Info",
+        label: "Corporate information",
         status: "running",
         role: "CORP_INFO",
       },
@@ -506,9 +506,9 @@ describe("AgentTabs", () => {
     );
     const tabs = screen.getAllByRole("tab");
     const labels = tabs.map((t) => t.getAttribute("data-agent-label") ?? "");
-    // Expected order: [SOFP, Notes 10: Corp Info, Validator]
+    // Expected order: [SOFP, Corporate information, Validator]
     expect(labels[0]).toBe("SOFP");
-    expect(labels[1]).toContain("Notes 10");
+    expect(labels[1]).toContain("Corporate information");
     expect(labels[labels.length - 1]).toContain("Validator");
   });
 
@@ -516,7 +516,7 @@ describe("AgentTabs", () => {
     const agents: Record<string, AgentTabState> = {
       "notes:CORP_INFO": {
         agentId: "notes:CORP_INFO",
-        label: "Notes 10: Corp Info",
+        label: "Corporate information",
         status: "running",
         role: "CORP_INFO",
       },
@@ -531,7 +531,7 @@ describe("AgentTabs", () => {
         notesInRun={[]}
       />,
     );
-    expect(screen.queryByText(/Notes 10/)).toBeNull();
+    expect(screen.queryByText(/Corporate information/)).toBeNull();
   });
 
   test("notes skeleton tabs render for selected notes that haven't started", () => {
@@ -543,14 +543,14 @@ describe("AgentTabs", () => {
         onTabClick={() => {}}
         statementsInRun={[]}
         notesInRun={["CORP_INFO", "LIST_OF_NOTES"]}
-        notesSkeletons={["Notes 10: Corp Info", "Notes 12: List of Notes"]}
+        notesSkeletons={["Corporate information", "List of notes"]}
       />,
     );
-    expect(screen.getByText("Notes 10: Corp Info")).toBeTruthy();
-    expect(screen.getByText("Notes 12: List of Notes")).toBeTruthy();
+    expect(screen.getByText("Corporate information")).toBeTruthy();
+    expect(screen.getByText("List of notes")).toBeTruthy();
     // Skeleton tabs are disabled.
     expect(
-      screen.getByRole("tab", { name: /Notes 10/ }).getAttribute("aria-disabled"),
+      screen.getByRole("tab", { name: /Corporate information/ }).getAttribute("aria-disabled"),
     ).toBe("true");
   });
 
@@ -573,12 +573,12 @@ describe("AgentTabs", () => {
         onTabClick={() => {}}
         statementsInRun={["SOFP"]}
         notesInRun={["CORP_INFO"]}
-        notesSkeletons={["Notes 10: Corp Info"]}
+        notesSkeletons={["Corporate information"]}
       />,
     );
     const tabs = screen.getAllByRole("tab");
     const labels = tabs.map((t) => t.getAttribute("data-agent-label") ?? "");
-    const notesIdx = labels.findIndex((l) => l.includes("Notes 10"));
+    const notesIdx = labels.findIndex((l) => l.includes("Corporate information"));
     const scoutIdx = labels.findIndex((l) => l === "Scout");
     const validatorIdx = labels.findIndex((l) => l === "Validator");
     expect(notesIdx).toBeGreaterThan(-1);
@@ -590,7 +590,7 @@ describe("AgentTabs", () => {
     const agents: Record<string, AgentTabState> = {
       "notes:CORP_INFO": {
         agentId: "notes:CORP_INFO",
-        label: "Notes 10: Corp Info",
+        label: "Corporate information",
         status: "complete",
         role: "CORP_INFO",
       },
@@ -604,7 +604,7 @@ describe("AgentTabs", () => {
         // No notesInRun / statementsInRun — legacy contract: show everything.
       />,
     );
-    expect(screen.getByText(/Notes 10/)).toBeTruthy();
+    expect(screen.getByText(/Corporate information/)).toBeTruthy();
   });
 
   test("validator tab is rendered last in tab order when present with statement tabs", () => {
@@ -666,11 +666,11 @@ describe("AgentTabs", () => {
         soci: { agentId: "soci", label: "SOCI", status: "complete", role: "SOCI" },
         socf: { agentId: "socf", label: "SOCF", status: "complete", role: "SOCF" },
         socie: { agentId: "socie", label: "SOCIE", status: "complete", role: "SOCIE" },
-        "notes:CORP_INFO": { agentId: "notes:CORP_INFO", label: "Notes 10: Corp Info", status: "complete", role: "CORP_INFO" },
-        "notes:ACC_POLICIES": { agentId: "notes:ACC_POLICIES", label: "Notes 11: Acc Policies", status: "complete", role: "ACC_POLICIES" },
-        "notes:LIST_OF_NOTES": { agentId: "notes:LIST_OF_NOTES", label: "Notes 12: List of Notes", status: "complete", role: "LIST_OF_NOTES" },
-        "notes:ISSUED_CAPITAL": { agentId: "notes:ISSUED_CAPITAL", label: "Notes 13: Issued Capital", status: "complete", role: "ISSUED_CAPITAL" },
-        "notes:RELATED_PARTY": { agentId: "notes:RELATED_PARTY", label: "Notes 14: Related Party", status: "complete", role: "RELATED_PARTY" },
+        "notes:CORP_INFO": { agentId: "notes:CORP_INFO", label: "Corporate information", status: "complete", role: "CORP_INFO" },
+        "notes:ACC_POLICIES": { agentId: "notes:ACC_POLICIES", label: "Accounting policies", status: "complete", role: "ACC_POLICIES" },
+        "notes:LIST_OF_NOTES": { agentId: "notes:LIST_OF_NOTES", label: "List of notes", status: "complete", role: "LIST_OF_NOTES" },
+        "notes:ISSUED_CAPITAL": { agentId: "notes:ISSUED_CAPITAL", label: "Issued capital", status: "complete", role: "ISSUED_CAPITAL" },
+        "notes:RELATED_PARTY": { agentId: "notes:RELATED_PARTY", label: "Related parties", status: "complete", role: "RELATED_PARTY" },
         NOTES_VALIDATOR: { agentId: "NOTES_VALIDATOR", label: "Notes Validator", status: "complete", role: "NOTES_VALIDATOR" },
         validator: { agentId: "validator", label: "Cross-checks", status: "complete", role: "validator" },
       };
@@ -733,7 +733,7 @@ describe("AgentTabs", () => {
       }
       const noteLabels = Array.from(notesBucket!.querySelectorAll('[role="tab"]'))
         .map((t) => t.textContent ?? "");
-      expect(noteLabels.some((l) => l.includes("Notes 10"))).toBe(true);
+      expect(noteLabels.some((l) => l.includes("Corporate information"))).toBe(true);
       const checkLabels = Array.from(checksBucket!.querySelectorAll('[role="tab"]'))
         .map((t) => t.textContent ?? "");
       expect(preparationBucket!.textContent).toContain("Document preparation");
