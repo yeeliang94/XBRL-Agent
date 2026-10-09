@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Collection
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 from bs4 import BeautifulSoup, Tag
 from pydantic_ai import Agent, RunContext
@@ -32,6 +32,7 @@ from notes.format_patch import (
     apply_sheet_patch,
 )
 from notes.format_schema import SheetFormatPatch, patch_to_dict
+from notes.format_verify import table_rows as _direct_table_rows
 from notes.table_theme import firm_theme, resolve_run_theme
 from model_settings import build_model_settings, describe_model_runtime
 
@@ -90,7 +91,8 @@ above. Do not wrap it in Markdown and do not add commentary before or after it.
 
 
 # Cumulative per-click model-request budget across the formatter's (up to
-# three) agent.run passes — initial, output-rejection retry, validation repair.
+# four) agent.run passes — initial, output-rejection retry, validation repair,
+# and visual correction. Visual checking has a separate bounded allowance.
 # Like the extraction MAX_AGENT_ITERATIONS cap, it
 # MUST stay strictly below pydantic-ai's silent UsageLimits.request_limit=50
 # (gotcha #18) — otherwise pydantic-ai fires its own UsageLimitExceeded from
@@ -160,6 +162,7 @@ def _output_json(output: Any) -> str:
 # branch on these codes, not on the human-facing error prose. No CHECK
 # constraint on the column (same rationale as runs.status).
 FORMATTER_ERROR_TYPES = (
+    "visual_review_failed", # tables remain different from the source or unverified
     "timeout",              # wall-clock cap (XBRL_NOTES_FORMATTER_WALLCLOCK_S)
     "turn_budget",          # cumulative request cap (UsageLimitExceeded)
     "low_confidence",       # historical task rows only
@@ -193,32 +196,38 @@ def create_notes_formatter_agent(
     pdf_path: str,
     sheet: str,
     model: Union[str, Model],
-) -> tuple[Agent[NotesFormatterDeps, str], NotesFormatterDeps]:
+) -> tuple[Agent, NotesFormatterDeps]:
+    base_prompt = _PROMPT_PATH.read_text(encoding="utf-8").strip()
+    output_type = str
+    if structured_output_enabled():
+        output_type = SheetFormatPatch
+        base_prompt += "\n\n" + _STRUCTURED_OUTPUT_INSTRUCTION.strip()
+    else:
+        base_prompt += "\n\n" + _JSON_FALLBACK_INSTRUCTION.strip()
+    return _create_notes_style_agent(
+        run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
+        model=model, prompt=base_prompt, output_type=output_type,
+        cache_key="xbrl-notes-formatter",
+    )
+
+
+def _create_notes_style_agent(
+    *, run_id: int, db_path: str, pdf_path: str, sheet: str,
+    model: Union[str, Model], prompt: str, output_type: Any, cache_key: str,
+) -> tuple[Agent, NotesFormatterDeps]:
+    """Share source-viewing tools without selecting an agent's role."""
     deps = NotesFormatterDeps(
         run_id=run_id, db_path=str(db_path), pdf_path=pdf_path,
         sheet=sheet, model=model,
     )
-    base_prompt = _PROMPT_PATH.read_text(encoding="utf-8").strip()
-    agent_kwargs: dict[str, Any] = {}
-    use_structured_output = structured_output_enabled()
-    if use_structured_output:
-        # Let the provider enforce the patch shape instead of asking for JSON
-        # in prose and repairing the answer afterwards. `format_patch` remains
-        # the authority — this only removes the parse-failure class.
-        agent_kwargs["output_type"] = SheetFormatPatch
-        base_prompt += "\n\n" + _STRUCTURED_OUTPUT_INSTRUCTION.strip()
-    else:
-        base_prompt += "\n\n" + _JSON_FALLBACK_INSTRUCTION.strip()
     agent = Agent(
-        model,
-        deps_type=NotesFormatterDeps,
-        system_prompt=base_prompt,
+        model, deps_type=NotesFormatterDeps, system_prompt=prompt,
+        output_type=output_type,
         model_settings=build_model_settings(
-            model, cache_key="xbrl-notes-formatter",
+            model, cache_key=cache_key,
             thinking_level=_thinking_level_for("notes_formatter"),
         ),
-        end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
-        **agent_kwargs,
+        end_strategy="early",
     )
 
     @agent.tool
@@ -377,6 +386,7 @@ async def run_notes_formatter(
     rows: Optional[Collection[int]] = None,
     pass_started_at: Optional[str] = None,
     trace_label: Optional[str] = None,
+    on_phase: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Run the formatter pass and attach cross-pass token telemetry.
 
@@ -385,9 +395,9 @@ async def run_notes_formatter(
     ``pass_started_at`` for the revert snapshot and write distinct traces
     under ``trace_label``.
 
-    The shared ``RunUsage`` accumulates across every ``agent.run`` inside the
-    impl; flattening it here (one exit point) keeps the many early returns in
-    the impl free of usage bookkeeping. Tokens are lost only when the pass
+    Formatter usage accumulates across its model passes. The checker adds its
+    separate usage after correction finishes, so totals include both roles
+    without sharing their request allowances. Tokens are lost only when the pass
     raises (timeout / turn budget) — the API worker builds that outcome.
     """
     usage = RunUsage()
@@ -395,7 +405,7 @@ async def run_notes_formatter(
         run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
         model=model, output_dir=output_dir, usage=usage,
         style_sources=style_sources, rows=rows,
-        pass_started_at=pass_started_at, trace_label=trace_label,
+        pass_started_at=pass_started_at, trace_label=trace_label, on_phase=on_phase,
     )
     outcome.update(_usage_fields(usage))
     if outcome.get("error_type") == "validation_failed":
@@ -419,6 +429,7 @@ async def _run_notes_formatter_impl(
     rows: Optional[Collection[int]] = None,
     pass_started_at: Optional[str] = None,
     trace_label: Optional[str] = None,
+    on_phase: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     if not pdf_path or not Path(pdf_path).exists():
         return {
@@ -487,7 +498,7 @@ async def _run_notes_formatter_impl(
     if deps is not None:
         deps.viewed_pages.update(preloaded_pages)
     # One shared usage accumulator + request cap across every pass below, so
-    # the whole click (initial + output-rejection retry + validation repair) is
+    # all formatting (initial + output retry + validation repair + correction) is
     # bounded — not each
     # pass independently. UsageLimitExceeded surfaces as a structured "turn
     # budget" outcome in the API worker (mirrors the wall-clock timeout).
@@ -596,29 +607,41 @@ async def _run_notes_formatter_impl(
             })
 
     applied = apply_sheet_patch(rows_for_patch, patch)
-    if row_errors and applied.changed_rows == 0:
+    from notes.visual_review import review_and_correct_rows
+
+    visual_errors, visual_review, corrected_rows = await review_and_correct_rows(
+        rows={row: html for row, html in applied.rows.items() if row not in row_errors},
+        cells=cells,
+        style=NotesTableStyle.from_theme(_resolve_notes_table_theme(db_path, run_id)),
+        run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
+        model=model, usage=usage, formatter_run=_agent_run,
+        output_dir=output_dir, trace_label=trace_label or f"notes_format_{sheet}",
+        on_phase=on_phase,
+    )
+    for row, html in corrected_rows.items():
+        applied.rows[row] = html
+    row_errors.update(visual_errors)
+    for row in row_errors:
+        if row in applied.rows:
+            applied.rows[row] = rows_for_patch[row]
+    # Correction patches were checked against the candidate; verify the final
+    # proposal against the original too before the existing atomic write path.
+    from notes.format_verify import verify_format_only
+    for row, html in applied.rows.items():
+        verified = verify_format_only(rows_for_patch[row], html)
+        if not verified.ok:
+            row_errors[row] = verified.reason
+            applied.rows[row] = rows_for_patch[row]
+    changed_count = sum(html != rows_for_patch[row] for row, html in applied.rows.items())
+    if row_errors and changed_count == 0:
         return {
             "ok": False, "error": "; ".join(row_errors.values()),
-            "error_type": "validation_failed",
+            "error_type": "visual_review_failed" if visual_errors else "validation_failed",
+            "visual_review": visual_review,
             "summary": "No safe formatting changes were applied.",
             "changed_rows": 0, "skipped_rows": [],
             "failed_rows": sorted(row_errors), "row_errors": row_errors,
             "patch": rejected_patch, "repair_patch": patch,
-            "before_text_hash": applied.before_text_hash,
-            "after_text_hash": applied.after_text_hash,
-        }
-
-    if applied.changed_rows == 0:
-        return {
-            "ok": not row_errors,
-            "summary": ("No safe formatting changes were applied." if row_errors
-                        else summary or "No formatting changes needed."),
-            **({"error_type": "validation_failed",
-                "error": "; ".join(row_errors.values()),
-                "failed_rows": sorted(row_errors), "row_errors": row_errors}
-               if row_errors else {}),
-            "changed_rows": 0, "skipped_rows": [],
-            "patch": patch,
             "before_text_hash": applied.before_text_hash,
             "after_text_hash": applied.after_text_hash,
         }
@@ -630,11 +653,12 @@ async def _run_notes_formatter_impl(
         # below commit as one atomic unit (WAL + busy_timeout make concurrent
         # writers wait, not fail).
         conn.execute("BEGIN IMMEDIATE")
-        eligible_rows = {
-            c.row for c in list_formatter_cells_for_run(conn, run_id) if c.sheet == sheet
+        live_rows = {
+            c.row: c.html for c in list_formatter_cells_for_run(conn, run_id) if c.sheet == sheet
         }
         for row, html in sorted(applied.rows.items()):
-            if row not in eligible_rows:
+            # Even a no-op decision cannot certify HTML edited during review.
+            if row not in live_rows or live_rows[row] != rows_for_patch[row]:
                 skipped_rows.append(row)
                 continue
             if html == rows_for_patch[row]:
@@ -673,12 +697,14 @@ async def _run_notes_formatter_impl(
             + ", ".join(str(row) for row in sorted(row_errors)) + "."
         )
     else:
-        summary_out = summary or "Formatting applied."
+        summary_out = summary or ("No formatting changes needed." if changed_count == 0
+                                  else "Formatting applied.")
     if skipped_rows:
         summary_out += f" {len(skipped_rows)} row(s) skipped — edited during formatting."
     return {
         "ok": not row_errors, "summary": summary_out,
-        **({"error_type": "validation_failed",
+        "visual_review": visual_review,
+        **({"error_type": "visual_review_failed" if visual_errors else "validation_failed",
             "error": "; ".join(row_errors.values()),
             "failed_rows": sorted(row_errors), "row_errors": row_errors}
            if row_errors else {}),
@@ -1098,18 +1124,3 @@ def _table_geometry(html: str) -> list[dict[str, Any]]:
             })
         out.append({"table": table_idx, "row_count": len(rows), "rows": row_items})
     return out
-
-
-def _direct_table_rows(table: Tag) -> list[Tag]:
-    rows: list[Tag] = []
-    for child in table.children:
-        if not isinstance(child, Tag):
-            continue
-        if child.name == "tr":
-            rows.append(child)
-        elif child.name in {"thead", "tbody", "tfoot"}:
-            rows.extend(
-                row for row in child.find_all("tr", recursive=False)
-                if isinstance(row, Tag)
-            )
-    return rows

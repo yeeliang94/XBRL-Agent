@@ -188,6 +188,8 @@ export function crossCheckParties(name: string): [string, string] {
  *  dict, e.g. "target matched no elements: {'table': 0, 'cell': {...}}") and
  *  must never be the primary thing shown — map the code instead. */
 const NOTES_FORMAT_ERROR_LABELS: Record<string, string> = {
+  visual_review_failed:
+    "Table appearance could not be verified against the source PDF. Unresolved notes were not saved. Review their formatting or retry.",
   validation_failed:
     "The formatter tried to style part of a table that no longer matches your text — your edits may have changed it. Nothing was saved; try formatting again.",
   timeout:

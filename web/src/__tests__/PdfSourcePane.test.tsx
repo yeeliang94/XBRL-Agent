@@ -70,6 +70,18 @@ describe("PdfSourcePane", () => {
     expect(img.style.width).toBe("100%");
   });
 
+  test("fit to width restores the full page after zooming and horizontal scrolling", () => {
+    render(<PdfSourcePane runId={3} pages={[19]} totalPages={50} embedded />);
+    const img = screen.getByRole("img", { name: "Source PDF page 19" });
+    const viewport = img.parentElement!;
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(img).toHaveStyle({ width: "150%", flexShrink: "0" });
+    viewport.scrollLeft = 120;
+    fireEvent.click(screen.getByRole("button", { name: "Fit to width" }));
+    expect(img).toHaveStyle({ width: "100%", boxSizing: "border-box" });
+    expect(viewport.scrollLeft).toBe(0);
+  });
+
   test("clearing a citation resets the viewer to the start of the PDF", () => {
     const { rerender } = render(
       <PdfSourcePane runId={3} pages={[20]} totalPages={50} />,
