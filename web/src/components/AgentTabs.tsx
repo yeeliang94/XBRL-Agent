@@ -90,6 +90,15 @@ const WORKSTREAM_LABELS: Record<string, string> = {
   validator: "Cross-checks",
 };
 
+/** The roster's plain-language name for a workstream role, so the detail
+ *  pane can use the same title as the list. */
+export function workstreamTitle(role: string, filingStandard?: unknown): string | null {
+  if (filingStandard === "clbg" && (role === "SOPL" || role === "SOCIE")) {
+    return statementCodeSubtitle(role, filingStandard) ?? null;
+  }
+  return WORKSTREAM_LABELS[role] ?? null;
+}
+
 function workstreamLabel(agent: AgentTabState, filingStandard?: unknown): string {
   if (filingStandard === "clbg") {
     const statement = [agent.agentId, agent.role].find((code) => code === "SOPL" || code === "SOCIE");

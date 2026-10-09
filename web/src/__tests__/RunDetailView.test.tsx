@@ -271,9 +271,9 @@ describe("RunDetailView", () => {
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
     );
     expect(screen.getByText("FINCO-Audited-2021.pdf")).toBeTruthy();
-    // "Complete" appears in both the overall status badge and the SOFP
-    // agent-row status; assert at least one is present.
-    expect(screen.getAllByText(/^complete$/i).length).toBeGreaterThan(0);
+    // The title stands alone; the run's outcome is the Overview's Workbook line.
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("FINCO-Audited-2021.pdf");
+    expect(screen.getByText("Workbook")).toBeInTheDocument();
   });
 
   test("per-agent duration sums turn compute time, not the shared batch window", () => {
@@ -758,7 +758,9 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
-    expect(screen.getAllByText("Needs review").length).toBeGreaterThan(0);
+    // The raw enum never reaches the page; the outcome is the Workbook line.
+    expect(screen.getByText("Workbook")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("completed_with_errors");
   });
 
   test("Delete button does NOT fire onDelete when the dialog is cancelled", () => {
@@ -854,7 +856,8 @@ describe("RunDetailView", () => {
     clickRunTab(/^activity$/i);
     expect(activityRows()[0]).toHaveTextContent("Complete");
     expect(activityRows()[0]).not.toHaveTextContent("Working");
-    expect(screen.getByText("Finished its assigned work")).toBeVisible();
+    // Completion is carried by the Complete status; no repeated sentence.
+    expect(screen.queryByText("Finished its assigned work")).toBeNull();
     expect(screen.queryByText("Live activity")).toBeNull();
   });
 
@@ -2024,12 +2027,6 @@ describe("RunDetailView", () => {
     render(
       <RunDetailView detail={makeDetail({ status: "completed" })} onDelete={() => {}} onDownload={() => {}} />,
     );
-    // Monochrome status: aria-hidden ✓ in grey700 next to the explicit label.
-    const label = screen.getAllByText("Complete")[0];
-    const symbol = label.parentElement!.querySelector('[aria-hidden="true"]');
-    expect(symbol?.getAttribute("data-status-icon")).toBe("success");
-    expect((symbol as HTMLElement).style.color).toBe("rgb(0, 0, 0)");
-
     // Shared tab treatment: dark active text and a quiet selected surface.
     const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
     const active = within(tablist)

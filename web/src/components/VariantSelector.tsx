@@ -2,7 +2,6 @@ import { ui } from "../lib/uiStyles";
 import type {
   StatementType,
   VariantSelection,
-  ConfidenceLevel,
   FilingStandard,
 } from "../lib/types";
 import {
@@ -12,6 +11,8 @@ import {
 } from "../lib/types";
 import { variantLabel } from "../lib/vocabulary";
 import { pwc } from "../lib/theme";
+import { StatusIcon } from "./StatusIcon";
+import { STATUS_SYMBOLS } from "../lib/runStatus";
 
 interface Props {
   selections: Record<StatementType, VariantSelection>;
@@ -26,13 +27,6 @@ interface Props {
   filingStandard?: FilingStandard;
 }
 
-const CONFIDENCE_COLORS: Record<ConfidenceLevel, string> = {
-  high: pwc.success,
-  // Only Please check is orange; Fairly sure is a neutral grey so the two
-  // never read as the same state.
-  medium: pwc.grey500,
-  low: pwc.error,
-};
 
 const styles = {
   container: {
@@ -67,6 +61,11 @@ const styles = {
     width: 260,
     flexShrink: 0,
   } as React.CSSProperties,
+  confidenceSlot: {
+    display: "inline-flex",
+    width: 16,
+    flexShrink: 0,
+  } as React.CSSProperties,
   confidenceDot: {
     width: 10,
     height: 10,
@@ -94,13 +93,6 @@ export function VariantSelector({
   const enabledSet = new Set(enabledStatements);
   return (
     <div style={styles.container}>
-      {/* Legend so the confidence dots aren't tooltip-only. */}
-      <div style={styles.legend}>
-        <span style={{ ...styles.confidenceDot, background: pwc.success }} /> Confident
-        <span style={{ ...styles.confidenceDot, background: CONFIDENCE_COLORS.medium, marginLeft: pwc.space.md }} /> Fairly sure
-        <span style={{ ...styles.confidenceDot, background: pwc.error, marginLeft: pwc.space.md }} /> Please check
-        <span style={{ ...styles.confidenceDot, background: pwc.grey300, marginLeft: pwc.space.md }} /> Not detected
-      </div>
       {STATEMENT_TYPES.map((stmt) => {
         const sel = selections[stmt];
         const variants = variantsFor(stmt, filingStandard);
@@ -130,39 +122,15 @@ export function VariantSelector({
                 </option>
               ))}
             </select>
+            {/* Only an exception gets a mark: a detected format the scan
+                was unsure about. Everything else stays quiet. */}
             <span
               data-testid={`confidence-${stmt}`}
-              title={
-                sel.confidence == null
-                  ? "Automatic scan will choose a format — or set an override"
-                  : sel.variant
-                    ? sel.confidence === "high"
-                      ? "Confident in this format — verify it matches the PDF"
-                      : sel.confidence === "medium"
-                        ? "Fairly sure of this format — please verify against the PDF"
-                        : "Low confidence — please check this format against the PDF"
-                    : "Not detected"
-              }
-              style={{
-                ...styles.confidenceDot,
-                // "Please check" is the state that matters — make it louder
-                // than "Confident" (UX-QA #5): bigger with an error-tinted ring
-                // instead of the same quiet 10px dot as every other state.
-                ...(sel.confidence === "low" && sel.variant
-                  ? { width: 14, height: 14, boxShadow: `0 0 0 3px ${pwc.errorBg}` }
-                  : {}),
-                background:
-                  sel.confidence == null
-                    ? "transparent"
-                    : sel.variant
-                      ? CONFIDENCE_COLORS[sel.confidence]
-                      : pwc.grey300,
-                border:
-                  sel.confidence == null
-                    ? `1px dashed ${pwc.grey300}`
-                    : "1px solid transparent",
-              }}
-            />
+              title={sel.confidence === "low" && sel.variant ? "Check this format against the PDF" : undefined}
+              style={styles.confidenceSlot}
+            >
+              {sel.confidence === "low" && sel.variant && <StatusIcon symbol={STATUS_SYMBOLS.attention} />}
+            </span>
           </div>
         );
       })}

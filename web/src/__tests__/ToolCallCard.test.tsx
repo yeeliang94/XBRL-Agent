@@ -32,12 +32,12 @@ describe("ToolCallCard", () => {
     expect(screen.getByText(/template\.xlsx/)).toBeInTheDocument();
   });
 
-  test("active card uses a soft fill and status glyph without an accent rail", () => {
+  test("active card is a plain row whose orange dot marks live work", () => {
     const { container } = render(<ToolCallCard entry={activeEntry} />);
     const card = container.querySelector("[data-testid='tool-card']");
-    // orange50 #FFF5ED → rgb(255, 245, 237)
-    expect(card?.getAttribute("style")).toContain("rgb(255, 245, 237)");
+    expect(card?.getAttribute("style")).toContain("rgb(255, 255, 255)");
     expect(card?.getAttribute("style")).not.toContain("border-left");
+    expect((container.querySelector("[data-glyph='active']") as HTMLElement).style.background).toBe("rgb(253, 81, 8)");
   });
 
   test("completed tool call is a flat timeline row on white", () => {
@@ -46,12 +46,12 @@ describe("ToolCallCard", () => {
     const style = card?.getAttribute("style") || "";
     expect(style).toContain("rgb(255, 255, 255)");
     expect((card as HTMLElement).style.borderRadius).toBe("0");
-    expect((card as HTMLElement).style.borderBottom).toContain("rgb(223, 227, 230)");
+    expect((card as HTMLElement).style.borderTop).toContain("rgb(238, 239, 241)");
   });
 
   test("shows duration badge when result arrives", () => {
     render(<ToolCallCard entry={completedEntry} />);
-    expect(screen.getByText("320ms")).toBeInTheDocument();
+    expect(screen.getByText("320 ms")).toBeInTheDocument();
   });
 
   test("expands on click to show full args and result_summary", () => {
@@ -286,7 +286,7 @@ describe("ToolCallCard", () => {
       endTime: Date.now() + 80,
     };
     render(<ToolCallCard entry={entry} />);
-    expect(screen.getByText("80ms")).toBeInTheDocument();
+    expect(screen.getByText("80 ms")).toBeInTheDocument();
   });
 
   test("Step 2.5 — active card shows only the animated glyph (no badge)", () => {
