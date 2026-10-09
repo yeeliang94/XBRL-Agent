@@ -426,7 +426,32 @@ function paintBorderSide(
     rect,
     side,
   )) {
-    setCellAttrsAt(tr, neighbour, { [OPPOSITE_BORDER_ATTR[side]]: value });
+    const edge = rect.map.findCell(neighbour - rect.tableStart);
+    const horizontal = side === "Top" || side === "Bottom";
+    const wider = horizontal
+      ? edge.left < rect.left || edge.right > rect.right
+      : edge.top < rect.top || edge.bottom > rect.bottom;
+    const oppositeAttr = OPPOSITE_BORDER_ATTR[side];
+    if (!wider) {
+      setCellAttrsAt(tr, neighbour, { [oppositeAttr]: value });
+      continue;
+    }
+    const previous = tr.doc.nodeAt(neighbour)?.attrs[oppositeAttr] as string | null;
+    if (previous) {
+      const oppositeSide = { Top: "Bottom", Bottom: "Top", Left: "Right", Right: "Left" }[side] as BorderSide;
+      const selected = new Set(selectedCellPositions(rect.map, rect.tableStart, rect));
+      for (const pair of sharedEdgePairs(rect.map, rect.tableStart, edge, oppositeSide)) {
+        if (selected.has(pair.neighbour)) continue;
+        const other = rect.map.findCell(pair.neighbour - rect.tableStart);
+        if (horizontal
+          ? other.left < edge.left || other.right > edge.right
+          : other.top < edge.top || other.bottom > edge.bottom) {
+          throw new Error("Partial border intersects incompatible merged edges");
+        }
+        setCellAttrsAt(tr, pair.neighbour, { [attr]: previous });
+      }
+      setCellAttrsAt(tr, neighbour, { [oppositeAttr]: null });
+    }
   }
 }
 

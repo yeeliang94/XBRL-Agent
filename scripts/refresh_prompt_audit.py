@@ -185,6 +185,21 @@ def refresh(text: str) -> tuple[str, list[str]]:
         text = pattern.sub(lambda _: section, text)
         changed.append("prepared document map")
 
+    formatter_prompt = (PROMPTS / "notes_formatter.md").read_text(encoding="utf-8").strip()
+    formatter_section = ('<section id="notes-formatter"><h2>Notes formatter</h2>'
+                         '<details open><summary><span><code>prompts/notes_formatter.md</code> (verbatim)</span>'
+                         '<span class="meta">' + str(len(formatter_prompt.splitlines()))
+                         + ' lines</span></summary><pre>' + html.escape(formatter_prompt, quote=False)
+                         + '</pre></details></section>')
+    formatter_pattern = re.compile(r'<section id="notes-formatter">.*?</section>', re.S)
+    existing_formatter = formatter_pattern.search(text)
+    if existing_formatter is None:
+        text = text.replace('</body>', formatter_section + '\n</body>')
+        changed.append("notes formatter")
+    elif existing_formatter.group() != formatter_section:
+        text = formatter_pattern.sub(lambda _: formatter_section, text)
+        changed.append("notes formatter")
+
     visual_prompt = (PROMPTS / "notes_visual_review.md").read_text(encoding="utf-8").strip()
     visual_matrix_row = ('<tr><td><span class="tag t-rev">REVIEWER</span>Notes visual review</td>'
                          '<td>after each formatting proposal; one correction/recheck</td><td>—</td>'

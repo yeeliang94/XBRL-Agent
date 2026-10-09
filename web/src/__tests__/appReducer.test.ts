@@ -27,6 +27,24 @@ function runningState() {
 }
 
 describe("appReducer", () => {
+  test("a review with no applicable content has an explicit skipped outcome", () => {
+    const state = appReducer(runningState(), { type: "EVENT", payload: {
+      event: "status", timestamp: 1, data: { agent_id: "correction", agent_role: "CORRECTION",
+        phase: "skipped", message: "No extracted figures are available for AI review." },
+    }});
+    expect(state.agents.correction.status).toBe("skipped");
+    expect(state.isRunning).toBe(true);
+  });
+
+  test("formatting phase changes preserve its progress counters", () => {
+    const counted = appReducer(runningState(), {type: "EVENT", payload: {
+      event: "pipeline_stage", timestamp: 1, data: {stage: "formatting_notes", started_at: 1, completed: 2, total: 3},
+    }});
+    const checking = appReducer(counted, {type: "EVENT", payload: {
+      event: "pipeline_stage", timestamp: 2, data: {stage: "formatting_notes", started_at: 2, message: "Checking tables"},
+    }});
+    expect(checking.pipelineActivity).toMatchObject({completed: 2, total: 3, message: "Checking tables"});
+  });
   test("UPLOADED sets sessionId and filename", () => {
     const state = appReducer(initialState, {
       type: "UPLOADED",

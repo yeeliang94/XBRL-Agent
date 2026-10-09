@@ -71,6 +71,48 @@ def prepare_note_evidence(html: str, style) -> tuple[str, dict]:
     }
 
 
+def note_verification_identity(html: str, style, source_pages: list[int], source_generation_id=None) -> dict:
+    """Bind a successful check to canonical content, prepared output and evidence."""
+    _, evidence = prepare_note_evidence(html, style)
+    return {
+        "canonical_sha256": hashlib.sha256(html.encode()).hexdigest(),
+        "output_sha256": evidence["html_sha256"],
+        "source_pages": sorted(set(source_pages)),
+        "source_generation_id": source_generation_id,
+    }
+
+
+def stale_verified_rows(conn, run_id: int, sheet: str, result: dict) -> list[int]:
+    """Later edits, source changes and output-setting changes invalidate a receipt."""
+    from db import repository as repo
+    from mtool.notes_decorate import NotesTableStyle
+    from notes.formatting_agent import _resolve_notes_table_theme
+
+    receipts = result.get("verified_rows") or {}
+    style = NotesTableStyle.from_theme(_resolve_notes_table_theme("", run_id, conn=conn))
+    cells = {c.row: c for c in repo.list_formatter_cells_for_run(conn, run_id) if c.sheet == sheet}
+    stale = []
+    for raw_row, receipt in receipts.items():
+        row = int(raw_row)
+        cell = cells.get(row)
+        try:
+            current = note_verification_identity(cell.html, style, cell.source_pages, cell.source_generation_id) if cell else None
+        except ValueError:
+            current = None
+        if current != receipt:
+            stale.append(row)
+    return sorted(stale)
+
+
+def retain_other_verification_receipts(previous: dict, current: dict) -> dict:
+    """A targeted retry replaces its own decisions and keeps unrelated evidence."""
+    receipts = {str(row): identity for row, identity in (previous.get("verified_rows") or {}).items()}
+    for row in [*(current.get("failed_rows") or []), *(current.get("skipped_rows") or [])]:
+        receipts.pop(str(row), None)
+    receipts.update({str(row): identity for row, identity in (current.get("verified_rows") or {}).items()})
+    return {**current, "verified_rows": receipts}
+
+
 async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
                             sheet, model, usage, limits, output_dir, trace_label):
     """A fresh context on every check; no formatter conversation is evidence."""
@@ -177,7 +219,7 @@ async def review_and_correct_rows(
     trace_label: str, on_phase: Callable[[str], None] | None = None,
 ) -> tuple[dict[int, str], dict, dict[int, str]]:
     """Keep passed rows when a later correction or check cannot finish."""
-    from notes.formatting_agent import _output_json, _partition_valid_patch, _screen_patch
+    from notes.formatting_agent import _output_json, _partition_valid_patch, _screen_patch, _table_geometry, _allowed_targets_from_geometry
 
     review_usage = RunUsage()
     review_limits = UsageLimits(request_limit=MAX_VISUAL_REVIEW_REQUESTS)
@@ -211,8 +253,14 @@ async def review_and_correct_rows(
             correction = await formatter_run(
                 "VISUAL REVIEW FAILED. Return a style-only SheetFormatPatch for only these rows. "
                 "Correct the reported edges against the source PDF; do not change text or geometry. "
-                "Coordinates refer to the current candidate HTML below. Findings: "
-                + json.dumps(errors) + "\nCURRENT CANDIDATES: " + json.dumps(failed_current),
+                "Coordinates refer to the current candidate HTML below. Match each edge to its row label "
+                "and both amount cells; do not infer row numbers from the source image. Findings: "
+                + json.dumps({row: errors[row] for row in correctable})
+                + "\nCOORDINATE MANIFEST: " + json.dumps({row: {
+                    "geometry": _table_geometry(html),
+                    "allowed_targets": _allowed_targets_from_geometry(_table_geometry(html)),
+                } for row, html in failed_current.items()})
+                + "\nCURRENT CANDIDATES: " + json.dumps(failed_current),
             )
             correction_error, screened, _ = _screen_patch(_output_json(correction.output), sheet, revised=True)
             if correction_error is not None:
@@ -228,11 +276,13 @@ async def review_and_correct_rows(
             phase("Rechecking corrected notes against the source PDF…")
             remaining, recheck = await check(corrected.rows, "_visual_recheck")
             review["recheck"] = recheck
-            # Failed corrections and incomplete rechecks retain the original findings.
+            # Keep initial findings in review history; current errors describe
+            # only the candidate that was actually rechecked.
             for row in correctable:
+                errors.pop(row, None)
                 if row in remaining or row in correction_errors:
                     if row in remaining:
-                        _add_error(errors, row, remaining[row])
+                        errors[row] = remaining[row]
                     if row in correction_errors:
                         _add_error(errors, row, correction_errors[row])
                 else:

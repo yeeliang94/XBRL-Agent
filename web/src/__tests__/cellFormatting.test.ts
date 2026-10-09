@@ -767,6 +767,22 @@ describe("styled cell extension round-trip (real editor)", () => {
     expect(tops).toEqual([null, null]);
     editor.destroy();
   });
+it.each(["", ' style="border-top: 1px hidden #000000"'])(
+  "keeps a short amount underline out of a merged heading with %s", (mergedStyle) => {
+  const editor = makeEditor('<table><tbody><tr><td>Fees</td><td>10</td><td>9</td></tr>' +
+    `<tr><td colspan="3"${mergedStyle}>Timing of revenue recognition</td></tr></tbody></table>`);
+  const positions: number[] = [];
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name === "tableCell") positions.push(pos);
+    return true;
+  });
+  editor.view.dispatch(editor.state.tr.setSelection(CellSelection.create(editor.state.doc, positions[1])));
+  applyCellBorderSide(editor, "Bottom", "2px solid #000000");
+  expect(sideValues(editor, "borderBottom")[1]).toBe("2px solid #000000");
+  expect(sideValues(editor, "borderTop")[3]).toBeNull();
+  editor.destroy();
+});
+
 });
 
 // The marker must survive the editor round-trip. Without a Table extension that

@@ -208,6 +208,60 @@ def test_prepared_notes_cannot_finish_clean_when_integrity_assessment_raises(doc
     assert status == ("completed_with_errors" if assessment_fails else "completed"), response.text[-2000:]
 
 
+def test_final_appearance_check_receives_content_after_cleanup_and_integrity_repair(document, pipeline, monkeypatch):
+    from notes_types import NotesTemplateType
+    import notes.coordinator
+    import notes.cleanup_agent
+    import notes.auto_format
+    directory, db, _ = document
+    client, _, _, _ = pipeline
+    calls = []
+    async def extract_notes(config, **kwargs):
+        with repo.db_session(db) as conn:
+            rid = conn.execute("SELECT MAX(id) FROM runs").fetchone()[0]
+            repo.upsert_notes_cell(conn, run_id=rid, sheet="Notes-CI", row=10,
+                label="Company", html="<p>Captured note</p>", source_pages=[1], style_source="unstyled")
+        return notes.coordinator.NotesCoordinatorResult(agent_results=[
+            notes.coordinator.NotesAgentResult(template_type=NotesTemplateType.CORP_INFO,
+                status="succeeded", workbook_path=str(directory / "notes.xlsx"))])
+    async def review(**kwargs):
+        calls.append("review")
+        return {"adjustments": [], "flags": []}
+    async def cleanup(**kwargs):
+        calls.append("cleanup")
+        kwargs["on_progress"](1, 1, 0)
+        return {"ok": True, "changed_rows": 0, "removed_blocks": 0}
+    def integrity(*args):
+        calls.append("integrity")
+        return {"tips_status": False, "missing_block_ids": ["gap"]}
+    def repair(rid, *args):
+        calls.append("repair")
+        with repo.db_session(db) as conn:
+            repo.upsert_notes_cell(conn, run_id=rid, sheet="Notes-CI", row=10,
+                label="Company", html="<p>Repaired final note</p>")
+        return {"tips_status": False, "retry_repaired_cells": 1}
+    async def formatting(**kwargs):
+        calls.append("format")
+        with repo.db_session(db) as conn:
+            cell = repo.list_notes_cells_for_run(conn, kwargs["run_id"])[0]
+            assert cell.html == "<p>Repaired final note</p>"
+            assert cell.source_pages == [1]
+        return {"formatted": 1, "sheets": {"Notes-CI": {"ok": True}}}
+    monkeypatch.setattr(notes.coordinator, "run_notes_extraction", extract_notes)
+    monkeypatch.setattr(server, "_run_notes_reviewer_pass", review)
+    monkeypatch.setattr(notes.cleanup_agent, "run_notes_cleanup", cleanup)
+    monkeypatch.setattr(server, "_run_notes_integrity_check", integrity)
+    monkeypatch.setattr(server, "_retry_missing_source_blocks", repair)
+    monkeypatch.setattr(server, "_refresh_merged_notes_workbook", lambda **kwargs: None)
+    monkeypatch.setattr(notes.auto_format, "run_pdf_auto_format", formatting)
+    response = client.post(f"/api/run/{directory.name}", json={
+        "statements": ["SOFP"], "variants": {"SOFP": "CuNonCu"},
+        "use_scout": True, "denomination": "thousands", "notes_to_run": ["CORP_INFO"],
+    })
+    assert calls == ["review", "cleanup", "integrity", "repair", "format"], response.text[-2000:]
+    assert '"stage": "checking_notes"' in response.text
+
+
 @pytest.mark.asyncio
 async def test_configuration_changed_while_waiting_revalidates_before_return(document, monkeypatch):
     import ingest.document_preparation as capture
@@ -417,3 +471,22 @@ async def test_unresolved_source_does_not_repeat_full_review(
         assert repo.fetch_notes_review_task(conn, run_id)["status"] == "done"
         assert run_status == "completed_with_errors"
     assert task_registry.get_task(directory.name, server.NOTES_VALIDATOR_AGENT_ID) is None
+
+
+def test_other_web_process_preserves_live_cli_preparation(document):
+    directory, db, run_id = document
+    from db.run_ownership import claim, release
+    with sqlite3.connect(db) as conn:
+        repo.mark_draft_started(conn, run_id)
+        agent_id = repo.create_run_agent(conn, run_id, 'SOURCE_PREPARATION')
+        conn.commit()
+        state = {'run_id': run_id, 'status': 'working', 'stage': 'capturing'}
+        preparation._write(directory, state)
+        claim(conn, run_id)
+        try:
+            assert preparation.snapshot(directory)['status'] == 'working'
+            assert conn.execute('SELECT status FROM run_agents WHERE id=?', (agent_id,)).fetchone()[0] == 'running'
+        finally:
+            release(conn, run_id)
+        assert preparation.snapshot(directory)['status'] == 'failed'
+        assert conn.execute('SELECT status FROM run_agents WHERE id=?', (agent_id,)).fetchone()[0] == 'failed'

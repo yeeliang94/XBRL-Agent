@@ -210,33 +210,25 @@ describe("SettingsModal — P3 enhancements", () => {
 
   test.each([undefined, true, false])("prior hints have no control and unrelated saves preserve them (saved: %s)", async (entity_memory) => {
     const { saveSettings } = renderModal({ entity_memory });
-    const review = await screen.findByLabelText("Automatically run the reviewer after extraction");
+    await screen.findByDisplayValue(defaultSettings.model);
     expect(screen.queryByLabelText("Reuse prior-year hints for repeat entities")).toBeNull();
-    fireEvent.click(review);
+    fireEvent.change(screen.getByLabelText("AI service address"), { target: { value: "https://service.example.com" } });
     fireEvent.click(screen.getByRole("button", { name: /save/i }));
     await waitFor(() => expect(saveSettings).toHaveBeenCalled());
     expect(vi.mocked(saveSettings).mock.calls[0][0]).not.toHaveProperty("entity_memory");
   });
 
-  test("auto review toggle defaults to ON when auto_review is absent from settings", async () => {
-    renderModal(); // defaultSettings carries no auto_review key
-    await waitFor(() =>
-      expect(screen.getByLabelText("Automatically run the reviewer after extraction")).toBeInTheDocument());
-    expect(screen.getByLabelText("Automatically run the reviewer after extraction")).toBeChecked();
-  });
-
-  test("toggling auto review off sends auto_review:false in the save body", async () => {
-    const { saveSettings } = renderModal();
-    await waitFor(() =>
-      expect(screen.getByLabelText("Automatically run the reviewer after extraction")).toBeInTheDocument());
-
-    fireEvent.click(screen.getByLabelText("Automatically run the reviewer after extraction"));
+  test.each([undefined, true, false])("automatic reviews have no switches and are absent from saves (legacy: %s)", async (auto_review) => {
+    const { saveSettings } = renderModal({ auto_review, notes_auto_review: auto_review });
+    await screen.findByDisplayValue(defaultSettings.model);
+    expect(screen.queryByLabelText("Automatically run the reviewer after extraction")).toBeNull();
+    expect(screen.queryByLabelText(/Automatically review extracted notes/i)).toBeNull();
+    fireEvent.change(screen.getByLabelText("AI service address"), { target: { value: "https://service.example.com" } });
     fireEvent.click(screen.getByRole("button", { name: /save/i }));
-
     await waitFor(() => expect(saveSettings).toHaveBeenCalled());
-    expect(saveSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ auto_review: false }),
-    );
+    const body = vi.mocked(saveSettings).mock.calls[0][0];
+    expect(body).not.toHaveProperty("auto_review");
+    expect(body).not.toHaveProperty("notes_auto_review");
   });
 
   test("uses the focused-workspace text role for validation states", async () => {

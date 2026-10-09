@@ -61,6 +61,8 @@ describe("XBRL design system is the production authority", () => {
     expect(designSystem).toContain("Keep incomplete output, failed saves, and actionable filing issues visible");
     expect(designSystem).toContain("Source inventory remains visible in the worksheet rail");
     expect(designSystem).toContain("A completed run must not turn failed or stopped formatting into Complete");
+    expect(designSystem).toContain("Content finalization follows notes review and precedes source completeness checking and final formatting");
+    expect(designSystem).toContain("Later content, source or prepared-output changes invalidate appearance verification");
   });
 
   test.each([
@@ -261,6 +263,8 @@ describe("Direction A shell and responsive composition", () => {
 
 describe("Simplified template-oriented review", () => {
   test("pins the minimal Notes review contract", () => {
+    expect(designSystem).toContain("Notes formatting rechecks use one compact notice beside the action, without internal row numbers");
+    expect(designSystem).toContain("Notes use one divider between peer fields");
     for (const requirement of [
       "Use the field heading as the disclosure control for populated and empty fields",
       "Offer a keyboard-accessible Open editor action beside each populated field heading",

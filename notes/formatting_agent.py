@@ -12,6 +12,7 @@ import logging
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Collection
@@ -397,23 +398,54 @@ async def run_notes_formatter(
 
     Formatter usage accumulates across its model passes. The checker adds its
     separate usage after correction finishes, so totals include both roles
-    without sharing their request allowances. Tokens are lost only when the pass
-    raises (timeout / turn budget) — the API worker builds that outcome.
+    without sharing their request allowances. Completed-response usage is saved
+    to the shared ledger even when a later request fails or is cancelled.
     """
+    from db import repository as repo
+    from usage_metrics import split_usage
+    from pricing import estimate_cost
+
     usage = RunUsage()
-    outcome = await _run_notes_formatter_impl(
-        run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
-        model=model, output_dir=output_dir, usage=usage,
-        style_sources=style_sources, rows=rows,
-        pass_started_at=pass_started_at, trace_label=trace_label, on_phase=on_phase,
-    )
-    outcome.update(_usage_fields(usage))
-    if outcome.get("error_type") == "validation_failed":
-        logger.warning(
-            "notes formatter validation failed run=%s sheet=%s error=%s",
-            run_id, sheet, outcome.get("error"),
+    model_name = model if isinstance(model, str) else getattr(model, "model_name", "")
+    with repo.db_session(db_path) as conn:
+        agent_id = repo.create_run_agent(conn, run_id, "NOTES_FORMATTING", variant=trace_label or sheet, model=model_name)
+    outcome = None
+    status = "failed"
+    try:
+        outcome = await _run_notes_formatter_impl(
+            run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
+            model=model, output_dir=output_dir, usage=usage,
+            style_sources=style_sources, rows=rows,
+            pass_started_at=pass_started_at, trace_label=trace_label, on_phase=on_phase,
         )
-    return outcome
+        outcome.update(_usage_fields(usage))
+        status = "completed" if outcome.get("ok") else "failed"
+        return outcome
+    except asyncio.CancelledError:
+        status = "cancelled"
+        raise
+    finally:
+        # One aggregate ledger entry includes formatter and independent checker
+        # requests. Task totals are diagnostic, not additional ledger entries.
+        metrics = split_usage(usage)
+        try:
+            with repo.db_session(db_path) as conn:
+                repo.finish_run_agent(
+                    conn, agent_id, status=status,
+                    error_type=(outcome or {}).get("error_type"),
+                    error_message=(outcome or {}).get("error"),
+                    total_tokens=metrics.total_tokens, prompt_tokens=metrics.prompt_tokens,
+                    completion_tokens=metrics.completion_tokens,
+                    reasoning_tokens=metrics.thinking_tokens,
+                    cache_read_tokens=usage.cache_read_tokens,
+                    cache_write_tokens=usage.cache_write_tokens,
+                    turn_count=usage.requests, tool_call_count=usage.tool_calls,
+                    total_cost=estimate_cost(metrics.prompt_tokens, metrics.completion_tokens,
+                                             metrics.thinking_tokens, model or model_name),
+                )
+        except Exception:
+            logger.warning("Could not save formatter usage run=%s sheet=%s", run_id, sheet, exc_info=True)
+
 
 
 async def _run_notes_formatter_impl(
@@ -462,12 +494,15 @@ async def _run_notes_formatter_impl(
             "error_type": "precondition_failed",
         }
 
-    missing_pages = [f"row {c.row}" for c in cells if not c.source_pages]
-    if missing_pages:
+    missing_page_errors = {c.row: "Source pages are missing; appearance remains unverified."
+                           for c in cells if not c.source_pages}
+    cells = [c for c in cells if c.source_pages]
+    if not cells:
         return {
-            "ok": False,
-            "error": "source pages are missing for " + ", ".join(missing_pages[:5]),
+            "ok": False, "changed_rows": 0,
+            "error": "Source pages are missing for rows " + ", ".join(map(str, missing_page_errors)),
             "error_type": "precondition_failed",
+            "failed_rows": sorted(missing_page_errors), "row_errors": missing_page_errors,
         }
 
     rows_for_patch = {c.row: c.html for c in cells}
@@ -607,12 +642,14 @@ async def _run_notes_formatter_impl(
             })
 
     applied = apply_sheet_patch(rows_for_patch, patch)
+    row_errors.update(missing_page_errors)
     from notes.visual_review import review_and_correct_rows
 
+    output_style = NotesTableStyle.from_theme(_resolve_notes_table_theme(db_path, run_id))
     visual_errors, visual_review, corrected_rows = await review_and_correct_rows(
         rows={row: html for row, html in applied.rows.items() if row not in row_errors},
         cells=cells,
-        style=NotesTableStyle.from_theme(_resolve_notes_table_theme(db_path, run_id)),
+        style=output_style,
         run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
         model=model, usage=usage, formatter_run=_agent_run,
         output_dir=output_dir, trace_label=trace_label or f"notes_format_{sheet}",
@@ -633,34 +670,38 @@ async def _run_notes_formatter_impl(
             row_errors[row] = verified.reason
             applied.rows[row] = rows_for_patch[row]
     changed_count = sum(html != rows_for_patch[row] for row, html in applied.rows.items())
-    if row_errors and changed_count == 0:
-        return {
-            "ok": False, "error": "; ".join(row_errors.values()),
-            "error_type": "visual_review_failed" if visual_errors else "validation_failed",
-            "visual_review": visual_review,
-            "summary": "No safe formatting changes were applied.",
-            "changed_rows": 0, "skipped_rows": [],
-            "failed_rows": sorted(row_errors), "row_errors": row_errors,
-            "patch": rejected_patch, "repair_patch": patch,
-            "before_text_hash": applied.before_text_hash,
-            "after_text_hash": applied.after_text_hash,
-        }
-
     skipped_rows: list[int] = []
     written_rows: list[int] = []
+    verified_rows: dict[int, dict] = {}
+    from notes.visual_review import note_verification_identity
+    cells_by_row = {cell.row: cell for cell in cells}
+    identities = {}
+    for row, html in applied.rows.items():
+        if row in row_errors:
+            continue
+        cell = cells_by_row[row]
+        try:
+            identities[row] = note_verification_identity(html, output_style, cell.source_pages, cell.source_generation_id)
+        except ValueError as exc:
+            row_errors[row] = str(exc)
+            applied.rows[row] = rows_for_patch[row]
     with repo.db_session(db_path) as conn:
         # Take the write lock up front so the conditional writes + snapshot
         # below commit as one atomic unit (WAL + busy_timeout make concurrent
         # writers wait, not fail).
         conn.execute("BEGIN IMMEDIATE")
-        live_rows = {
-            c.row: c.html for c in list_formatter_cells_for_run(conn, run_id) if c.sheet == sheet
-        }
+        live_cells = {c.row: c for c in list_formatter_cells_for_run(conn, run_id) if c.sheet == sheet}
         for row, html in sorted(applied.rows.items()):
-            # Even a no-op decision cannot certify HTML edited during review.
-            if row not in live_rows or live_rows[row] != rows_for_patch[row]:
+            live = live_cells.get(row)
+            launch = cells_by_row[row]
+            if (live is None or live.html != rows_for_patch[row]
+                or live.source_pages != launch.source_pages
+                or live.source_generation_id != launch.source_generation_id):
                 skipped_rows.append(row)
                 continue
+            if row in row_errors:
+                continue
+            verified_rows[row] = identities[row]
             if html == rows_for_patch[row]:
                 continue
             # Statement-atomic compare-and-swap (`WHERE html = ?`): only
@@ -679,6 +720,7 @@ async def _run_notes_formatter_impl(
                 written_rows.append(row)
             else:
                 skipped_rows.append(row)
+                verified_rows.pop(row, None)
         if written_rows:
             # Snapshot the pre-format HTML of exactly the rows written, in
             # the SAME transaction — "Revert formatting" restores from here
@@ -690,6 +732,8 @@ async def _run_notes_formatter_impl(
             )
         written = len(written_rows)
 
+    for row in skipped_rows:
+        row_errors[row] = "Note changed during appearance checking; retry its current content."
     if row_errors:
         summary_out = (
             f"Formatting saved for {written} row(s); "
@@ -704,6 +748,7 @@ async def _run_notes_formatter_impl(
     return {
         "ok": not row_errors, "summary": summary_out,
         "visual_review": visual_review,
+        "verified_rows": verified_rows,
         **({"error_type": "visual_review_failed" if visual_errors else "validation_failed",
             "error": "; ".join(row_errors.values()),
             "failed_rows": sorted(row_errors), "row_errors": row_errors}
@@ -1016,7 +1061,7 @@ def _build_output_rejected_prompt(
     )
 
 
-def _resolve_notes_table_theme(db_path: str, run_id: int) -> dict[str, Any]:
+def _resolve_notes_table_theme(db_path: str, run_id: int, *, conn=None) -> dict[str, Any]:
     """The RESOLVED notes-table style theme for a run: the run's own override
     (a full snapshot — schema v22) wins, else the firm theme.
 
@@ -1028,8 +1073,8 @@ def _resolve_notes_table_theme(db_path: str, run_id: int) -> dict[str, Any]:
     that was already right. Mirrors ``resolveTheme`` in
     web/src/lib/clipboardFormat.ts for the mTool size signals."""
     try:
-        with repo.db_session(db_path) as conn:
-            run = repo.fetch_run(conn, run_id)
+        with nullcontext(conn) if conn is not None else repo.db_session(db_path) as theme_conn:
+            run = repo.fetch_run(theme_conn, run_id)
         override = getattr(run, "notes_table_style", None) if run else None
         if isinstance(override, dict) and override:
             return resolve_run_theme(override)

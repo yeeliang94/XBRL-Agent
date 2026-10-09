@@ -236,10 +236,9 @@ async def _project_numeric_notes_facts(
     (PLAN-notes-template-registry Step 9).
 
     Returns the :class:`ProjectionResult`, or ``None`` when there's nothing to
-    project (no numeric cells) or the projection failed. Never raises — this is
-    best-effort, mirroring ``persist_notes_cells``: the xlsx is already on disk
-    so a capture failure must not fail the run. Extracted from the persistence
-    loop so the wiring (writer manifest → ``project_writes``) is unit-testable
+    project (no numeric cells) or the projection failed. Never raises; gaps mark
+    the agent failed while retaining its successfully captured cells and workbook.
+    Extracted from the persistence loop so the wiring (writer manifest → ``project_writes``) is unit-testable
     in isolation.
     """
     if not result.numeric_cells:
@@ -264,6 +263,9 @@ async def _project_numeric_notes_facts(
             filing_level=config.filing_level,
         )
         if projection.has_gaps:
+            result.status = "failed"
+            result.error_type = "canonical_projection_gap"
+            result.error = "Numeric notes could not be saved to the canonical filing data: " + "; ".join([*projection.skipped, *projection.rejected])
             logger.warning(
                 "Numeric notes projection for %s had gaps: "
                 "%d skipped, %d rejected",
@@ -277,6 +279,9 @@ async def _project_numeric_notes_facts(
             "Failed to project numeric notes facts for %s (run_id=%s)",
             result.template_type.value, config.run_id, exc_info=True,
         )
+        result.status = "failed"
+        result.error_type = "canonical_projection_gap"
+        result.error = "Numeric notes could not be saved to the canonical filing data."
         return None
 
 
@@ -534,8 +539,8 @@ async def run_notes_extraction(
             # use. This is the LIVE capture (per-template, during the run) of
             # the multi-column numeric tables the prose `notes_cells` store
             # can't represent (PLAN-notes-template-registry Step 9). Best-effort
-            # — a projection failure must not fail the run (the xlsx is already
-            # on disk), mirroring the persist_notes_cells contract below.
+            # — projection gaps now fail this agent so the canonical export
+            # cannot report success while omitting numeric notes.
             await _project_numeric_notes_facts(config, r)
             # Source the sheet name from the registry (not from the
             # cells_written list) so a succeeded-but-empty agent still

@@ -275,8 +275,13 @@ async def start_run_endpoint(run_id: int, request: Request):
     # 'running'.
     flip_conn = server._open_audit_conn()
     try:
-        flipped = repo.mark_draft_started(flip_conn, run_id)
+        flipped = repo.mark_draft_started(flip_conn, run_id, owned=True)
         flip_conn.commit()
+    except Exception:
+        from db.run_ownership import release
+        release(flip_conn, run_id)
+        server.active_runs.discard(session_id)
+        raise
     finally:
         flip_conn.close()
     if not flipped:
@@ -334,7 +339,17 @@ async def start_run_endpoint(run_id: int, request: Request):
                 ):
                     yield frame
             finally:
-                reset_correlation_id(correlation_token)
+                from db.run_ownership import release
+                try:
+                    ownership_conn = server._open_audit_conn()
+                    try:
+                        release(ownership_conn, run_id)
+                    finally:
+                        ownership_conn.close()
+                except Exception:
+                    logger.warning("Could not release run process ownership", exc_info=True)
+                finally:
+                    reset_correlation_id(correlation_token)
 
         return StreamingResponse(
             event_stream(),
@@ -363,6 +378,8 @@ async def start_run_endpoint(run_id: int, request: Request):
                 )
                 rb.commit()
             finally:
+                from db.run_ownership import release
+                release(rb, run_id)
                 rb.close()
         except Exception:
             logger.warning(

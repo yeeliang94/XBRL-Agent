@@ -832,6 +832,14 @@ def render_notes_prompt(
         from concept_model.dimensions import numeric_category_catalog
         parts.append(
             "=== NUMERIC CATEGORY IDENTITIES ===\n"
+            "For numeric write_notes, use chosen_row_label, numeric_values, dimensions, evidence, source_pages and parent_note. "
+            "Do not send sheet, row or col: catalog row numbers are reading aids, not payload fields. "
+            "Those coordinates belong to write_note_from_source, which is a different tool. "
+            'Example shape: {"chosen_row_label":"<exact live label>","numeric_values":{"company_cy":123},'
+            '"dimensions":{"<catalog axis>":"<source-supported catalog member>"},'
+            '"evidence":"PDF page <viewed page>","source_pages":[1],'
+            '"parent_note":{"number":"<printed number>","title":"<printed title>"}}. '
+            "Replace every example value with source evidence, and use only the entity keys disclosed for this filing.\n"
             "Use dimensions={axis: member} from this taxonomy catalog, one payload per source-supported category. "
             "Preserve both periods and entity scopes. Do not assume ordinary shares or a generic related-party category. "
             + ("Every related-party numeric payload must include a source-supported category in dimensions; "
@@ -2898,7 +2906,7 @@ def _write_source_and_project_impl(
             staged_path = output_path.with_name(
                 f".{output_path.stem}.{promotion_id}.stage.xlsx")
             result = write_notes_workbook(
-                template_path=str(source_path), payloads=[payload],
+                template_path=str(source_path), filing_template_path=deps.template_path, payloads=[payload],
                 output_path=str(staged_path), filing_level=deps.filing_level,
                 sheet_name=deps.sheet_name,
             )
@@ -3047,6 +3055,7 @@ def _write_payloads_through_writer_impl(deps: NotesDeps, payloads: list):
         )
         result = write_notes_workbook(
             template_path=source_path,
+            filing_template_path=deps.template_path,
             payloads=payloads,
             output_path=output_path,
             filing_level=deps.filing_level,
@@ -3220,6 +3229,24 @@ def create_notes_agent(
         denomination=deps.denomination,
         prepared_source_required=deps.prepared_source_required,
     )
+    if entry.is_numeric:
+        # Numeric seeds must carry the same unit-bearing hierarchy as the
+        # read_template tool. A flat seed let the agent skip that tool and
+        # attach share-count evidence to a monetary balance field.
+        from concept_model.filing_targets import writable_rows
+        allowed_rows = writable_rows(deps.template_path, deps.sheet_name)
+        deps.template_fields = _read_template_impl(deps.template_path)
+        system_prompt += (
+            "\n=== NUMERIC WRITABLE FIELDS WITH SECTION PATHS ===\n"
+            + _render_notes_template_hierarchy(
+                deps.template_fields, deps.sheet_name,
+                set(allowed_rows) if allowed_rows is not None else None,
+            )
+            + "\nMatch source share counts to Number fields and monetary values to Amount fields. "
+              "Equal numeric values do not make those concepts interchangeable. Before save_result, "
+              "check each source-supported count and amount for both periods, including supported "
+              "issued/fully-paid totals and opening/closing outstanding fields. Never infer undisclosed values."
+        )
     managed_assigned_source = (
         template_type == NotesTemplateType.LIST_OF_NOTES
         and deps.batch_note_nums is not None

@@ -16,6 +16,45 @@ function activityRows() {
   return within(screen.getByRole("tablist", { name: "Run workstreams" })).getAllByRole("tab");
 }
 
+test.each(["failed", "succeeded"])("formatter calls share one workstream and retain per-call telemetry after %s", (status) => {
+  window.history.replaceState({}, "", "/");
+  render(<RunDetailView detail={makeDetail({ agents: [
+    makeAgent({ id: 11, statement_type: "NOTES_FORMATTING", status: "completed", variant: "Notes-Issuedcapital" }),
+    makeAgent({ id: 12, statement_type: "NOTES_FORMATTING", status: "failed", variant: "Notes-ListOfNotes" }),
+  ], run_events: [
+    { event: "pipeline_stage", data: { stage: "formatting_notes", status, message: "Formatting pass finished." }, timestamp: 1 },
+  ] })} onDelete={() => {}} onDownload={() => {}} />);
+  clickRunTab(/^activity$/i);
+  const tabs = screen.getByRole("tablist", { name: "Run workstreams" });
+  expect(within(tabs).getAllByRole("tab", { name: /Notes formatting/ })).toHaveLength(1);
+  fireEvent.click(within(tabs).getByRole("tab", { name: /Notes formatting/ }));
+  expect(within(tabs).getByRole("tab", { name: /Notes formatting/ })).toHaveTextContent("Failed");
+  expect(screen.getByText("Formatting calls")).toBeVisible();
+  cleanup();
+});
+
+test("recorded human escalation is needs review while real reviewer failures stay failed", () => {
+  window.history.replaceState({}, "", "/");
+  render(<RunDetailView detail={makeDetail({ agents: [makeAgent({
+    statement_type: "CORRECTION", status: "failed", error_type: "tool_exception",
+    events: [{ event: "complete", data: { success: false, error: "reviewer_investigation_unresolved" }, timestamp: 1 } as SSEEvent],
+  })] })} onDelete={() => {}} onDownload={() => {}} />);
+  clickRunTab(/^activity$/i);
+  const tab = within(screen.getByRole("tablist", { name: "Run workstreams" })).getByRole("tab", { name: /AI review/ });
+  expect(tab).toHaveTextContent("Needs review");
+  expect(screen.queryByTestId("agent-error-type")).toBeNull();
+  cleanup();
+  window.history.replaceState({}, "", "/");
+  render(<RunDetailView detail={makeDetail({ agents: [makeAgent({
+    statement_type: "CORRECTION", status: "failed", error_type: "tool_exception",
+    events: [{ event: "complete", data: { success: false, error: "reviewer_exception" }, timestamp: 1 } as SSEEvent],
+  })] })} onDelete={() => {}} onDownload={() => {}} />);
+  clickRunTab(/^activity$/i);
+  expect(within(screen.getByRole("tablist", { name: "Run workstreams" })).getByRole("tab", { name: /AI review/ })).toHaveTextContent("Failed");
+  expect(screen.getByTestId("agent-error-type")).toBeVisible();
+  cleanup();
+});
+
 // A tool_call / tool_result pair used across the fixture so each agent
 // renders a non-empty timeline.
 const sampleEvents: SSEEvent[] = [
@@ -142,7 +181,6 @@ function makeDetail(overrides: Partial<RunDetailJson> = {}): RunDetailJson {
   };
 }
 
-describe("RunDetailView", () => {
   beforeEach(() => {
     // jsdom does not implement HTMLDialogElement.showModal, used by <dialog>.
     // Stub confirm() so tests can drive the confirm flow without the dialog.
@@ -155,6 +193,9 @@ describe("RunDetailView", () => {
     cleanup();
     vi.restoreAllMocks();
   });
+
+describe("RunDetailView", () => {
+
 
   test.each(["values", "notes", "checks", "review"] as const)("running runs hide review sections and redirect the %s link to Activity", (key) => {
     window.history.replaceState(null, "", `/history/42?tab=${key}`);

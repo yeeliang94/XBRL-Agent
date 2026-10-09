@@ -21,9 +21,22 @@ import { Highlight } from "@tiptap/extension-highlight";
 import { TextAlign } from "@tiptap/extension-text-align";
 import type { NotesCellsResponse } from "../lib/notesCells";
 import { pwc } from "../lib/theme";
+import { PreparedNotesHtml } from "../components/PreparedNotesHtml";
 import { humanSlotKey, type HumanFigureSlot } from "../lib/humanFile";
 
 const notesCss = readFileSync("src/components/NotesReviewTab.css", "utf8");
+
+test("wide prepared tables gain display sizing without altering the output HTML", () => {
+  const html = '<table><tr><th>Payment description</th><th colspan="4">Contractual cash flows</th></tr><tr><td>Trade payables</td><td>100</td><td>200</td><td>300</td><td>400</td></tr></table>';
+  const output = { html, tier: "full" as const, revision: "1", source_styling_dropped: false, white_grid_dropped: false };
+  const view = render(<PreparedNotesHtml output={output} />);
+  expect(view.container.querySelector('table[data-wide-preview="true"]')).toBeTruthy();
+  expect(screen.getByRole("region", { name: "Scrollable note table" })).toContainElement(view.container.querySelector("table"));
+  expect(view.container.querySelector('th[colspan="4"]')).toHaveTextContent("Contractual cash flows");
+  expect(view.container.querySelectorAll("td")).toHaveLength(5);
+  expect(output.html).toBe(html);
+  cleanup();
+});
 
 // Issue 3 (2026-06-21): empty notes cells were flipping to "Saved" without
 // the user typing — TipTap normalises an empty cell ("") to "<p></p>" on
@@ -2895,6 +2908,20 @@ describe("NotesReviewTab — AI formatter", () => {
     ).length;
   }
 
+  test("edited notes show one quiet recheck notice and a contextual action", async () => {
+    routedFetch({status: (url) => url.includes("Notes-CI") ? {
+      status: "done", sheet: "Notes-CI", error_type: "verification_stale",
+      error: "Notes changed after appearance checking. Recheck rows 112.",
+      changed_rows: 1, summary: "Previous formatting saved.",
+    } : {status: "idle", sheet: "other"}});
+    render(<NotesReviewTab runId={42} />);
+    const notice = await screen.findByTestId("notes-format-summary");
+    expect(notice).toHaveAttribute("role", "status");
+    expect(screen.getAllByText("Formatting needs rechecking after changes.")).toHaveLength(1);
+    expect(notice).not.toHaveTextContent("112");
+    expect(screen.getByRole("button", {name: "Recheck formatting Corporate Information"})).toBeEnabled();
+  });
+
   test("Format launches, polls to done, and refetches cells without a verbose summary", async () => {
     vi.useFakeTimers();
     let launched = false;
@@ -3175,7 +3202,7 @@ describe("NotesReviewTab — AI formatter", () => {
     render(<NotesReviewTab runId={42} />);
     const summary = await screen.findByTestId("notes-format-summary");
     expect(summary).toHaveAttribute("role", "alert");
-    expect(summary).toHaveTextContent("1 row was not formatted because the content changed during formatting");
+    expect(summary).toHaveTextContent("Some notes changed during formatting and need another check.");
     expect(screen.getByTestId("notes-format-button")).toHaveTextContent("Retry formatting");
   });
 

@@ -433,6 +433,9 @@ export function agentReducer(agent: AgentState, event: SSEEvent): AgentState {
       break;
   }
 
+  if (event.event === "status" && event.data.phase === "skipped") {
+    updates.status = "skipped";
+  }
   return { ...agent, ...updates };
 }
 
@@ -1017,7 +1020,9 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
         case "pipeline_stage":
           updates.pipelineStage = event.data.stage;
-          updates.pipelineActivity = event.data;
+          updates.pipelineActivity = state.pipelineStage === event.data.stage
+            ? { ...state.pipelineActivity, ...event.data }
+            : event.data;
           break;
       }
 
