@@ -403,7 +403,7 @@ describe("ActiveTabPanel — tab switching (hooks rule regression)", () => {
     // Re-render on the SAME mount — this is what trips React's hooks
     // dispatcher when hook counts differ between renders.
     expect(() => rerender(<ActiveTabPanel state={validatorState} />)).not.toThrow();
-    expect(screen.getByText(/cross-check results/i)).toBeInTheDocument();
+    expect(screen.getByTestId("cross-check-row-sofp_balance")).toBeInTheDocument();
   });
 
   test("switching from the validator tab back to a statement tab does not crash", () => {

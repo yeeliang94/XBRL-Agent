@@ -460,18 +460,18 @@ function getAgentId(event: SSEEvent): string | null {
 // agent_id or DB statement_type should strip the prefix first via
 // notesTabLabel().
 export const NOTES_TAB_LABELS: Record<string, string> = {
-  CORP_INFO: "Notes 10: Corp Info",
-  ACC_POLICIES: "Notes 11: Acc Policies",
-  LIST_OF_NOTES: "Notes 12: List of Notes",
-  ISSUED_CAPITAL: "Notes 13: Issued Capital",
-  RELATED_PARTY: "Notes 14: Related Party",
+  CORP_INFO: "Corporate information",
+  ACC_POLICIES: "Accounting policies",
+  LIST_OF_NOTES: "List of notes",
+  ISSUED_CAPITAL: "Issued capital",
+  RELATED_PARTY: "Related parties",
 };
 
 /**
  * Normalize any notes identifier to its short display label. Accepts:
- *  - bare template value:   "CORP_INFO"              -> "Notes 10: Corp Info"
- *  - live agent_id:         "notes:CORP_INFO"        -> "Notes 10: Corp Info"
- *  - persisted DB type:     "NOTES_CORP_INFO"        -> "Notes 10: Corp Info"
+ *  - bare template value:   "CORP_INFO"              -> "Corporate information"
+ *  - live agent_id:         "notes:CORP_INFO"        -> "Corporate information"
+ *  - persisted DB type:     "NOTES_CORP_INFO"        -> "Corporate information"
  * Unknown keys fall back to "Notes: <key>" so a newly-added template
  * still renders a sane chip before the map is updated.
  */

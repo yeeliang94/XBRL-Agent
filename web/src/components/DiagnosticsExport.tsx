@@ -4,7 +4,8 @@ import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 
-/** Run-scoped support action, mounted only in Activity. */
+/** Run-scoped support action. It sits with the run's header actions while
+ *  Activity is open; the privacy note is its hover text, not a sentence. */
 export function DiagnosticsExport({ runId }: { runId: number }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -23,17 +24,13 @@ export function DiagnosticsExport({ runId }: { runId: number }) {
   }
 
   return (
-    <div style={{ marginBottom: pwc.space.md }}>
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: pwc.space.sm }}>
-        <button type="button" disabled={pending} onClick={handleExport}
-          className={uiClass.btnSecondary} style={{ ...ui.buttonSecondary, ...ui.buttonSm }}>
-          {pending ? "Preparing diagnostics…" : "Export diagnostics"}
-        </button>
-        <span style={{ color: pwc.grey700, fontSize: 13 }}>
-          ZIP of saved traces and logs for this run. May contain financial content.
-        </span>
-      </div>
-      {error && <p role="alert" style={{ color: pwc.errorText, marginBottom: 0 }}>{error}</p>}
-    </div>
+    <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: pwc.space.xs }}>
+      <button type="button" disabled={pending} onClick={handleExport}
+        title="Saved traces and logs. May contain financial content."
+        className={uiClass.btnSecondary} style={ui.buttonSecondary}>
+        {pending ? "Preparing diagnostics…" : "Export diagnostics"}
+      </button>
+      {error && <span role="alert" data-testid="diagnostics-error" style={{ ...ui.metadata, color: pwc.errorText, maxWidth: 320, textAlign: "right" }}>{error}</span>}
+    </span>
   );
 }

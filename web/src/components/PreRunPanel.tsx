@@ -21,9 +21,11 @@ import {
   variantsFor,
   DENOMINATION_LABELS,
 } from "../lib/types";
-import { pwc, tokens } from "../lib/theme";
+import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { CloseIcon, DisclosureChevron } from "./icons";
+import { StatusIcon } from "./StatusIcon";
+import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { abortAgent, updateSettings } from "../lib/api";
 import { VariantSelector } from "./VariantSelector";
 import { StatementRunConfig } from "./StatementRunConfig";
@@ -79,19 +81,90 @@ const styles = {
     padding: 0,
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xl,
+    gap: pwc.space.xxl,
   } as React.CSSProperties,
   heading: {
     ...ui.sectionTitle,
   } as React.CSSProperties,
+  // Spacing rhythm for the setup page: 32 between sections, 16 between
+  // blocks inside a section, 8 between a label and its control. Every
+  // section header is a 40px row, so header-to-content is 8.
   section: {
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.sm,
   } as React.CSSProperties,
+  sectionBody: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.lg,
+  } as React.CSSProperties,
+  subsection: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.sm,
+  } as React.CSSProperties,
+  subsectionButton: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+    minHeight: 40,
+    padding: 0,
+    background: "transparent",
+    border: "none",
+    cursor: "pointer",
+    textAlign: "left" as const,
+    alignSelf: "flex-start",
+  } as React.CSSProperties,
+  subsectionTitle: {
+    ...ui.bodyText,
+    fontWeight: pwc.weight.medium,
+  } as React.CSSProperties,
+  exceptionLine: {
+    ...ui.bodyText,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+  } as React.CSSProperties,
+  noteList: {
+    listStyle: "none",
+    margin: 0,
+    padding: 0,
+  } as React.CSSProperties,
+  noteRow: {
+    display: "grid",
+    gridTemplateColumns: "40px minmax(0, 1fr) 40px",
+    alignItems: "start",
+    minHeight: 40,
+    borderTop: `1px solid ${pwc.grey100}`,
+  } as React.CSSProperties,
+  noteNumber: {
+    ...ui.bodyText,
+    color: pwc.grey700,
+    padding: "10px 0",
+    fontVariantNumeric: "tabular-nums",
+  } as React.CSSProperties,
+  noteTitle: {
+    ...ui.bodyText,
+    padding: "10px 0",
+  } as React.CSSProperties,
+  noteRemove: {
+    ...ui.buttonQuiet,
+    width: 40,
+    minWidth: 40,
+    padding: 0,
+    justifyContent: "center",
+    color: pwc.grey700,
+  } as React.CSSProperties,
+  noteAddRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+    flexWrap: "wrap" as const,
+  } as React.CSSProperties,
   sectionLabel: {
     ...ui.bodyText,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
   } as React.CSSProperties,
   setupGroup: {
     display: "flex",
@@ -111,10 +184,11 @@ const styles = {
   disclosureButton: {
     display: "flex",
     alignItems: "center",
-    justifyContent: "space-between",
-    gap: pwc.space.md,
+    justifyContent: "flex-start",
+    gap: pwc.space.sm,
     width: "100%",
-    padding: `0 0 ${pwc.space.sm}px`,
+    minHeight: 40,
+    padding: 0,
     background: "transparent",
     border: "none",
     cursor: "pointer",
@@ -127,7 +201,7 @@ const styles = {
     ...ui.metadata,
   } as React.CSSProperties,
   disclosureContent: {
-    padding: `0 0 ${pwc.space.sm}px`,
+    paddingTop: pwc.space.sm,
   } as React.CSSProperties,
   detectedBadge: {
     display: "inline-flex",
@@ -142,17 +216,8 @@ const styles = {
     letterSpacing: 0,
     textTransform: "none" as const,
   } as React.CSSProperties,
-  // Post-scan "found notes" nudge (UX-QA #24).
-  notesNudge: {
-    ...ui.bodyText,
-    background: pwc.grey50,
-    border: "none",
-    borderRadius: pwc.radius.sm,
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
-  } as React.CSSProperties,
   runButton: {
     ...ui.buttonPrimary,
-    ...ui.buttonLg,
     alignSelf: "flex-end" as const,
   } as React.CSSProperties,
   loadingText: {
@@ -222,11 +287,9 @@ function DisclosureSection({
         aria-controls={id}
         style={styles.disclosureButton}
       >
-        <span style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
-          <span style={styles.disclosureTitle}>{title}</span>
-          <span style={styles.disclosureSummary}>{summary}</span>
-        </span>
+        <span style={styles.disclosureTitle}>{title}</span>
         <DisclosureChevron open={open} />
+        {!open && <span style={styles.disclosureSummary}>{summary}</span>}
       </button>
       <div
         id={id}
@@ -454,16 +517,23 @@ export function findInventoryGaps(entries: NotesInventoryEntry[]): number[] {
   return gaps;
 }
 
-/** Add or remove notes the scout missed. The caller stores a compact override
- *  set so a fresh run-owned scan cannot overwrite the operator's decisions. */
+/** The notes the document preparation found, with add and remove. The caller
+ *  stores a compact override set so a fresh run-owned scan cannot overwrite
+ *  the operator's decisions. Folded by default; it opens itself when a note
+ *  number is missing, because that is the one case that needs a person. */
 function NotesInventoryEditor({
   entries,
+  gaps,
   onChange,
 }: {
   entries: NotesInventoryEntry[];
+  gaps: number[];
   onChange: (next: NotesInventoryEntry[]) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  // Decided once on mount: closing a gap by adding the note must not fold
+  // the list away under the operator.
+  const [open, setOpen] = useState(() => gaps.length > 0);
+  const [adding, setAdding] = useState(false);
   const [num, setNum] = useState("");
   const [title, setTitle] = useState("");
 
@@ -476,6 +546,12 @@ function NotesInventoryEditor({
   const canAdd =
     Number.isFinite(parsed) && parsed >= 1 && parsed <= 999
     && title.trim().length > 0 && !duplicate;
+
+  const closeAdd = () => {
+    setAdding(false);
+    setNum("");
+    setTitle("");
+  };
 
   const add = () => {
     if (!canAdd) return;
@@ -490,105 +566,106 @@ function NotesInventoryEditor({
       [...entries, added]
         .sort((a, b) => (a.note_num ?? 0) - (b.note_num ?? 0)),
     );
-    setNum("");
-    setTitle("");
+    closeAdd();
   };
 
-  const inputStyle = {
-    ...ui.input, minWidth: 0,
-  } as const;
-
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
+    <div style={styles.subsection}>
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
-        style={{
-          alignSelf: "flex-start", background: "none", border: "none",
-          minHeight: 40, padding: "0 8px", cursor: "pointer", fontFamily: pwc.fontBody,
-          fontSize: 14, color: tokens.color.action.primary, textDecoration: "underline",
-        }}
+        onClick={() => setOpen(!open)}
         aria-expanded={open}
+        aria-controls="notes-inventory-list"
+        style={styles.subsectionButton}
       >
-        {open ? "Hide notes list" : "Review or edit the notes list"}
+        <span style={styles.subsectionTitle}>Notes in the document</span>
+        <DisclosureChevron open={open} />
+        <span style={styles.disclosureSummary}>{entries.length}</span>
       </button>
-      {open && (
-        <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
-          <ul
-            style={{
-              listStyle: "none", margin: 0, padding: 0,
-              display: "flex", flexDirection: "column", gap: 2,
-              maxHeight: 180, overflowY: "auto",
-            }}
-            aria-label="Discovered notes"
-          >
-            {sorted.map((e, i) => (
-              <li
-                key={`${e.note_num}-${e.title}-${i}`}
-                style={{ display: "flex", alignItems: "center", gap: 6 }}
-              >
-                <span style={{ minWidth: 28, color: pwc.grey800 }}>
-                  {e.note_num}.
-                </span>
-                <span style={{ flex: 1, color: pwc.grey800 }}>{e.title}</span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onChange(entries.filter((x) => x !== e))
-                  }
-                  aria-label={`Remove note ${e.note_num}`}
-                  data-tooltip={`Remove note ${e.note_num}`}
-                  style={{
-                    background: "none", border: "none", minWidth: 40,
-                    minHeight: 40, padding: 0, cursor: "pointer",
-                    color: pwc.grey700, fontSize: 14,
-                  }}
-                >
-                  <CloseIcon />
-                </button>
-              </li>
-            ))}
-          </ul>
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input
-              type="number"
-              min={1}
-              max={999}
-              value={num}
-              onChange={(ev) => setNum(ev.target.value)}
-              placeholder="No."
-              aria-label="Missing note number"
-              style={{ ...inputStyle, width: 72, paddingInline: pwc.space.sm }}
-            />
-            <input
-              type="text"
-              value={title}
-              onChange={(ev) => setTitle(ev.target.value)}
-              placeholder="Note title"
-              aria-label="Missing note title"
-              style={{ ...inputStyle, flex: 1 }}
-            />
-            <button
-              type="button"
-              onClick={add}
-              disabled={!canAdd}
-              className={uiClass.btnSecondary}
-              style={{ ...ui.buttonSecondary, minHeight: 44 }}
-            >
-              Add
-            </button>
-          </div>
-          {duplicate && (
-            <span style={{ color: pwc.error, fontSize: 14 }}>
-              Note {parsed} is already in the list.
-            </span>
-          )}
-          <span style={{ color: pwc.grey700, fontSize: 14 }}>
-            Added notes have no page range, so agents search the whole document
-            for them.
-          </span>
-        </div>
+      {gaps.length > 0 && (
+        <span role="status" style={styles.exceptionLine}>
+          <StatusIcon symbol={STATUS_SYMBOLS.attention} />
+          {gaps.length === 1 ? "Note" : "Notes"} {gaps.join(", ")} not found.
+          Add {gaps.length === 1 ? "it" : "them"} if {gaps.length === 1 ? "it is" : "they are"} in the document.
+        </span>
       )}
+      <div id="notes-inventory-list" hidden={!open} style={open ? styles.subsection : undefined}>
+        <ul aria-label="Discovered notes" style={styles.noteList}>
+          {sorted.map((e, i) => (
+            <li key={`${e.note_num}-${e.title}-${i}`} style={styles.noteRow}>
+              <span style={styles.noteNumber}>{e.note_num}</span>
+              <span style={styles.noteTitle}>{e.title}</span>
+              <button
+                type="button"
+                onClick={() => onChange(entries.filter((x) => x !== e))}
+                aria-label={`Remove note ${e.note_num}`}
+                data-tooltip={`Remove note ${e.note_num}`}
+                className={uiClass.btnQuiet}
+                style={styles.noteRemove}
+              >
+                <CloseIcon />
+              </button>
+            </li>
+          ))}
+        </ul>
+        {adding ? (
+          <div style={styles.subsection}>
+            <div style={styles.noteAddRow}>
+              <input
+                type="number"
+                min={1}
+                max={999}
+                value={num}
+                onChange={(ev) => setNum(ev.target.value)}
+                placeholder="No."
+                aria-label="Missing note number"
+                autoFocus
+                style={{ ...ui.input, width: 72, minWidth: 0 }}
+              />
+              <input
+                type="text"
+                value={title}
+                onChange={(ev) => setTitle(ev.target.value)}
+                onKeyDown={(ev) => { if (ev.key === "Enter") add(); }}
+                placeholder="Note title"
+                aria-label="Missing note title"
+                style={{ ...ui.input, flex: 1, minWidth: 0 }}
+              />
+              <button
+                type="button"
+                onClick={add}
+                disabled={!canAdd}
+                className={uiClass.btnSecondary}
+                style={ui.buttonSecondary}
+              >
+                Add
+              </button>
+              <button
+                type="button"
+                onClick={closeAdd}
+                className={uiClass.btnQuiet}
+                style={ui.buttonQuiet}
+              >
+                Cancel
+              </button>
+            </div>
+            {duplicate && (
+              <span style={{ ...ui.bodyText, color: pwc.error }}>
+                Note {parsed} is already in the list.
+              </span>
+            )}
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className={uiClass.btnQuiet}
+            style={{ ...ui.buttonQuiet, alignSelf: "flex-start", paddingInline: 0 }}
+          >
+            Add note
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -600,8 +677,13 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   // two selection lists once they have checked them, while model overrides
   // remain behind the advanced disclosure.
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [showStatements, setShowStatements] = useState(true);
-  const [showNotes, setShowNotes] = useState(true);
+  // Statement and note lists start folded once preparation has finished:
+  // everything is selected by default and the summary line says so.
+  const [showStatementsChoice, setShowStatements] = useState<boolean | null>(null);
+  // null = follow the default: open until formats are detected, and kept
+  // open while any detected format needs checking.
+  const [showFormatsChoice, setShowFormatsChoice] = useState<boolean | null>(null);
+  const [showNotesChoice, setShowNotes] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [scoutError, setScoutError] = useState<string | null>(null);
@@ -688,6 +770,18 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   const variantOverridesRef = useRef(new Set<StatementType>(
     STATEMENT_TYPES.filter((stmt) => Boolean(variantSelections[stmt].variant)),
   ));
+  const preparedForConfirmation = preparation?.status === "succeeded";
+  const showStatements = showStatementsChoice ?? !preparedForConfirmation;
+  // Notes stay open when the inventory needs attention (none found, or gaps).
+  const inventoryEntries = infopack && Array.isArray(infopack.notes_inventory)
+    ? applyNotesInventoryOverrides(infopack.notes_inventory as NotesInventoryEntry[], notesInventoryOverrides)
+    : null;
+  const inventoryNeedsAttention = inventoryEntries != null
+    && (inventoryEntries.length === 0 || findInventoryGaps(inventoryEntries).length > 0);
+  const showNotes = showNotesChoice ?? (!preparedForConfirmation || inventoryNeedsAttention);
+  const formatsDetected = STATEMENT_TYPES.filter((stmt) => Boolean(variantSelections[stmt].variant)).length;
+  const formatsToCheck = STATEMENT_TYPES.filter((stmt) => variantSelections[stmt].variant && variantSelections[stmt].confidence === "low").length;
+  const showFormats = showFormatsChoice ?? (!preparedForConfirmation || formatsToCheck > 0);
   const [statementsEnabled, setStatementsEnabled] = useState(
     () => _seedStatementsEnabled(initialConfig),
   );
@@ -1320,13 +1414,17 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     <div style={styles.container}>
       {/* Panel header: title on the left, the Advanced-settings toggle pinned
           to the top-right so it reads as a panel-level control rather than a
-          step in the middle of the form. */}
+          step in the middle of the form. The header and the filing row share
+          one section so the header-to-content gap matches the folding
+          sections below. */}
+      <div style={styles.section}>
       <div
         style={{
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           gap: pwc.space.md,
+          minHeight: 40,
         }}
       >
         <h2 style={styles.heading}>Filing setup</h2>
@@ -1356,7 +1454,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           Filing standard
           {standardWasDetected && <span style={styles.detectedBadge}>Detected</span>}
         </span>
-        <div className="segmented-control-group" style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
+        <div className="segmented-control-group" style={ui.segmentGroup}>
           {(["mfrs", "mpers"] as const).map((standard) => {
             const active = filingStandard === standard;
             return (
@@ -1366,19 +1464,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                 className="segmented-control-button"
                 aria-pressed={active}
                 onClick={() => handleFilingStandardChange(standard)}
-                style={{
-                  fontFamily: pwc.fontHeading,
-                  fontSize: 14,
-                  minHeight: 40,
-                  fontWeight: active ? 600 : 500,
-                  padding: "8px 24px",
-                  border: "none",
-                  borderRight: standard === "mfrs" ? `1px solid ${pwc.grey200}` : "none",
-                  borderRadius: 0,
-                  background: active ? pwc.black : pwc.white,
-                  color: active ? pwc.white : pwc.grey700,
-                  cursor: "pointer",
-                }}
+                style={{ ...ui.segmentButton, ...(active ? ui.segmentButtonActive : {}) }}
               >
                 {standard.toUpperCase()}
               </button>
@@ -1390,7 +1476,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       {/* Filing level: Company or Group */}
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Filing level</span>
-        <div className="segmented-control-group" style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
+        <div className="segmented-control-group" style={ui.segmentGroup}>
           {(["company", "group"] as const).map((level) => {
             const active = filingLevel === level;
             return (
@@ -1400,19 +1486,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                 className="segmented-control-button"
                 aria-pressed={active}
                 onClick={() => setFilingLevel(level)}
-                style={{
-                  fontFamily: pwc.fontHeading,
-                  fontSize: 14,
-                  minHeight: 40,
-                  fontWeight: active ? 600 : 500,
-                  padding: "8px 24px",
-                  border: "none",
-                  borderRight: level === "company" ? `1px solid ${pwc.grey200}` : "none",
-                  borderRadius: 0,
-                  background: active ? pwc.black : pwc.white,
-                  color: active ? pwc.white : pwc.grey700,
-                  cursor: "pointer",
-                }}
+                style={{ ...ui.segmentButton, ...(active ? ui.segmentButtonActive : {}) }}
               >
                 {level === "company" ? "Company" : "Group"}
               </button>
@@ -1421,25 +1495,18 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         </div>
       </div>
 
-      <div style={styles.section}>
-        <label style={styles.sectionLabel} htmlFor="filing-reporting-periods">
-          Reporting periods
-        </label>
-        <select id="filing-reporting-periods" value={firstFinancialStatements ? "first" : "comparative"}
-          onChange={(event) => setFirstFinancialStatements(event.target.value === "first")}
-          style={{ ...ui.select, maxWidth: "100%" }}>
-          <option value="comparative">Current and prior periods</option>
-          <option value="first">First statements after incorporation — current period only</option>
-        </select>
-      </div>
-
       {/* Presentation denomination the filer declares for the source figures.
           The agent treats this as authoritative (no guessing) and transcribes
           values verbatim; the scout cross-checks it. Mirrors the toggles above. */}
       <div style={styles.section}>
-        <span style={styles.sectionLabel}>Denomination</span>
-        <div className="segmented-control-group" style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
-          {(["units", "thousands", "millions"] as const).map((d, idx) => {
+        <span style={{ ...styles.sectionLabel, display: "inline-flex", alignItems: "center", gap: pwc.space.sm }}>
+          Denomination
+          {detectedDenomination && infopack?.scale_unit !== "unknown" && (
+            <span data-testid="detected-denomination" style={styles.detectedBadge}>Detected {DENOMINATION_LABELS[detectedDenomination]}</span>
+          )}
+        </span>
+        <div className="segmented-control-group" style={ui.segmentGroup}>
+          {(["units", "thousands", "millions"] as const).map((d) => {
             const active = denomination === d;
             return (
               <button
@@ -1448,41 +1515,48 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                 className="segmented-control-button"
                 aria-pressed={active}
                 onClick={() => handleDenominationChange(d)}
-                style={{
-                  fontFamily: pwc.fontHeading,
-                  fontSize: 14,
-                  minHeight: 40,
-                  fontWeight: active ? 600 : 500,
-                  padding: "8px 24px",
-                  border: "none",
-                  borderRight: idx < 2 ? `1px solid ${pwc.grey200}` : "none",
-                  borderRadius: 0,
-                  background: active ? pwc.black : pwc.white,
-                  color: active ? pwc.white : pwc.grey700,
-                  cursor: "pointer",
-                }}
+                style={{ ...ui.segmentButton, ...(active ? ui.segmentButtonActive : {}) }}
               >
                 {DENOMINATION_LABELS[d]}
               </button>
             );
           })}
         </div>
-        {infopack?.scale_unit === "unknown" ? (
+        {/* Only an exception earns a sentence: the unit could not be found. */}
+        {infopack?.scale_unit === "unknown" && (
           <span style={{ ...ui.bodyText, color: pwc.orange700 }}>
-            Document scan could not determine the denomination. Select the value shown in the financial statements before starting extraction.
-          </span>
-        ) : detectedDenomination ? (
-          <span data-testid="detected-denomination" style={ui.bodyText}>
-            Document scan detected {DENOMINATION_LABELS[detectedDenomination]}. Confirm or correct it before starting extraction.
-          </span>
-        ) : (
-          <span style={ui.bodyText}>
-            Document preparation will suggest a denomination for you to confirm.
+            Not found in the document. Select the unit shown in the statements.
           </span>
         )}
       </div>
+
+      {/* Reporting periods: the same segmented choice as the other three, so
+          the filing row is four controls of one kind. */}
+      <div style={styles.section}>
+        <span id="filing-reporting-periods-label" style={styles.sectionLabel}>Reporting periods</span>
+        <div className="segmented-control-group" role="group" aria-labelledby="filing-reporting-periods-label" style={ui.segmentGroup}>
+          {([["comparative", "Current and prior"], ["first", "Current only"]] as const).map(([value, label]) => {
+            const active = (firstFinancialStatements ? "first" : "comparative") === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                className="segmented-control-button"
+                aria-pressed={active}
+                title={value === "first" ? "First statements after incorporation" : undefined}
+                onClick={() => setFirstFinancialStatements(value === "first")}
+                style={{ ...ui.segmentButton, ...(active ? ui.segmentButtonActive : {}) }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
         </div>
       </section>
+      </div>
 
       {showAdvanced && (<>
       {(!preparation || preparation.status === "not_started") && <>
@@ -1492,10 +1566,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           verify — never enforced (gotcha #13). */}
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Preview document scan</span>
-        <span style={{ ...ui.bodyText, color: pwc.grey700 }}>
-          Preparation builds the inventory automatically. Preview refreshes the
-          document scan using the current model.
-        </span>
         <div style={{ display: "flex", alignItems: "center", gap: pwc.space.sm }}>
           <button
             type="button"
@@ -1521,10 +1591,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             </select>
           )}
         </div>
-        <p style={{ ...ui.bodyText, margin: 0 }}>
-          Text and scanned pages are read automatically. Notes are checked and
-          formatted before you review them.
-        </p>
         {scoutModelSaveError && (
           <p
             role="status"
@@ -1548,7 +1614,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                   border: `2px solid ${pwc.grey200}`, borderTop: `2px solid ${pwc.orange500}`,
                   flexShrink: 0, display: "inline-block",
                 }} />
-                <span style={{ ...ui.bodyText, fontWeight: pwc.weight.semibold }}>
+                <span style={{ ...ui.bodyText, fontWeight: pwc.weight.medium }}>
                   {scoutProgress || "Starting document scan…"}
                 </span>
               </div>
@@ -1621,15 +1687,22 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
       {/* Statement formats are optional overrides. The automatic scout picks
           a supported format when a row is left blank. */}
-      <div style={styles.section}>
-        <span style={styles.sectionLabel}>Statement format overrides</span>
+      <DisclosureSection
+        id="statement-formats"
+        title="Statement formats"
+        summary={formatsToCheck > 0
+          ? `${formatsToCheck} to check`
+          : formatsDetected > 0 ? `${formatsDetected} set` : "Automatic"}
+        open={showFormats}
+        onToggle={() => setShowFormatsChoice(!showFormats)}
+      >
         <VariantSelector
           selections={variantSelections}
           enabledStatements={enabledStmts}
           onChange={handleVariantChange}
           filingStandard={filingStandard}
         />
-      </div>
+      </DisclosureSection>
 
       {/* Which statements to extract. The per-statement AI-model picker only
           shows inside Advanced (Phase 3). */}
@@ -1638,7 +1711,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         title="Statements to extract"
         summary={`${enabledStmts.length} of ${STATEMENT_TYPES.length} selected`}
         open={showStatements}
-        onToggle={() => setShowStatements((value) => !value)}
+        onToggle={() => setShowStatements(!showStatements)}
       >
         <div style={styles.section}>
           <StatementRunConfig
@@ -1664,74 +1737,44 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             ? "All document notes included"
             : `${enabledNotes.length} of ${NOTES_TEMPLATE_TYPES.length} selected`}
         open={showNotes}
-        onToggle={() => setShowNotes((value) => !value)}
+        onToggle={() => setShowNotes(!showNotes)}
       >
-        <div style={styles.section}>
-        {/* A saved preview may already contain a note inventory. Keep its
-            review controls beside the notes selection even when Advanced is
-            collapsed: the preview machinery is technical, but correcting a
-            missing or spurious note is part of the operator's run scope. */}
-        {infopack && Array.isArray(infopack.notes_inventory) && (() => {
-          const baseEntries = infopack.notes_inventory as NotesInventoryEntry[];
-          const entries = applyNotesInventoryOverrides(baseEntries, notesInventoryOverrides);
-          const count = entries.length;
-          const notesRequested = NOTES_TEMPLATE_TYPES.some((n) => notesEnabled[n]);
-          const hintVisible = count === 0 && notesRequested;
-          const gaps = findInventoryGaps(entries);
-          return (
-            <div
-              style={{
-                fontFamily: pwc.fontBody, fontSize: 14,
-                color: hintVisible ? pwc.error : pwc.grey800,
-                display: "flex", flexDirection: "column", gap: 4,
-              }}
-              role="status"
-            >
-              <span>Found {count} note{count === 1 ? "" : "s"} in the document.</span>
-              {hintVisible && (
-                <span>
-                  No notes were found in this document. Check that the pages are
-                  readable and include the notes, then try the preview again.
+        <div style={styles.sectionBody}>
+          <NotesRunConfig
+            enabled={notesEnabled}
+            filingStandard={filingStandard}
+            modelOverrides={notesModelOverrides}
+            availableModels={availableModels}
+            onToggleNote={handleToggleNote}
+            onModelChange={handleNotesModelChange}
+            showModels={showAdvanced && !preparationStarted}
+          />
+          {/* The notes the preparation found. Correcting a missing or spurious
+              note is part of the run scope, so it stays outside Advanced. */}
+          {infopack && Array.isArray(infopack.notes_inventory) && (() => {
+            const baseEntries = infopack.notes_inventory as NotesInventoryEntry[];
+            const entries = applyNotesInventoryOverrides(baseEntries, notesInventoryOverrides);
+            const notesRequested = NOTES_TEMPLATE_TYPES.some((n) => notesEnabled[n]);
+            if (entries.length === 0) {
+              return notesRequested ? (
+                <span role="status" style={styles.exceptionLine}>
+                  <StatusIcon symbol={STATUS_SYMBOLS.attention} />
+                  No notes found. Check that the PDF includes readable notes pages.
                 </span>
-              )}
-              {gaps.length > 0 && (
-                <span style={{ color: pwc.error }}>
-                  Note {gaps.length === 1 ? "number" : "numbers"}{" "}
-                  {gaps.join(", ")} {gaps.length === 1 ? "was" : "were"} not
-                  found. If {gaps.length === 1 ? "it exists" : "they exist"} in
-                  the document, add {gaps.length === 1 ? "it" : "them"} below so
-                  the notes agents pick {gaps.length === 1 ? "it" : "them"} up.
-                </span>
-              )}
-              {count > 0 && (
-                <NotesInventoryEditor
-                  entries={entries}
-                  onChange={(next) =>
-                    setNotesInventoryOverrides(
-                      deriveNotesInventoryOverrides(baseEntries, next),
-                    )
-                  }
-                />
-              )}
-            </div>
-          );
-        })()}
-        {preparation?.status === "succeeded" && enabledNotes.length > 0 && (
-          <div style={styles.notesNudge} role="status">
-            A notes run includes Corporate information, Accounting policies, and
-            List of notes to cover the full document. Issued capital and Related
-            party numeric templates run when selected.
-          </div>
-        )}
-        <NotesRunConfig
-          enabled={notesEnabled}
-          filingStandard={filingStandard}
-          modelOverrides={notesModelOverrides}
-          availableModels={availableModels}
-          onToggleNote={handleToggleNote}
-          onModelChange={handleNotesModelChange}
-          showModels={showAdvanced && !preparationStarted}
-        />
+              ) : null;
+            }
+            return (
+              <NotesInventoryEditor
+                entries={entries}
+                gaps={findInventoryGaps(entries)}
+                onChange={(next) =>
+                  setNotesInventoryOverrides(
+                    deriveNotesInventoryOverrides(baseEntries, next),
+                  )
+                }
+              />
+            );
+          })()}
         </div>
       </DisclosureSection>
 

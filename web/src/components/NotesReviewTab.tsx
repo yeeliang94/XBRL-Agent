@@ -759,7 +759,7 @@ export function NotesReviewTab({
               <h2 style={{ ...ui.sectionTitle, margin: 0 }}>mTool worksheets</h2>
             </div>
             <div aria-label="Worksheet and source note list" role="region" style={styles.noteRailBody}>
-            <input type="search" aria-label="Search all note fields" placeholder="Find a field, including empty fields" value={noteSearch}
+            <input type="search" aria-label="Search all note fields" placeholder="Search fields" value={noteSearch}
               onChange={(event) => setNoteSearch(event.target.value)} style={styles.noteRailSearch} />
                 <nav style={{ display: "flex", flexDirection: "column", gap: 4 }} aria-label="Notes sheet navigator">
                   {(sheets ?? []).map((sheet) => {
@@ -784,8 +784,8 @@ export function NotesReviewTab({
                           setActive((current) => ({ sheet: sheet.sheet, key: current.key + 1 }));
                         }}
                       >
-                        <span style={{ minWidth: 0 }}>{label} · {notesSheetDisplayName(sheet.sheet)}</span>
-                        {selected && <ChevronRight size={16} style={ui.reviewSelectionMarker} />}
+                        {/* The sheet number stays in the accessible name only. */}
+                        <span style={{ minWidth: 0 }}>{notesSheetDisplayName(sheet.sheet)}</span>
                       </button>
                     );
                   })}
@@ -797,7 +797,6 @@ export function NotesReviewTab({
                   style={{ ...styles.workspaceSheetButton, ...(activeCellKey === key ? ui.reviewSelection : {}) }}
                   onClick={() => { setHideEmptyFields(false); setOnlyMissedFields(false); setActive((current) => ({ sheet: sheet.sheet, key: current.key + 1 })); setFocusRow(cell.row); handleWorkspaceCellActivate(sheet.sheet, cell.row); reportCellPages(cell.source_pages, onActiveCellPages); }}>
                   <span style={{ minWidth: 0 }}>{cell.label}{isBlankHtml(cell.html) && cell.kind !== "numeric" ? " · Empty" : ""}</span>
-                  {activeCellKey === key && <ChevronRight size={16} style={ui.reviewSelectionMarker} />}
                 </button>
               ))}
             </nav>}
@@ -867,7 +866,6 @@ export function NotesReviewTab({
                         {statusLabel && <span style={styles.noteRailDestination}>{statusLabel}</span>}
                       </span>
                       <span style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      {selected && <ChevronRight size={16} style={ui.reviewSelectionMarker} />}
                       {needsReview && (
                         <span style={styles.noteRailAttention} aria-label="Needs review">!</span>
                       )}
@@ -906,7 +904,6 @@ export function NotesReviewTab({
                                 </>
                               )}
                             </span>
-                            {selected && selectedSubnoteRef === sub.subnote_ref && <ChevronRight size={16} style={ui.reviewSelectionMarker} />}
                           </button>
                         ))}
                         {selected && selectedSubnoteRef && childDestinations.length === 0 && (
@@ -935,7 +932,6 @@ export function NotesReviewTab({
                             title={`${placement.row_label || "Open placed field"} · ${notesSheetDisplayName(placement.sheet)}`}
                           >
                             <span style={{ minWidth: 0 }}>{placement.row_label || "Open placed field"}</span>
-                            {activeCellKey === `${placement.sheet}:${placement.row}` && <ChevronRight size={16} style={ui.reviewSelectionMarker} />}
                           </button>
                         ))}
                       </div>
@@ -1500,7 +1496,7 @@ function HumanNoteCell({
       <div style={{ ...styles.humanNoteStatusRow, minHeight: blank && !selected ? 0 : 34, padding: selected ? "0 12px" : "12px", boxSizing: "content-box" }}>
         {marker && (
           <span role="img" aria-label={markerLabel} title={markerLabel}
-            style={{ fontWeight: 680, color: status === "missed" ? pwc.warning : pwc.grey500 }}>
+            style={{ fontWeight: 500, color: status === "missed" ? pwc.warning : pwc.grey500 }}>
             {marker}
           </span>
         )}
@@ -2306,6 +2302,7 @@ function NumericCategoryRow({
         ...styles.numericTableRow,
         gridTemplateColumns,
         minWidth: gridMinWidth,
+        ...(selected ? { background: pwc.grey100 } : {}),
       }}
       onFocusCapture={() => {
         onActivate?.();
@@ -2319,7 +2316,6 @@ function NumericCategoryRow({
       <div role="rowheader" style={styles.cellLeft}>
         <div style={{ ...styles.cellLabel, display: "flex", alignItems: "center", gap: 8 }}>
           <span>{cell.label}</span>
-          {selected && <ChevronRight size={16} style={ui.reviewSelectionMarker} />}
         </div>
         <SaveStatusBadge status={status} />
       </div>
@@ -2578,7 +2574,8 @@ const styles = {
     // heading text starts exactly where the sub-note numbers start.
     gridTemplateColumns: "20px minmax(0, 1fr) 16px",
     gap: 8,
-    alignItems: "center",
+    // Numbers sit on the first line of a wrapped title, not its middle.
+    alignItems: "start",
     width: "100%",
     minHeight: 40,
     padding: "6px 8px",
@@ -2597,6 +2594,7 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontVariantNumeric: "tabular-nums",
     fontSize: 12,
+    lineHeight: "21px",
     color: pwc.grey500,
     textAlign: "left" as const,
   } as React.CSSProperties,
@@ -2628,13 +2626,13 @@ const styles = {
     color: pwc.orange700,
     background: pwc.orange50,
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
   } as React.CSSProperties,
   subnoteSummary: {
     padding: `2px 6px 2px ${NOTE_RAIL_TITLE_INSET}px`,
     color: pwc.orange700,
     fontSize: 14,
-    fontWeight: 680,
+    fontWeight: 500,
   } as React.CSSProperties,
   subnoteList: {
     display: "flex",
@@ -2678,7 +2676,7 @@ const styles = {
   subnoteState: {
     color: pwc.orange700,
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
     lineHeight: 1.35,
   } as React.CSSProperties,
   subnoteReason: {
@@ -2775,10 +2773,10 @@ const styles = {
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
     border: "none",
     borderRadius: pwc.radius.sm,
-    background: "transparent",
+    background: pwc.grey100,
     color: pwc.grey900,
     fontSize: 14,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
     whiteSpace: "normal" as const,
     overflowWrap: "anywhere" as const,
     textAlign: "left" as const,
@@ -2800,7 +2798,7 @@ const styles = {
     color: pwc.grey700,
     cursor: "pointer",
     listStyle: "none",
-    fontWeight: 680,
+    fontWeight: 500,
   } as React.CSSProperties,
   actionsMenuPanel: {
     position: "absolute" as const,
@@ -3001,7 +2999,7 @@ const styles = {
     gap: 4,
   } as React.CSSProperties,
   cellLabel: {
-    fontWeight: 680,
+    fontWeight: 400,
     fontSize: 14,
     color: pwc.grey900,
   } as React.CSSProperties,
@@ -3014,7 +3012,7 @@ const styles = {
     background: pwc.grey100,
     color: pwc.grey700,
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
     letterSpacing: 0.2,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
@@ -3033,7 +3031,7 @@ const styles = {
     overflow: "hidden",
   } as React.CSSProperties,
   evidenceLabel: {
-    fontWeight: 680,
+    fontWeight: 500,
     fontSize: 12,
   } as React.CSSProperties,
   evidenceText: {
@@ -3125,12 +3123,12 @@ const styles = {
   } as React.CSSProperties,
   statusBadge: {
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
   } as React.CSSProperties,
   formatAdjustedNotice: {
     padding: "2px 5px",
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
     color: pwc.grey700,
     background: pwc.grey100,
     border: `1px solid ${pwc.grey200}`,
@@ -3138,7 +3136,7 @@ const styles = {
   } as React.CSSProperties,
   copiedChip: {
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
     color: pwc.success,
   } as React.CSSProperties,
 } as const;

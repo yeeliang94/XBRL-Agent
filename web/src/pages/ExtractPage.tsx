@@ -382,13 +382,12 @@ export function ExtractPage({
   return (
     <>
       <PageHeader
-        eyebrow={state.isRunning || state.isComplete ? "Current filing" : undefined}
         title={state.hasError && !state.filename ? "Document unavailable" : state.isRunning
           ? state.filename ?? "Extraction in progress"
           : state.isComplete
             ? state.filename ?? "Extraction complete"
             : isResumedDraft
-              ? "Continue setup"
+              ? state.filename ?? "Continue setup"
             : "Add documents"}
       />
 
@@ -428,7 +427,7 @@ export function ExtractPage({
 
       {/* The upload surface stays mounted while a document is being set up. */}
       {!state.isRunning && !state.isComplete && (
-        <div id="new-extraction">
+        <div id="new-extraction" style={state.filename ? { display: "none" } : undefined}>
           <UploadPanel
             onUpload={handleUpload}
             onUploadFiles={handleUploadFiles}
@@ -603,20 +602,6 @@ export function ExtractPage({
         />
       )}
 
-      {showActivity && (state.isRunning || state.tokens) && (
-        <details style={styles.usageDisclosure}>
-          <summary style={styles.usageSummary}>
-            Technical usage details
-            <span style={styles.usageSummaryEnd}>
-              <span style={styles.usageSummaryValue}>
-                {state.tokens ? `$${state.tokens.cost_estimate.toFixed(4)}` : "Not available yet"}
-              </span>
-              <span aria-hidden="true" style={styles.usageChevron} />
-            </span>
-          </summary>
-          <TokenDashboard tokens={state.tokens} isRunning={state.isRunning} embedded />
-        </details>
-      )}
 
       {!state.isRunning && scaleConflicts.map((message) => (
         <p key={message} role="status" style={styles.partialMergeMessage}>
@@ -1000,6 +985,17 @@ export function ActiveTabPanel({
         isRunning={running}
         status={activeAgent?.status}
         streamKey={`${state.activeTab ?? "run"}:${notes12SubId ?? "all"}`}
+        technical={
+          <>
+            <AgentTimeline events={events} toolTimeline={toolTimeline}
+              reasoningBlocks={reasoningBlocks} isRunning={running} />
+            {(state.isRunning || state.tokens) && (
+              <div style={{ marginTop: pwc.space.lg }}>
+                <TokenDashboard tokens={state.tokens} isRunning={state.isRunning} embedded />
+              </div>
+            )}
+          </>
+        }
       />
     </div>
   );
@@ -1030,7 +1026,7 @@ const styles = {
   runEyebrow: {
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
     color: pwc.orange700,
     marginBottom: pwc.space.xs,
   } as const,
@@ -1104,45 +1100,9 @@ const styles = {
     color: pwc.grey500,
     whiteSpace: "nowrap" as const,
   } as const,
-  usageDisclosure: {
-    marginTop: pwc.space.lg,
-    borderTop: `1px solid ${pwc.grey200}`,
-  } as const,
-  usageSummary: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: pwc.space.md,
-    paddingTop: pwc.space.md,
-    cursor: "pointer",
-    fontFamily: pwc.fontHeading,
-    fontSize: 13,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey700,
-  } as const,
-  usageSummaryValue: {
-    fontFamily: pwc.fontBody,
-    fontVariantNumeric: "tabular-nums",
-    fontSize: 12,
-    fontWeight: pwc.weight.regular,
-    color: pwc.grey900,
-  } as const,
-  usageSummaryEnd: {
-    marginLeft: "auto",
-    display: "flex",
-    alignItems: "center",
-    gap: pwc.space.sm,
-  } as const,
-  usageChevron: {
-    width: 0,
-    height: 0,
-    borderLeft: "4px solid transparent",
-    borderRight: "4px solid transparent",
-    borderTop: `5px solid ${pwc.grey700}`,
-  } as const,
+  // Not sticky: the activity list grows with the page, and a pinned panel
+  // taller than the window would hide its newest updates.
   activityCardAttached: {
-    position: "sticky",
-    top: 88,
     background: "transparent",
     border: "none",
     borderLeft: `1px solid ${pwc.grey100}`,
@@ -1179,14 +1139,14 @@ const styles = {
   activityTitle: {
     fontFamily: pwc.fontHeading,
     fontSize: 16,
-    fontWeight: 680,
+    fontWeight: 600,
     color: pwc.grey900,
     whiteSpace: "nowrap" as const,
   } as const,
   activityEyebrow: {
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
     color: pwc.grey700,
     letterSpacing: "0.02em",
     marginBottom: 2,
@@ -1210,12 +1170,13 @@ const styles = {
   // powers `rerunBtn`. Spread base + variant inline at use sites.
   toolbarBtnBase: {
     fontFamily: pwc.fontHeading,
-    fontSize: 12,
-    fontWeight: 680,
-    borderRadius: pwc.radius.sm,
-    padding: `2px ${pwc.space.sm}px`,
+    fontSize: 14,
+    fontWeight: 500,
+    borderRadius: pwc.radius.md,
+    minHeight: 40,
+    padding: "0 12px",
     cursor: "pointer",
-    lineHeight: 1.4,
+    lineHeight: 1.2,
   } as const,
   destructiveBtn: {
     color: pwc.error,
@@ -1235,7 +1196,7 @@ const styles = {
   } as const,
   errorTitle: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 680,
+    fontWeight: 600,
     color: pwc.errorText,
     fontSize: 14,
     margin: 0,
@@ -1267,7 +1228,7 @@ const styles = {
   } as const,
   partialMergeTitle: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 680,
+    fontWeight: 600,
     color: pwc.warningText,
     fontSize: 14,
     margin: 0,

@@ -194,7 +194,7 @@ export function HistoryList({
                         Non-default denomination only — "thousands" (RM '000)
                         is the common case and implied. */}
                     {run.denomination && run.denomination !== "thousands" && (
-                      <span style={styles.inlineMeta}>
+                      <span style={styles.inlineMeta} title={`Amounts in ${denominationLabel(run.denomination)}`}>
                         {denominationLabel(run.denomination)}
                       </span>
                     )}
@@ -314,7 +314,7 @@ const styles = {
   } as React.CSSProperties,
   filename: {
     fontFamily: pwc.fontBody,
-    fontWeight: pwc.weight.medium,
+    fontWeight: pwc.weight.regular,
     color: pwc.grey900,
     // Rendered as an <a> for middle-click / open-in-new-tab support, but it
     // should read as a filename, not a blue underlined link.
@@ -344,7 +344,7 @@ const styles = {
   } as React.CSSProperties,
   actionLink: {
     fontFamily: pwc.fontBody,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: pwc.weight.medium,
     color: tokens.color.action.primary,
     textDecoration: "none",

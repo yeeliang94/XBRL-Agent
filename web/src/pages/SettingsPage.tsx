@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { PageHeader } from "../components/PageHeader";
+import { ArrowForward } from "../components/iconGlyphs";
 import { getSettings, updateSettings, testConnection } from "../lib/api";
 import { type SharedSettingsSection, GeneralSettingsForm } from "../components/GeneralSettingsForm";
 import { AccountTab } from "../components/AccountTab";
@@ -36,7 +37,7 @@ type TabKey = SharedSettingsSection | "instructions" | "notes" | "account" | "us
 export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
   const tabs: { key: TabKey; label: string }[] = [
     { key: "general", label: "General" },
-    { key: "instructions", label: "Agent instructions" },
+    { key: "instructions", label: "Team guidance" },
     { key: "extraction", label: "Extraction" },
     { key: "advanced", label: "Advanced" },
     { key: "notes", label: "Notes appearance" },
@@ -80,9 +81,9 @@ export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
   return (
     <div className="responsive-page settings-page" style={styles.container}>
       <PageHeader title="Settings" />
-      {isAdmin && onFieldLabels && <button type="button" style={{ ...ui.buttonGhost, alignSelf: "flex-start" }} onClick={onFieldLabels}>Field labels</button>}
 
       <div className="settings-section-layout" style={styles.layout}>
+      <div className="settings-section-rail" style={styles.rail}>
       <div
         ref={tabBarRef}
         style={styles.tabBar}
@@ -117,6 +118,14 @@ export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
           );
         })}
       </div>
+      {/* Field labels is its own page; it sits with the sections so every
+          shared configuration surface is found in one place. */}
+      {isAdmin && onFieldLabels && (
+        <button type="button" className="pwc-tab" style={styles.tab} onClick={onFieldLabels}>
+          Field labels<ArrowForward size={16} style={{ marginLeft: "auto", color: pwc.grey500 }} />
+        </button>
+      )}
+      </div>
 
       <div style={{ minWidth: 0 }}>
       {sharedTab(activeTab) && (
@@ -147,12 +156,14 @@ export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
 
       {activeTab === "account" && (
         <section className="pwc-view-enter" style={styles.section} id="settings-panel-account" aria-labelledby="settings-tab-account" role="tabpanel">
+          <h2 style={styles.panelTitle}>Account</h2>
           <AccountTab />
         </section>
       )}
 
       {activeTab === "users" && isAdmin && (
         <section className="pwc-view-enter" style={styles.section} id="settings-panel-users" aria-labelledby="settings-tab-users" role="tabpanel">
+          <h2 style={styles.panelTitle}>Users</h2>
           <UsersTab currentEmail={currentEmail} />
         </section>
       )}
@@ -171,6 +182,8 @@ const styles = {
     gap: pwc.space.xl,
   } as React.CSSProperties,
   layout: { display: "grid", gridTemplateColumns: "190px minmax(0, 1fr)", gap: 32, alignItems: "start" } as React.CSSProperties,
+  rail: { display: "flex", flexDirection: "column" as const, gap: 4, minWidth: 0 } as React.CSSProperties,
+  panelTitle: { ...ui.sectionTitle, marginBottom: pwc.space.lg } as React.CSSProperties,
   tabBar: {
     display: "flex",
     flexDirection: "column" as const,

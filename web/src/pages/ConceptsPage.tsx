@@ -9,6 +9,7 @@ import { NotesReviewTab } from "../components/NotesReviewTab";
 import { ResizableDivider } from "../components/ResizableDivider";
 import { ReconciliationQueue } from "../components/ReconciliationQueue";
 import { PdfSourcePane } from "../components/PdfSourcePane";
+import { fetchPdfPageCount } from "../lib/api";
 import {
   figureSheetDisplayName,
   templateDisplayName,
@@ -385,6 +386,18 @@ export function ConceptsPage({
   const workspaceRef = useRef<HTMLDivElement>(null);
   const pdfMaxWidthRef = useRef(720);
   const [pdfCollapsed, setPdfCollapsed] = useState(initialWorkspace.current.pdfCollapsed ?? false);
+  // A run without a stored PDF folds the source column to its rail so the
+  // figures and notes get the width; opening the rail still explains why.
+  const [pdfMissing, setPdfMissing] = useState(false);
+  const [showMissingPdf, setShowMissingPdf] = useState(false);
+  useEffect(() => {
+    if (runId == null) return;
+    let cancelled = false;
+    void fetchPdfPageCount(runId).then((count) => {
+      if (!cancelled) setPdfMissing(count === null);
+    });
+    return () => { cancelled = true; };
+  }, [runId]);
   // Whether the row carrying the CURRENT selection may scroll itself into
   // view. True only for intentional jumps (row click, reconciliation
   // conflict, cross-check / coverage focus). The initial auto-selection that
@@ -1125,7 +1138,7 @@ export function ConceptsPage({
           )))}
         </nav>
       </aside>}
-      <section aria-label="Review results" style={styles.resultsCol}>
+      <section aria-label="Review results" style={{ ...styles.resultsCol, ...(!notesActive && !railFolded ? styles.resultsColDivided : {}) }}>
         {loadError && (
           <div style={styles.errorBanner}>
             Failed to load concepts: {loadError}
@@ -1342,11 +1355,11 @@ export function ConceptsPage({
           source page sit side by side. The resize handle is on the PDF's LEFT
           edge now, so a rightward drag shrinks it — delta sign is flipped
           relative to the Menu handle on the far left. */}
-      {humanActive ? null : pdfCollapsed ? (
+      {humanActive ? null : pdfCollapsed || (pdfMissing && !showMissingPdf) ? (
         <CollapsedRail
           label="Source PDF"
           testId="pdf"
-          onExpand={() => setPdfCollapsed(false)}
+          onExpand={() => { setPdfCollapsed(false); setShowMissingPdf(true); }}
         />
       ) : (
         <>
@@ -1748,7 +1761,7 @@ function ConceptMatrixGrid({
           display: "grid",
           gridTemplateColumns: gridCols,
           background: pwc.grey100,
-          fontWeight: 680,
+          fontWeight: 400,
           fontSize: 14,
           borderBottom: `1px solid ${pwc.grey200}`,
         }}
@@ -1803,7 +1816,7 @@ function ConceptMatrixGrid({
                 background: pwc.grey50,
                 fontFamily: pwc.fontBody,
                 fontSize: 14,
-                fontWeight: 680,
+                fontWeight: 500,
                 borderBottom: `1px solid ${pwc.grey100}`,
               }}
             >
@@ -2589,6 +2602,12 @@ const styles = {
     flexDirection: "column" as const,
     paddingRight: pwc.space.lg,
   } as React.CSSProperties,
+  // Same one-pixel Grey 100 rule as the Source PDF divider, so both edges of
+  // the figures table look alike.
+  resultsColDivided: {
+    borderLeft: `1px solid ${pwc.grey100}`,
+    paddingLeft: pwc.space.lg,
+  } as React.CSSProperties,
   // Every review column opens with a header band of this height, so the
   // column titles and the Rows filter share one line and the search box,
   // table and PDF card below them all start at the same height.
@@ -2599,7 +2618,7 @@ const styles = {
   columnHeaderTitle: {
     fontFamily: pwc.fontHeading,
     fontSize: 16,
-    fontWeight: 680,
+    fontWeight: 600,
     color: tokens.color.text.primary,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
@@ -2609,7 +2628,7 @@ const styles = {
     minHeight: 34,
     padding: `0 ${pwc.space.sm}px`,
     fontSize: 13,
-    fontWeight: 650,
+    fontWeight: 500,
     color: tokens.color.text.secondary,
   } as React.CSSProperties,
   collapsedRail: {
@@ -2631,14 +2650,14 @@ const styles = {
   collapsedRailChevron: {
     fontSize: 14,
     lineHeight: 1,
-    fontWeight: 680,
+    fontWeight: 500,
   } as React.CSSProperties,
   collapsedRailLabel: {
     writingMode: "vertical-rl" as const,
     transform: "rotate(180deg)",
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
     letterSpacing: 0,
   } as React.CSSProperties,
   panelCard: {
@@ -2667,7 +2686,7 @@ const styles = {
   panelHeaderTitle: {
     fontFamily: pwc.fontHeading,
     fontSize: 14,
-    fontWeight: 680,
+    fontWeight: 600,
     color: tokens.color.text.primary,
   } as React.CSSProperties,
   panelChevron: {
@@ -2759,7 +2778,7 @@ const styles = {
     color: pwc.orange500,
     fontFamily: pwc.fontBody,
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
     cursor: "pointer",
   } as React.CSSProperties,
   attentionPanel: {
@@ -2824,7 +2843,7 @@ const styles = {
     height: 32,
   } as React.CSSProperties,
   humanMarker: {
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
     flex: "0 0 auto",
   } as React.CSSProperties,
   humanNumber: {
@@ -2885,7 +2904,7 @@ const styles = {
   evidenceLabel: {
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 650,
+    fontWeight: 500,
     color: pwc.grey500,
     marginBottom: 2,
   } as React.CSSProperties,
@@ -3014,7 +3033,7 @@ const styles = {
     color: pwc.grey500,
     fontFamily: pwc.fontHeading,
     fontSize: 14,
-    fontWeight: 680,
+    fontWeight: 400,
     borderLeft: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   matrixMovementCell: {

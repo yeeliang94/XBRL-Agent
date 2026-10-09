@@ -271,9 +271,9 @@ describe("RunDetailView", () => {
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
     );
     expect(screen.getByText("FINCO-Audited-2021.pdf")).toBeTruthy();
-    // "Complete" appears in both the overall status badge and the SOFP
-    // agent-row status; assert at least one is present.
-    expect(screen.getAllByText(/^complete$/i).length).toBeGreaterThan(0);
+    // The title stands alone; the run's outcome is the Overview's Workbook line.
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("FINCO-Audited-2021.pdf");
+    expect(screen.getByText("Workbook")).toBeInTheDocument();
   });
 
   test("per-agent duration sums turn compute time, not the shared batch window", () => {
@@ -529,7 +529,7 @@ describe("RunDetailView", () => {
     clickRunTab(/^activity$/i);
     const detail = screen.getByTestId("run-detail-agent");
     expect(within(detail).queryByText(/2 turns/)).toBeNull();
-    fireEvent.click(within(detail).getByText("Technical activity"));
+    fireEvent.click(within(detail).getByRole("checkbox", { name: "Technical detail" }));
     expect(within(detail).getByText(/2 turns/)).toBeInTheDocument();
   });
 
@@ -758,7 +758,9 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
-    expect(screen.getAllByText("Needs review").length).toBeGreaterThan(0);
+    // The raw enum never reaches the page; the outcome is the Workbook line.
+    expect(screen.getByText("Workbook")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("completed_with_errors");
   });
 
   test("Delete button does NOT fire onDelete when the dialog is cancelled", () => {
@@ -854,7 +856,8 @@ describe("RunDetailView", () => {
     clickRunTab(/^activity$/i);
     expect(activityRows()[0]).toHaveTextContent("Complete");
     expect(activityRows()[0]).not.toHaveTextContent("Working");
-    expect(screen.getByText("Finished its assigned work")).toBeVisible();
+    // Completion is carried by the Complete status; no repeated sentence.
+    expect(screen.queryByText("Finished its assigned work")).toBeNull();
     expect(screen.queryByText("Live activity")).toBeNull();
   });
 
@@ -894,12 +897,11 @@ describe("RunDetailView", () => {
     expect(panel).toHaveAttribute("aria-labelledby", selected.id);
     expect(panel).toHaveAccessibleName();
     expect(screen.getAllByTestId("run-detail-agent")).toHaveLength(1);
-    const technicalActivity = screen.getByText("Technical activity").closest("details");
-    expect(technicalActivity).not.toHaveAttribute("open");
-    expect(within(technicalActivity!).queryByTestId("tool-card")).toBeNull();
-    fireEvent.click(screen.getByText("Technical activity"));
-    expect(technicalActivity).toHaveAttribute("open");
-    expect(within(technicalActivity!).getByTestId("tool-card")).toBeInTheDocument();
+    // One panel: the plain stream by default, tool cards behind the checkbox.
+    expect(screen.queryByTestId("tool-card")).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Technical detail" }));
+    expect(within(screen.getByTestId("activity-technical")).getByTestId("tool-card")).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Activity updates" })).toBeNull();
     fireEvent.click(activityRows()[1]);
     const nextTab = activityRows()[1];
     const nextPanel = screen.getByTestId("run-detail-agent");
@@ -969,7 +971,7 @@ describe("RunDetailView", () => {
       />,
     );
     clickRunTab(/^activity$/i);
-    fireEvent.click(screen.getByText("Technical activity"));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Technical detail" }));
     // AgentTimeline's own empty-state copy — proves the timeline is
     // mounted even when the event list is empty. History runs aren't
     // "running", so the copy reflects no recorded activity rather than the
@@ -1039,8 +1041,8 @@ describe("RunDetailView", () => {
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
     clickRunTab(/^activity$/i);
     const agentList = screen.getByRole("tablist", { name: "Run workstreams" });
-    expect(within(agentList).getByText("Notes 10: Corp Info")).toBeTruthy();
-    expect(within(agentList).getByText("Notes 12: List of Notes")).toBeTruthy();
+    expect(within(agentList).getByText("Corporate information")).toBeTruthy();
+    expect(within(agentList).getByText("List of notes")).toBeTruthy();
     // Ensure the raw enum isn't leaking through anywhere.
     expect(screen.queryByText("NOTES_CORP_INFO")).toBeNull();
   });
@@ -1064,7 +1066,7 @@ describe("RunDetailView", () => {
     expect(within(panel).getByText("Notes")).toBeTruthy();
     // values rendered as the friendly labels, joined
     expect(
-      within(panel).getByText(/Notes 10: Corp Info.*Notes 12: List of Notes/),
+      within(panel).getByText(/Corporate information.*List of notes/),
     ).toBeTruthy();
   });
 
@@ -1157,7 +1159,7 @@ describe("RunDetailView", () => {
       <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
     );
     clickRunTab(/^activity$/i);
-    fireEvent.click(screen.getByText("Technical activity"));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Technical detail" }));
 
     // Sub-tab bar appears: "All" chip + one chip per sub-agent (2). Scope to
     // the Sheet-12 sub-tab bar so the run-detail top tabs aren't counted.
@@ -1197,7 +1199,7 @@ describe("RunDetailView", () => {
       <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
     );
     clickRunTab(/^activity$/i);
-    fireEvent.click(screen.getByText("Technical activity"));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Technical detail" }));
 
     // No sub-tab bar rendered for this agent.
     expect(screen.queryByRole("tablist", { name: /sheet-12/i })).not.toBeInTheDocument();
@@ -1825,7 +1827,9 @@ describe("RunDetailView", () => {
     render(<RunDetailView detail={makeDetail({ status: "completed_with_errors", cross_checks: [], agents: [makeAgent({ status: "completed_with_errors" })] })}
       onDelete={() => {}} onDownload={() => {}} />);
     const items = screen.getByTestId("items-to-check");
-    expect(items).toHaveTextContent("Extraction or review finished with issues.");
+    // The issue names the workstream rather than a generic line.
+    expect(items).toHaveTextContent(/finished with issues\./);
+    expect(items).not.toHaveTextContent("Extraction or review");
     expect(screen.queryByText(/consistency check didn.t pass/i)).toBeNull();
     expect(screen.queryByRole("button", { name: "View cross-checks" })).toBeNull();
     fireEvent.click(within(items).getByRole("button", { name: "View activity" }));
@@ -1853,10 +1857,9 @@ describe("RunDetailView", () => {
     expect(screen.queryByText(/partial workbook was preserved/i)).toBeNull();
     expect(screen.getByText(/Saved figures may be incomplete/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Prepare investigation draft" }));
-    const confirmation = screen.getByRole("dialog");
-    expect(confirmation).toHaveTextContent("choose an mTool template to fill with the saved figures");
-    fireEvent.click(within(confirmation).getByRole("button", { name: "Choose mTool template" }));
-    expect(screen.getByRole("dialog", { name: "Prepare mTool draft" })).toBeInTheDocument();
+    // One dialog: the explanation sits at the top of the preparation dialog.
+    const dialog = screen.getByRole("dialog", { name: "Prepare mTool draft" });
+    expect(within(dialog).getByRole("note")).toHaveTextContent("for investigation only");
   });
 
   test("flagged run confirms before downloading an investigation draft", () => {
@@ -1869,11 +1872,9 @@ describe("RunDetailView", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /prepare mtool draft/i }));
-    expect(screen.getByRole("dialog").textContent).toMatch(/not ready to file/i);
+    const dialog = screen.getByRole("dialog", { name: "Prepare mTool draft" });
+    expect(within(dialog).getByRole("note").textContent).toMatch(/not ready to file/i);
     expect(onDownload).not.toHaveBeenCalled();
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^choose mtool template$/i }));
-    expect(onDownload).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog", { name: "Prepare mTool draft" })).toBeTruthy();
   });
 
   test("clean completed run shows no warning banner and primary workbook preparation", () => {
@@ -2028,19 +2029,13 @@ describe("RunDetailView", () => {
     render(
       <RunDetailView detail={makeDetail({ status: "completed" })} onDelete={() => {}} onDownload={() => {}} />,
     );
-    // Monochrome status: aria-hidden ✓ in grey700 next to the explicit label.
-    const label = screen.getAllByText("Complete")[0];
-    const symbol = label.parentElement!.querySelector('[aria-hidden="true"]');
-    expect(symbol?.getAttribute("data-status-icon")).toBe("success");
-    expect((symbol as HTMLElement).style.color).toBe("rgb(0, 0, 0)");
-
     // Shared tab treatment: dark active text and a quiet selected surface.
     const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
     const active = within(tablist)
       .getAllByRole("tab")
       .find((t) => t.getAttribute("aria-selected") === "true") as HTMLElement;
     expect(active.style.color).toBe("rgb(0, 0, 0)");
-    expect(active.style.background).toBe("rgb(245, 247, 248)");
+    expect(active.style.background).toBe("rgb(238, 239, 241)");
     expect(active.style.borderBottom).toBe("");
   });
 });
@@ -2159,15 +2154,15 @@ test("failed runs without agents or output can export diagnostics and retry a fa
     expect(screen.queryByRole("button", { name: "Export diagnostics" })).toBeNull();
     clickRunTab(/^activity$/i);
     expect(screen.getByRole("button", { name: "Export diagnostics" })).toBeEnabled();
-    expect(screen.getByText(/May contain financial content/)).toBeVisible();
+    // The privacy note is the button's hover text rather than a sentence.
+    expect(screen.getByRole("button", { name: "Export diagnostics" })).toHaveAttribute("title", expect.stringMatching(/May contain financial content/));
     fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));
-    const activity = screen.getByTestId("run-detail-agents");
-    await waitFor(() => expect(within(activity).getByRole("alert")).toBeVisible());
+    await waitFor(() => expect(screen.getByTestId("diagnostics-error")).toBeVisible());
     expect(screen.getByRole("button", { name: "Export diagnostics" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));
     await waitFor(() => expect(save).toHaveBeenCalledOnce());
     expect(exportRequests).toBe(2);
-    expect(within(activity).queryByRole("alert")).toBeNull();
+    expect(screen.queryByTestId("diagnostics-error")).toBeNull();
   } finally {
     cleanup();
     fetchMock.mockRestore();

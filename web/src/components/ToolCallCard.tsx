@@ -1,14 +1,12 @@
 import React, { useState } from "react";
 import type { ToolTimelineEntry } from "../lib/types";
 import { pwc } from "../lib/theme";
-import { ui } from "../lib/uiStyles";
 import {
   humanToolName,
   argsPreview,
   resultSummary,
   parseFillFields,
   type FillField,
-  type ResultTone,
 } from "../lib/toolLabels";
 
 interface Props {
@@ -33,8 +31,8 @@ function getGlyphState(entry: ToolTimelineEntry): GlyphState {
 // Per-state glyph chrome. `base` is shared; the table supplies the status-
 // specific overlay (tint + animation). TS requires every GlyphState key.
 const GLYPH_BASE: React.CSSProperties = {
-  width: 12,
-  height: 12,
+  width: 7,
+  height: 7,
   borderRadius: "50%",
   display: "inline-flex",
   alignItems: "center",
@@ -43,21 +41,19 @@ const GLYPH_BASE: React.CSSProperties = {
 };
 
 const GLYPH_STYLES: Record<GlyphState, React.CSSProperties> = {
+  // Same small dots as the plain activity list: orange only for live work
+  // or a failure, grey otherwise.
   active: {
-    background: pwc.orange400,
-    boxShadow: `0 0 0 3px ${pwc.orange50}`,
+    background: pwc.orange500,
   },
   done: {
-    background: pwc.success,
-    boxShadow: `0 0 0 3px ${pwc.successBg}`,
+    background: pwc.grey300,
   },
   failed: {
-    background: pwc.error,
-    boxShadow: `0 0 0 3px ${pwc.errorBg}`,
+    background: pwc.orange500,
   },
   cancelled: {
-    background: pwc.grey500,
-    boxShadow: `0 0 0 3px ${pwc.grey50}`,
+    background: pwc.grey400,
   },
 };
 
@@ -82,28 +78,20 @@ function fieldDisplayLabel(f: FillField): string {
 
 // Per-state timeline-row chrome. The surrounding workstream pane is the one
 // visual container, so individual tool calls use dividers instead of cards.
-const CARD_PADDING = "12px 16px";
+const CARD_PADDING = "10px 0";
 
 const CARD_BASE: React.CSSProperties = {
   borderRadius: 0,
   padding: CARD_PADDING,
   border: "none",
-  borderBottom: `1px solid ${pwc.grey200}`,
+  borderTop: `1px solid ${pwc.grey100}`,
 };
 
 const CARD_STYLES: Record<GlyphState, React.CSSProperties> = {
-  active: {
-    background: pwc.orange50,
-  },
-  done: {
-    background: pwc.white,
-  },
-  failed: {
-    background: pwc.orange50,
-  },
-  cancelled: {
-    background: pwc.grey50,
-  },
+  active: { background: pwc.white },
+  done: { background: pwc.white },
+  failed: { background: pwc.white },
+  cancelled: { background: pwc.white },
 };
 
 function cardStyleFor(state: GlyphState): React.CSSProperties {
@@ -125,19 +113,19 @@ const styles = {
   headerLeft: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: pwc.space.md,
     minWidth: 0, // let the truncated args preview shrink
   } as React.CSSProperties,
   toolName: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: pwc.fontBody,
     fontSize: 14,
-    fontWeight: 680,
+    fontWeight: pwc.weight.regular,
     color: pwc.grey900,
   } as React.CSSProperties,
   argsSummary: {
-    fontFamily: pwc.fontMono,
-    fontSize: 12,
-    color: pwc.grey500,
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    color: pwc.grey700,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap" as const,
@@ -145,15 +133,19 @@ const styles = {
   } as React.CSSProperties,
   // Spread AFTER ui.badge: keep the mono numerals/labels, let the outline-pill
   // primitive own the geometry (pill radius, dot gap, neutral grey label).
+  // Plain secondary text at the row end — no pill.
   badge: {
-    fontFamily: pwc.fontMono,
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    color: pwc.grey700,
+    fontVariantNumeric: "tabular-nums",
     flexShrink: 0,
+    whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
+  // Expanded detail aligns with the row text (7px dot + 12px gap).
   detail: {
     marginTop: pwc.space.sm,
-    padding: pwc.space.md,
-    background: pwc.grey50,
-    borderTop: `1px solid ${pwc.grey200}`,
+    paddingLeft: 19,
   } as React.CSSProperties,
   detailLabel: {
     fontFamily: pwc.fontHeading,
@@ -170,14 +162,6 @@ const styles = {
   } as React.CSSProperties,
 };
 
-// Outline-pill hue per tone (design-system: status is a border + dot accent,
-// never a fill). The label stays neutral grey; the hue rides the border/dot.
-const BADGE_TONE: Record<ResultTone, string> = {
-  success: pwc.success,
-  warn: pwc.warning,
-};
-
-const NEUTRAL_BADGE_HUE = pwc.grey500;
 
 /** Render expanded arguments — structured for known tools, JSON for unknown. */
 function renderArgs(toolName: string, args: Record<string, unknown>): React.ReactNode {
@@ -188,8 +172,8 @@ function renderArgs(toolName: string, args: Record<string, unknown>): React.Reac
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: pwc.fontMono }}>
           <thead>
             <tr>
-              <th style={{ textAlign: "left", padding: "4px 8px", borderBottom: `1px solid ${pwc.grey200}`, fontWeight: 680 }}>Label</th>
-              <th style={{ textAlign: "right", padding: "4px 8px", borderBottom: `1px solid ${pwc.grey200}`, fontWeight: 680 }}>Value</th>
+              <th style={{ textAlign: "left", padding: "4px 8px", borderBottom: `1px solid ${pwc.grey200}`, fontWeight: 400 }}>Label</th>
+              <th style={{ textAlign: "right", padding: "4px 8px", borderBottom: `1px solid ${pwc.grey200}`, fontWeight: 400 }}>Value</th>
             </tr>
           </thead>
           <tbody>
@@ -251,20 +235,13 @@ function ToolCallCardImpl({ entry }: Props) {
   if (!isActive) {
     const rs = entry.result_summary ? resultSummary(entry.tool_name, entry.result_summary) : null;
     if (rs) {
-      const hue = BADGE_TONE[rs.tone];
       badge = (
-        <span style={{ ...ui.badge, ...styles.badge, borderColor: hue }}>
-          <span aria-hidden="true" style={ui.badgeDot(hue)} />
+        <span style={{ ...styles.badge, ...(rs.tone === "warn" ? { color: pwc.orange700 } : {}) }}>
           {rs.text}
         </span>
       );
     } else if (entry.duration_ms != null) {
-      badge = (
-        <span style={{ ...ui.badge, ...styles.badge, borderColor: pwc.grey300 }}>
-          <span aria-hidden="true" style={ui.badgeDot(NEUTRAL_BADGE_HUE)} />
-          {entry.duration_ms}ms
-        </span>
-      );
+      badge = <span style={styles.badge}>{entry.duration_ms} ms</span>;
     }
   }
 
