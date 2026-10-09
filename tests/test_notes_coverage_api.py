@@ -137,3 +137,35 @@ def test_not_reviewed_banner_and_subnote_missing_unresolved(client_and_run):
     assert body["banner"] == "not_reviewed"
     # A confirmed-missing sub-ref makes the placed parent unresolved.
     assert body["summary"]["unresolved"] == 1
+
+
+@pytest.mark.parametrize("prepared", [False, True])
+def test_unresolved_parent_recovers_live_destination_without_clearing_review(client_and_run, prepared):
+    import server as server_module
+    client, run_id = client_and_run
+    _persist(server_module, run_id, [
+        {"note_num": 4, "status": "missing", "title": "Revenue"},
+    ])
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet="Notes-Listofnotes",
+                               row=20, label="Revenue", html="<p>Revenue</p>")
+        if prepared:
+            from notes import source_repository as srepo
+            from notes.source_models import SourceBlock, SourceNote
+            gen = srepo.begin_generation(conn, run_id, input_kind="prepared_document")
+            srepo.write_blocks(conn, gen, [SourceBlock(block_id="b4", block_kind="paragraph",
+                reading_order=0, canonical_html="<p>Revenue</p>", source_note_id="n4")])
+            srepo.write_notes(conn, gen, [SourceNote(source_note_id="n4", top_note_num="4")])
+            srepo.activate_generation(conn, gen)
+            srepo.set_cell_placements(conn, run_id, gen, "Notes-Listofnotes", 20, ["b4"])
+        else:
+            repo.upsert_notes_provenance(conn, run_id=run_id, sheet="Notes-Listofnotes",
+                                        row=20, row_label="Revenue", source_note_refs=["4"])
+        # A stale provenance coordinate must never be offered as a destination.
+        repo.upsert_notes_provenance(conn, run_id=run_id, sheet="Notes-CI",
+                                    row=99, row_label="Deleted", source_note_refs=["4"])
+    body = client.get(f"/api/runs/{run_id}/notes-coverage").json()
+    row = body["rows"][0]
+    assert [(p["sheet"], p["row"]) for p in row["placements"]] == [("Notes-Listofnotes", 20)]
+    assert row["status"] == "missing"
+    assert body["summary"]["unresolved"] == 1

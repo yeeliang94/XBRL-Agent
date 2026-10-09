@@ -959,7 +959,7 @@ async def notes_coverage_endpoint(run_id: int):
     from db import repository as repo
     from server import COVERAGE_META_NOTE
     from notes.coverage_checklist import row_is_unresolved, subnote_key_for_note
-    from notes.coverage_navigation import subnote_navigation_placements
+    from notes.coverage_navigation import coverage_navigation_placements
 
     conn = server._open_audit_conn()
     try:
@@ -968,10 +968,11 @@ async def notes_coverage_endpoint(run_id: int):
             raise HTTPException(status_code=404, detail="Run not found")
         db_rows = repo.fetch_notes_coverage(conn, run_id)
         wanted = {
-            (r["note_num"], subnote_key_for_note(r["note_num"], r["subnote_ref"]))
-            for r in db_rows if r["subnote_ref"] is not None and not r["placements"]
+            (r["note_num"], subnote_key_for_note(r["note_num"], r["subnote_ref"])
+             if r["subnote_ref"] is not None else "")
+            for r in db_rows if r["note_num"] > 0 and not r["placements"]
         }
-        navigation = subnote_navigation_placements(
+        navigation = coverage_navigation_placements(
             conn, run_id, wanted, str(server.AUDIT_DB_PATH),
         ) if wanted else {}
     finally:
@@ -1026,7 +1027,7 @@ async def notes_coverage_endpoint(run_id: int):
                 "title": r["title"],
                 "status": r["status"],
                 "reason": r["reason"],
-                "placements": r["placements"],
+                "placements": r["placements"] or navigation.get((n, ""), []),
                 "reviewer_added": r["reviewer_added"],
                 "reviewer_verdict": r["reviewer_verdict"],
                 "page_lo": r["page_lo"],

@@ -1,4 +1,4 @@
-"""Read-time destinations for sub-notes on older coverage rows."""
+"""Read-time destinations for notes on older coverage rows."""
 from __future__ import annotations
 
 import json
@@ -8,17 +8,17 @@ from notes.coverage_checklist import (
     POLICIES_SHEET_DEFAULT, _classify_placements, subnote_key_for_note,
     subnote_keys_for_refs,
 )
-from notes.detectors import load_provenance_entries
+from notes.detectors import load_provenance_entries, _top_note_nums
 from notes.source_models import SourceBlock
 from notes.source_sections import sections_for_note
 from notes import source_repository as source_repo
 
 
-def subnote_navigation_placements(
+def coverage_navigation_placements(
     conn: sqlite3.Connection, run_id: int, wanted: set[tuple[int, str]],
     db_path: str,
 ) -> dict[tuple[int, str], list[dict]]:
-    """Locate existing child notes without changing their reviewed status."""
+    """Locate existing notes without changing their reviewed status."""
     live_labels = {
         (r["sheet"], r["row"]): r["label"] or ""
         for r in conn.execute(
@@ -30,7 +30,9 @@ def subnote_navigation_placements(
         sheet, row = entry.get("sheet"), entry.get("row")
         if not sheet or row is None or (str(sheet), int(row)) not in live_labels:
             continue
-        for key in subnote_keys_for_refs(entry.get("source_note_refs") or []):
+        refs = entry.get("source_note_refs") or []
+        keys = set(subnote_keys_for_refs(refs)) | {(number, "") for number in _top_note_nums(refs)}
+        for key in keys:
             if key in wanted:
                 located.setdefault(key, {})[(str(sheet), int(row))] = (
                     entry.get("row_label") or ""
