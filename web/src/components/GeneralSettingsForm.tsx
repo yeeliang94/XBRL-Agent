@@ -112,11 +112,20 @@ const styles = {
   } as React.CSSProperties,
   label: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 650,
+    fontWeight: 500,
     fontSize: 14,
     color: pwc.grey700,
     display: "block",
     marginBottom: pwc.space.xs,
+  } as React.CSSProperties,
+  // Disclosure headings keep the shared summary layout from index.css (flex
+  // row with the chevron); never give a <summary> display:block.
+  summary: {
+    fontFamily: pwc.fontHeading,
+    fontWeight: pwc.weight.medium,
+    fontSize: 14,
+    color: pwc.black,
+    minHeight: 40,
   } as React.CSSProperties,
   labelExtra: {
     fontFamily: pwc.fontBody,
@@ -821,7 +830,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       {/* Per-role reasoning controls are rarely changed; keep them closed so
           the page leads with the settings people actually adjust. */}
       <details style={styles.fieldGroup}>
-        <summary style={styles.label}>AI reasoning</summary>
+        <summary style={styles.summary}>AI reasoning</summary>
       <div style={styles.fieldGroup}>
         <label style={styles.label}>Thinking level</label>
         <p style={styles.helperText}>
@@ -1026,7 +1035,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             description="Optional feature switches and processing limits. Each control explains its effect; settings marked for restart take effect after the server restarts."
           />
           <details>
-            <summary style={styles.label}>Show advanced settings</summary>
+            <summary style={styles.summary}>More settings</summary>
             <AdvancedSettingsSection
               rows={advancedRows}
               edits={advancedEdits}

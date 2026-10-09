@@ -79,7 +79,7 @@ const styles = {
   } as React.CSSProperties,
   heading: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 650,
+    fontWeight: 500,
     fontSize: 14,
     color: pwc.grey700,
     marginBottom: pwc.space.sm,
@@ -102,7 +102,7 @@ const styles = {
     gap: 2,
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
     color: pwc.grey700,
   } as React.CSSProperties,
   youLabel: {

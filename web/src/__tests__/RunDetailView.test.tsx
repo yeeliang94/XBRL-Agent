@@ -2040,7 +2040,7 @@ describe("RunDetailView", () => {
       .getAllByRole("tab")
       .find((t) => t.getAttribute("aria-selected") === "true") as HTMLElement;
     expect(active.style.color).toBe("rgb(0, 0, 0)");
-    expect(active.style.background).toBe("rgb(245, 247, 248)");
+    expect(active.style.background).toBe("rgb(238, 239, 241)");
     expect(active.style.borderBottom).toBe("");
   });
 });

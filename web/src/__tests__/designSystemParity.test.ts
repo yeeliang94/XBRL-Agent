@@ -147,7 +147,7 @@ describe("Direction A semantic roles", () => {
     expect(designSystem).toContain(`--weight-emphasis: ${pwc.weight.semibold}`);
     expect(ui.buttonPrimary.minHeight).toBe(40);
     expect(ui.buttonPrimary.padding).toBe("0 15px");
-    expect(ui.buttonSm.minHeight).toBe(34);
+    expect(ui.buttonSm.minHeight).toBe(40);
   });
 });
 

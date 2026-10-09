@@ -326,7 +326,7 @@ const styles = {
   } as React.CSSProperties,
   summaryValue: {
     fontSize: 16,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.regular,
     color: pwc.grey900,
     lineHeight: 1.2,
   } as React.CSSProperties,
@@ -1074,7 +1074,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         {file && (
           <div style={styles.selectedFile}>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: pwc.weight.semibold, overflowWrap: "anywhere" }}>{file.name}</div>
+              <div style={{ fontWeight: pwc.weight.medium, overflowWrap: "anywhere" }}>{file.name}</div>
             </div>
             <button type="button" className={uiClass.btnSecondary}
               style={{ ...ui.buttonSecondary, flexShrink: 0 }}

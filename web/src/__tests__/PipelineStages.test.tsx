@@ -77,14 +77,14 @@ describe("PipelineStages", () => {
       <PipelineStages currentPhase="viewing_pdf" pipelineStage="cross_checking" isRunning={true} isComplete={false} />,
     );
     expect(container.querySelectorAll("[data-testid='step-complete']")).toHaveLength(3);
-    expect(screen.getByText("Check")).toHaveStyle({ fontWeight: "680" });
+    expect(screen.getByText("Check")).toHaveStyle({ fontWeight: "500" });
     expect(screen.getByText("Check")).toHaveAttribute("aria-current", "step");
 
     rerender(
       <PipelineStages currentPhase="reading_template" pipelineStage="reviewing_notes" isRunning={true} isComplete={false} />,
     );
     expect(container.querySelectorAll("[data-testid='step-complete']")).toHaveLength(4);
-    expect(screen.getByText("Review")).toHaveStyle({ fontWeight: "680" });
+    expect(screen.getByText("Review")).toHaveStyle({ fontWeight: "500" });
   });
 
   test("marks setup confirmation as an explicit action after document mapping", () => {

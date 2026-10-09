@@ -490,7 +490,7 @@ const styles = {
     textAlign: "left" as const,
   } as const,
   chevron: { color: pwc.grey500, fontSize: 12, width: 12, display: "inline-block" } as const,
-  title: { fontFamily: pwc.fontHeading, fontWeight: 680, color: pwc.grey900, fontSize: 14 },
+  title: { fontFamily: pwc.fontHeading, fontWeight: 600, color: pwc.grey900, fontSize: 14 },
   badge: {
     ...ui.badge,
     borderColor: pwc.info,
@@ -510,7 +510,7 @@ const styles = {
   h4: {
     fontFamily: pwc.fontHeading,
     fontSize: 14,
-    fontWeight: 680,
+    fontWeight: 600,
     color: pwc.grey900,
     margin: `${pwc.space.md}px 0 ${pwc.space.sm}px`,
   } as const,
@@ -520,7 +520,7 @@ const styles = {
     padding: pwc.space.sm,
     borderBottom: `1px solid ${pwc.grey200}`,
     color: pwc.grey700,
-    fontWeight: 680,
+    fontWeight: 400,
   } as const,
   td: {
     padding: pwc.space.sm,
@@ -528,9 +528,9 @@ const styles = {
     verticalAlign: "top" as const,
     color: pwc.grey800,
   } as const,
-  cellLabel: { fontWeight: 680, color: pwc.grey900 },
+  cellLabel: { fontWeight: 400, color: pwc.grey900 },
   oldVal: { color: pwc.grey500, textDecoration: "line-through" },
-  newVal: { color: pwc.successText, fontWeight: 680, marginTop: 2 },
+  newVal: { color: pwc.successText, fontWeight: 400, marginTop: 2 },
   changeChip: {
     background: pwc.grey100,
     border: `1px solid ${pwc.grey200}`,
@@ -538,7 +538,7 @@ const styles = {
     borderRadius: pwc.radius.pill,
     padding: `1px ${pwc.space.sm}px`,
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
   } as const,
   flagStack: { display: "flex", flexDirection: "column" as const, gap: pwc.space.sm },
   flagHistory: { marginTop: pwc.space.md, color: pwc.grey500, fontSize: 13 },
@@ -560,7 +560,7 @@ const styles = {
     borderColor: pwc.warning,
   } as const,
   flagReason: { color: pwc.grey800, fontSize: 13, margin: `${pwc.space.xs}px 0` },
-  flagGrounding: { color: pwc.grey700, fontSize: 12, fontWeight: 680, margin: 0 },
+  flagGrounding: { color: pwc.grey700, fontSize: 12, fontWeight: 500, margin: 0 },
   flagEvidence: {
     color: pwc.grey700,
     fontSize: 13,
@@ -590,7 +590,7 @@ const styles = {
     border: `1px solid ${pwc.errorBorder}`,
     borderRadius: pwc.radius.md,
     padding: `${pwc.space.xs}px ${pwc.space.md}px`,
-    fontWeight: 680,
+    fontWeight: 500,
     cursor: "pointer",
   } as const,
   smallBtn: {

@@ -17,7 +17,7 @@ const styles = {
   fieldGroup: { marginBottom: pwc.space.lg } as React.CSSProperties,
   label: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 650,
+    fontWeight: 500,
     fontSize: 14,
     color: pwc.grey700,
     display: "block",

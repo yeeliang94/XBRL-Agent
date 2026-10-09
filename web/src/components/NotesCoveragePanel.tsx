@@ -360,7 +360,7 @@ const styles = {
   headerSpacer: { flex: 1 },
   title: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 680,
+    fontWeight: 600,
     color: pwc.grey900,
     fontSize: 14,
   } as const,
@@ -382,7 +382,7 @@ const styles = {
     padding: pwc.space.sm,
     borderBottom: `1px solid ${pwc.grey200}`,
     color: pwc.grey700,
-    fontWeight: 680,
+    fontWeight: 400,
   } as const,
   td: {
     padding: pwc.space.sm,
@@ -390,7 +390,7 @@ const styles = {
     verticalAlign: "top" as const,
     color: pwc.grey800,
   } as const,
-  cellLabel: { fontWeight: 680, color: pwc.grey900 },
+  cellLabel: { fontWeight: 400, color: pwc.grey900 },
   statusBadge: {
     ...ui.badge,
   } as const,
@@ -419,7 +419,7 @@ const styles = {
     borderRadius: pwc.radius.pill,
     padding: `0 6px`,
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
   } as const,
   addedChip: {
     display: "inline-block",
@@ -428,7 +428,7 @@ const styles = {
     borderRadius: pwc.radius.pill,
     padding: `0 ${pwc.space.sm}px`,
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
     marginTop: 2,
   } as const,
   subToggle: {
@@ -451,6 +451,6 @@ const styles = {
     alignItems: "baseline",
     padding: "2px 0",
   } as const,
-  subRef: { fontWeight: 680, color: pwc.grey800, minWidth: 40 },
-  subState: { fontSize: 12, fontWeight: 680 },
+  subRef: { fontWeight: 400, color: pwc.grey800, minWidth: 40 },
+  subState: { fontSize: 12, fontWeight: 500 },
 };

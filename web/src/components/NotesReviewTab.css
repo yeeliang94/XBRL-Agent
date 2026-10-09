@@ -277,7 +277,7 @@
     padding: 8px 12px 0;
     color: #454B50;
     font-size: 14px;
-    font-weight: 650;
+    font-weight: 500;
   }
 
   .notes-review-tab .notes-human-extracted::before {
@@ -286,7 +286,7 @@
     padding: 8px 12px;
     color: #454B50;
     font-size: 14px;
-    font-weight: 650;
+    font-weight: 500;
   }
 
   .notes-review-tab .notes-human-pair > [role="group"]:not(.notes-human-extracted) > div:first-child {

@@ -118,7 +118,7 @@ describe("App routing", () => {
     try {
       const { default: App } = await import("../App");
       render(<App />);
-      const sidebar = screen.getByRole("navigation", { name: "In-progress documents" });
+      const sidebar = screen.getByRole("navigation", { name: "Recent documents" });
       await waitFor(() => expect(within(sidebar).getAllByRole("button", { name: /^Open / })).toHaveLength(Math.min(count + 1, 3)));
       expect(within(sidebar).getByRole("button", { name: "Open Document 42" })).toHaveAttribute("aria-current", "page");
       expect(within(sidebar).getByRole("button", { name: "Open Filing 1.pdf" })).toBeInTheDocument();

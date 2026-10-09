@@ -108,7 +108,7 @@ const styles = {
   th: {
     background: pwc.grey100,
     fontFamily: pwc.fontHeading,
-    fontWeight: 680,
+    fontWeight: 400,
     color: pwc.grey900,
     fontSize: 13,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
@@ -182,7 +182,7 @@ const styles = {
     background: "none",
     border: "none",
     color: pwc.orange500,
-    fontWeight: 680,
+    fontWeight: 500,
     fontSize: 13,
     cursor: "pointer",
   } as React.CSSProperties,
@@ -220,7 +220,7 @@ const styles = {
   downloadSectionLabel: {
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
     color: pwc.grey500,
     marginBottom: pwc.space.sm,
   } as React.CSSProperties,

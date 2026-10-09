@@ -131,7 +131,7 @@ const styles = {
   toolName: {
     fontFamily: pwc.fontHeading,
     fontSize: 14,
-    fontWeight: 680,
+    fontWeight: 500,
     color: pwc.grey900,
   } as React.CSSProperties,
   argsSummary: {
@@ -188,8 +188,8 @@ function renderArgs(toolName: string, args: Record<string, unknown>): React.Reac
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: pwc.fontMono }}>
           <thead>
             <tr>
-              <th style={{ textAlign: "left", padding: "4px 8px", borderBottom: `1px solid ${pwc.grey200}`, fontWeight: 680 }}>Label</th>
-              <th style={{ textAlign: "right", padding: "4px 8px", borderBottom: `1px solid ${pwc.grey200}`, fontWeight: 680 }}>Value</th>
+              <th style={{ textAlign: "left", padding: "4px 8px", borderBottom: `1px solid ${pwc.grey200}`, fontWeight: 400 }}>Label</th>
+              <th style={{ textAlign: "right", padding: "4px 8px", borderBottom: `1px solid ${pwc.grey200}`, fontWeight: 400 }}>Value</th>
             </tr>
           </thead>
           <tbody>

@@ -121,7 +121,7 @@ describe("SettingsPage", () => {
     const active = screen.getByRole("tab", { name: "General" });
     expect(active.getAttribute("aria-selected")).toBe("true");
     expect(active.style.color).toBe("rgb(0, 0, 0)");
-    expect(active.style.background).toBe("rgb(245, 247, 248)");
+    expect(active.style.background).toBe("rgb(238, 239, 241)");
     expect(active.style.borderBottom).toBe("");
   });
 

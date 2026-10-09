@@ -1807,7 +1807,7 @@ const styles = {
   metricValue: {
     fontFamily: pwc.fontHeading,
     fontSize: 16,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.regular,
     color: pwc.grey900,
     fontVariantNumeric: "tabular-nums" as const,
   } as React.CSSProperties,
@@ -1840,7 +1840,7 @@ const styles = {
   collapsibleSectionHeading: {
     fontFamily: pwc.fontHeading,
     fontSize: 14,
-    fontWeight: 680,
+    fontWeight: 600,
     color: pwc.grey700,
     margin: 0,
     background: "transparent",
@@ -1866,7 +1866,7 @@ const styles = {
     fontSize: 14,
   } as React.CSSProperties,
   dt: {
-    fontWeight: 680,
+    fontWeight: 400,
     color: pwc.grey700,
     minWidth: 140,
   } as React.CSSProperties,
@@ -1960,7 +1960,7 @@ const styles = {
   } as React.CSSProperties,
   agentStatement: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 680,
+    fontWeight: 500,
     fontSize: 14,
     color: pwc.grey900,
   } as React.CSSProperties,

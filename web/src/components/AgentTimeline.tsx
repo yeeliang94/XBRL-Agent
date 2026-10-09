@@ -90,7 +90,7 @@ const styles = {
   terminalLabel: {
     fontFamily: pwc.fontHeading,
     fontSize: 14,
-    fontWeight: 680,
+    fontWeight: 500,
     color: pwc.grey900,
   } as React.CSSProperties,
   // Status is carried by the dot, icon and text. Direction A does not add a
@@ -116,7 +116,7 @@ const styles = {
   warningsTitle: {
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 600,
     color: pwc.grey800,
     marginBottom: 4,
   } as React.CSSProperties,
@@ -156,7 +156,7 @@ const styles = {
     marginBottom: pwc.space.xs,
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
     color: pwc.grey800,
   } as React.CSSProperties,
   reasoningMeta: {

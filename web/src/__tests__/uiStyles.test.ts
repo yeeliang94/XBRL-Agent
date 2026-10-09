@@ -60,9 +60,10 @@ describe("buttons — four roles, canonical geometry", () => {
     expect(ui.buttonDanger.background).toBe(pwc.white);
   });
 
-  test("default target 40px; compact 34px; nothing below WCAG 24px", () => {
+  test("one 40px control height; nothing below WCAG 24px", () => {
     expect(ui.buttonPrimary.minHeight).toBe(40);
-    expect(ui.buttonSm.minHeight).toBe(34);
+    expect(ui.buttonSm.minHeight).toBe(40);
+    expect(ui.input.height).toBe(40);
     expect(ui.buttonLg.minHeight).toBe(48);
     expect(ui.iconButton.minHeight).toBeGreaterThanOrEqual(24);
   });
@@ -74,7 +75,7 @@ describe("buttons — four roles, canonical geometry", () => {
   test("buttons and inputs use the 8px control radius", () => {
     expect(ui.buttonPrimary.borderRadius).toBe(8);
     expect(ui.input.borderRadius).toBe(8);
-    expect(ui.select).toMatchObject({ height: 44, minHeight: 44, fontSize: 14, borderRadius: 8, borderColor: pwc.grey300 });
+    expect(ui.select).toMatchObject({ height: 40, minHeight: 40, fontSize: 14, borderRadius: 8, borderColor: pwc.grey300 });
     expect(ui.checkbox).toMatchObject({ width: 18, height: 18, borderRadius: 4, margin: 0, flexShrink: 0, border: `1px solid ${pwc.grey300}`, background: pwc.white });
     expect(ui.alertInfo.borderRadius).toBe(8);
   });
@@ -100,14 +101,14 @@ describe("ui.status — explicit status primitive", () => {
 describe("ui.tab — shared surface tab", () => {
   test("uses fill and weight without an indicator line", () => {
     expect(ui.tab.padding).toBe("0 16px");
-    expect(ui.tab.minHeight).toBe(34);
+    expect(ui.tab.minHeight).toBe(40);
     expect(ui.tab.fontSize).toBe(14);
     expect(ui.tab.border).toBe("none");
     expect(ui.tab.borderBottom).toBeUndefined();
     expect(ui.tab.marginBottom).toBeUndefined();
     expect(ui.tabActive.borderBottom).toBeUndefined();
-    expect(ui.tabActive.background).toBe(pwc.grey50);
-    expect(ui.tabActive.fontWeight).toBe(pwc.weight.semibold);
+    expect(ui.tabActive.background).toBe(pwc.grey100);
+    expect(ui.tabActive.fontWeight).toBe(pwc.weight.medium);
     expect(uiClass.tab).toBe("pwc-tab");
   });
 });
@@ -138,19 +139,21 @@ describe("ui.borderedGroup — static grouping primitive", () => {
 });
 
 describe("table densities — header and body share the density", () => {
-  test("standard density: 10px vertical rhythm (≈40px rows)", () => {
-    expect(ui.th.padding).toBe(`10px ${pwc.space.lg}px`);
-    expect(ui.td.padding).toBe(`10px ${pwc.space.lg}px`);
+  // Cells pad on the right only so the first column shares the page's left
+  // edge with the title and controls above the table.
+  test("standard density: 10px vertical rhythm (≈40px rows), flush left", () => {
+    expect(ui.th.padding).toBe(`8px ${pwc.space.lg}px 8px 0`);
+    expect(ui.td.padding).toBe(`10px ${pwc.space.lg}px 10px 0`);
   });
 
-  test("compact density: 8/12 (≈28–32px rows)", () => {
-    expect(ui.thDense.padding).toBe(`${pwc.space.sm}px ${pwc.space.md}px`);
-    expect(ui.tdDense.padding).toBe(`${pwc.space.sm}px ${pwc.space.md}px`);
+  test("compact density: 8/12 (≈28–32px rows), flush left", () => {
+    expect(ui.thDense.padding).toBe(`${pwc.space.sm}px ${pwc.space.md}px ${pwc.space.sm}px 0`);
+    expect(ui.tdDense.padding).toBe(`${pwc.space.sm}px ${pwc.space.md}px ${pwc.space.sm}px 0`);
   });
 
-  test("comfortable density: 14/16 (≈48px rows)", () => {
-    expect(ui.thComfortable.padding).toBe(`14px ${pwc.space.lg}px`);
-    expect(ui.tdComfortable.padding).toBe(`14px ${pwc.space.lg}px`);
+  test("comfortable density: 14/16 (≈48px rows), flush left", () => {
+    expect(ui.thComfortable.padding).toBe(`8px ${pwc.space.lg}px 8px 0`);
+    expect(ui.tdComfortable.padding).toBe(`14px ${pwc.space.lg}px 14px 0`);
   });
 
   test("headers are sentence case — no tracked uppercase", () => {

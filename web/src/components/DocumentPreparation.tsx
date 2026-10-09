@@ -166,7 +166,7 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
         },
       ].map((step) => (
         <li key={step.label} className="preparation-step-row" style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) minmax(220px, 2fr) 120px", gap: pwc.space.md, alignItems: "center", padding: `${pwc.space.sm}px 0`, borderBottom: `1px solid ${pwc.grey200}`, fontSize: 14 }}>
-          <strong style={{ fontFamily: pwc.fontHeading, fontWeight: pwc.weight.semibold }}>{step.label}</strong>
+          <strong style={{ fontFamily: pwc.fontHeading, fontWeight: pwc.weight.medium }}>{step.label}</strong>
           <span style={{ color: pwc.grey700 }}>{step.detail}</span>
           <span style={{ textAlign: "right", color: step.state === "Action required" ? pwc.orange700 : step.state === "Stopped" ? pwc.errorText : pwc.grey700, fontWeight: step.state === "Working" || step.state === "Action required" ? 600 : 400 }}>
             {step.state}

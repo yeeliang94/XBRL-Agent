@@ -665,7 +665,7 @@ const styles = {
   outcomeEyebrow: {
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
     color: tokens.color.text.secondary,
     marginBottom: 2,
   } as const,
@@ -673,7 +673,7 @@ const styles = {
     fontFamily: pwc.fontHeading,
     fontSize: 16,
     lineHeight: 1.3,
-    fontWeight: 680,
+    fontWeight: 600,
     color: pwc.grey900,
     margin: `0 0 ${pwc.space.xs}px`,
   } as const,
@@ -693,13 +693,13 @@ const styles = {
   impactValue: {
     fontFamily: pwc.fontHeading,
     fontSize: 14,
-    fontWeight: 680,
+    fontWeight: 400,
     color: pwc.grey900,
   } as const,
   impactAttention: {
     fontFamily: pwc.fontHeading,
     fontSize: 14,
-    fontWeight: 680,
+    fontWeight: 500,
     color: pwc.warningText,
   } as const,
   impactHelp: {
@@ -745,7 +745,7 @@ const styles = {
   h3: {
     fontFamily: pwc.fontHeading,
     fontSize: 16,
-    fontWeight: 680,
+    fontWeight: 600,
     color: pwc.grey900,
     margin: `${pwc.space.lg}px 0 ${pwc.space.sm}px`,
   } as const,
@@ -762,7 +762,7 @@ const styles = {
     padding: pwc.space.sm,
     borderBottom: `1px solid ${pwc.grey200}`,
     color: pwc.grey700,
-    fontWeight: 680,
+    fontWeight: 400,
   } as const,
   td: {
     padding: pwc.space.sm,
@@ -770,9 +770,9 @@ const styles = {
     verticalAlign: "top" as const,
     color: pwc.grey800,
   } as const,
-  cellLabel: { fontWeight: 680, color: pwc.grey900 },
+  cellLabel: { fontWeight: 400, color: pwc.grey900 },
   oldVal: { color: pwc.grey500, textDecoration: "line-through" },
-  newVal: { color: pwc.successText, fontWeight: 680 },
+  newVal: { color: pwc.successText, fontWeight: 400 },
   arrow: { color: pwc.grey500 },
   evidenceRow: {
     display: "flex",
@@ -783,7 +783,7 @@ const styles = {
   } as const,
   evidenceLabel: {
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
   } as const,
   linkBtn: {
     background: "none",
@@ -826,7 +826,7 @@ const styles = {
   } as const,
   cascadeSummary: {
     cursor: "pointer",
-    fontWeight: 680,
+    fontWeight: 500,
     color: pwc.grey800,
   } as const,
   cascadeHelp: {
@@ -884,7 +884,7 @@ const styles = {
     border: `1px solid ${pwc.errorBorder}`,
     borderRadius: pwc.radius.md,
     padding: `${pwc.space.xs}px ${pwc.space.md}px`,
-    fontWeight: 680,
+    fontWeight: 500,
     cursor: "pointer",
   } as const,
   smallBtn: {

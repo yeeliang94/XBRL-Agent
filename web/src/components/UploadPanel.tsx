@@ -16,7 +16,7 @@ interface Props {
 // Client-side upload cap — mirrors the backend body limit. Kept here rather
 // than a shared constants module so the friendly MB label can be built from
 // the same number without risking drift between value and copy.
-const MAX_UPLOAD_MB = 100;
+const MAX_UPLOAD_MB = 50;
 const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 
 const styles = {
@@ -45,12 +45,12 @@ const styles = {
     justifyContent: "center",
     color: pwc.error,
     fontSize: 12,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
     fontFamily: pwc.fontMono,
   } as React.CSSProperties,
   fileName: {
     fontFamily: pwc.fontBody,
-    fontWeight: 650,
+    fontWeight: 500,
     color: pwc.grey900,
     fontSize: 14,
   } as React.CSSProperties,
@@ -62,7 +62,7 @@ const styles = {
     borderRadius: pwc.radius.md,
     fontSize: 14,
     fontFamily: pwc.fontHeading,
-    fontWeight: 680,
+    fontWeight: 500,
     cursor: "pointer",
   } as React.CSSProperties,
   runningRow: {
