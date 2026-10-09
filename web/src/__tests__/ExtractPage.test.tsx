@@ -75,9 +75,9 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
   });
 
-  test("a resumed draft is headed as setup rather than Work queue", () => {
+  test("a resumed draft is headed by its document rather than Work queue", () => {
     render(<ExtractPage {...makeProps({ state: { currentRunId: 42, sessionId: "draft-session", sessionRunId: 42, filename: "draft.pdf" } })} />);
-    expect(screen.getByRole("heading", { name: "Continue setup" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "draft.pdf" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Work queue" })).toBeNull();
   });
 

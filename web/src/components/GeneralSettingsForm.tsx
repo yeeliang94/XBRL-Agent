@@ -635,7 +635,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       {/* API Key */}
       <div style={styles.fieldGroup}>
         <label style={styles.label} htmlFor="ai-service-api-key">
-          API Key
+          API key
           {apiKeyPreview && (
             <span style={styles.labelExtra}>(current: {apiKeyPreview})</span>
           )}
@@ -1099,7 +1099,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
                   <span className="pwc-spinner" style={styles.testSpinner} /> Testing...
                 </>
               ) : (
-                "Test Connection"
+                "Test connection"
               )}
             </button>
           ) : (

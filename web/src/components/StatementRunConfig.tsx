@@ -54,13 +54,6 @@ const styles = {
     gap: pwc.space.sm,
     cursor: "pointer",
   } as React.CSSProperties,
-  stmtCode: {
-    fontFamily: pwc.fontMono,
-    fontSize: 12,
-    fontWeight: pwc.weight.regular,
-    width: 52,
-    display: "inline-block",
-  } as React.CSSProperties,
   stmtName: {
     fontFamily: pwc.fontBody,
     fontSize: 14,
@@ -96,7 +89,6 @@ export function StatementRunConfig({
                     checked={isEnabled}
                     onChange={(e) => onToggleStatement(stmt, e.target.checked)}
                   />
-                  <span style={styles.stmtCode}>{stmt}</span>
                   <span style={styles.stmtName}>{statementLabel(stmt, filingStandard)}</span>
                 </label>
               </td>

@@ -260,7 +260,7 @@ describe("App — live activity integration", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Open SECOND.pdf" }));
     expect(window.location.pathname).toBe("/run/322");
-    await screen.findByRole("heading", { name: "Continue setup" });
+    await screen.findByRole("heading", { name: "SECOND.pdf" });
     fireEvent.click(screen.getByRole("button", { name: "Open FINCO.pdf" }));
     const switchedTabs = await screen.findByRole("tablist", { name: "Run detail sections" });
     expect(within(switchedTabs).getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
