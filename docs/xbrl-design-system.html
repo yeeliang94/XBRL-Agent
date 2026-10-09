@@ -286,6 +286,7 @@
         <a href="#overview">Overview</a>
         <a href="#principles">Principles</a>
         <a href="#clarity">Clarity and simplification</a>
+        <a href="#writing">Writing and microcopy</a>
         <div class="nav-label">Foundations</div>
         <a href="#colour">Colour</a>
         <a href="#type">Typography</a>
@@ -360,6 +361,49 @@
         <h3>Language and states</h3>
         <p>Use short, stable states: Waiting, Working, Complete, Needs review, Failed and Stopped. Use one term for one state. Empty states are quiet and actionable. Errors summarise the outcome first and keep technical detail in Activity or a closed disclosure.</p>
         <div class="handoff" style="margin-top:20px"><strong>Five-second test</strong>A new operator should be able to identify where they are, what needs attention and the next available action within five seconds. If a sentence, badge, border, menu or panel does not materially help one of those decisions, remove it from the default view.</div>
+      </section>
+
+      <section id="writing">
+        <div class="section-head"><h2>Writing and microcopy</h2><p>Words are part of the interface. Name every title, label, option and button so clearly that no extra sentence is needed. Helper text is the exception, not the default.</p></div>
+        <h3>Main copy carries the meaning</h3>
+        <div class="checklist">
+          <div class="check"><span>01</span><div><strong>Labels name the thing in the operator&rsquo;s words.</strong> Use the accounting terms reviewers already use (Filing standard, Amounts in, Reporting periods). Never show internal names, agent names, sheet codes or field keys in the default view.</div></div>
+          <div class="check"><span>02</span><div><strong>Buttons say the outcome.</strong> Verb plus object: Prepare mTool draft, Save decision, Retry preparation. Never OK, Submit, Proceed or Continue on their own.</div></div>
+          <div class="check"><span>03</span><div><strong>Options explain themselves.</strong> Put the meaning in the option label (Current and prior, Current only) instead of a sentence under the control. Longer detail may sit in the option&rsquo;s hover text.</div></div>
+          <div class="check"><span>04</span><div><strong>Titles say where you are, once.</strong> Never repeat the page title in the top bar, an eyebrow, a panel heading or a description.</div></div>
+          <div class="check"><span>05</span><div><strong>One term per concept, everywhere.</strong> The same state, object or action keeps the same word on every page, in buttons, statuses, dialogs and Activity.</div></div>
+          <div class="check"><span>06</span><div><strong>Plain, short and sentence case.</strong> Everyday words, digits for numbers, no exclamation marks, no &ldquo;please&rdquo;, no abbreviations operators would not use themselves (MFRS and RM are fine; CY, PY and statement codes are not).</div></div>
+        </div>
+        <h3>When helper text is allowed</h3>
+        <table class="token-table">
+          <thead><tr><th>Allowed (one short line)</th><th>Not allowed</th></tr></thead>
+          <tbody>
+            <tr><td>A format or limit the operator must know before entering a value: Up to 50 MB each. Must start with https://.</td><td>Restating the label or the control: &ldquo;Choose the model used for new runs&rdquo; under a field called Model.</td></tr>
+            <tr><td>A consequence that is not obvious and affects other people or cannot be undone: Shared by everyone. May contain financial content.</td><td>Describing what the system does automatically or in the background: &ldquo;Document preparation will suggest a denomination for you to confirm.&rdquo;</td></tr>
+            <tr><td>An exception the operator must act on now: Not found in the document. Select the unit shown in the statements.</td><td>Introductions and page purpose: &ldquo;This page lets you&hellip;&rdquo;, &ldquo;Here you can&hellip;&rdquo;.</td></tr>
+            <tr><td>A validation or save error, shown directly below the control it concerns.</td><td>Reassurance, defaults and rationale: &ldquo;You can change this later&rdquo;, &ldquo;Default: 600 seconds. Increase this for long filings&hellip;&rdquo;, how a feature works internally.</td></tr>
+          </tbody>
+        </table>
+        <h3>Limits</h3>
+        <p>At most one helper line per control, no longer than about 12 words, in 13 px secondary text directly below the control. A section heading has no description, or one short line when the section changes something for everyone. Never use a paragraph of helper text, a grey explanatory box or a sentence that repeats a status shown elsewhere. Detected or automatic values appear as a small tag beside the label (Detected RM), not as a sentence.</p>
+        <div class="do-dont" style="margin-top:24px">
+          <div class="do"><h4>Fix the words first</h4><p>If a control needs explaining, rename it, split it or turn its options into self-explaining choices. Add helper text only when the label cannot carry the meaning.</p></div>
+          <div class="dont"><h4>Do not explain the interface to the operator</h4><p>Do not narrate background work, restate what a control does or describe the screen. Put rare detail in hover text, a closed disclosure or documentation.</p></div>
+        </div>
+        <h3>Examples from this application</h3>
+        <table class="token-table">
+          <thead><tr><th>Before</th><th>After</th></tr></thead>
+          <tbody>
+            <tr><td>Reporting periods: dropdown with &ldquo;First statements after incorporation &mdash; current period only&rdquo;.</td><td>Reporting periods: Current and prior | Current only. The incorporation case is the option&rsquo;s hover text.</td></tr>
+            <tr><td>&ldquo;Document scan detected RM mil. Confirm or correct it before starting extraction.&rdquo;</td><td>A Detected RM mil tag beside Denomination.</td></tr>
+            <tr><td>&ldquo;Default: 600 seconds. Increase this for long or scanned filings. Enter 0 to remove the overall Scout deadline; the per-turn timeout still applies.&rdquo;</td><td>Default 600. Use 0 for no limit.</td></tr>
+            <tr><td>Heading &ldquo;Needs your decision (1)&rdquo;, pill &ldquo;Couldn&rsquo;t resolve &mdash; needs your decision&rdquo;, label &ldquo;Needs your decision&rdquo;.</td><td>Heading Decisions (1) and one status: Couldn&rsquo;t resolve.</td></tr>
+            <tr><td>&ldquo;The AI review could not safely resolve SOPL-Function row 9. Review it against source PDF page 7 and decide whether the extracted figure should change.&rdquo;</td><td>The AI couldn&rsquo;t confirm Revenue. Check it against page 7 of the PDF and record your decision.</td></tr>
+          </tbody>
+        </table>
+        <h3>Messages</h3>
+        <p>Status, empty and error messages lead with the outcome, then the action, in one sentence each: Not found in the document. Select the unit shown in the statements. Technical detail stays in Activity or a closed disclosure.</p>
+        <div class="handoff" style="margin-top:20px"><strong>Hidden-helper test</strong>Read the screen with all helper text hidden. If an operator can still act correctly, delete the helper text. If not, fix the title, label, option or button first, then add the smallest helper line the table above allows.</div>
       </section>
 
       <section id="colour">
@@ -639,6 +683,7 @@
         <div class="checklist">
           <div class="check"><span>✓</span><div>A new operator can identify location, attention and next action within five seconds.</div></div>
           <div class="check"><span>✓</span><div>No sentence merely repeats a visible status, control or layout relationship.</div></div>
+          <div class="check"><span>✓</span><div>Titles, labels, options and buttons are understood without helper text; every remaining helper line passes the hidden-helper test.</div></div>
           <div class="check"><span>✓</span><div>Every visible control works, has a clear label and sits beside the object it affects.</div></div>
           <div class="check"><span>✓</span><div>Only exceptional items carry warning, review or attention indicators.</div></div>
           <div class="check"><span>✓</span><div>Long notes, lists and tables remain readable and every pane can reach its end.</div></div>

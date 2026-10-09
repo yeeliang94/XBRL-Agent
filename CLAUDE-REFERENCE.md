@@ -460,7 +460,10 @@ element named in a screenshot. Specifically:
   not shown as complete. Pinned by `web/src/__tests__/ExtractPage.test.tsx`.
 
 Before changing UI, classify visible content as keep, shorten, relocate, show
-only when relevant, or remove. Validate the user workflow plus long content,
+only when relevant, or remove. Follow the design guide's Writing and microcopy section:
+labels, options and buttons must carry the meaning on their own, and helper
+text is allowed only for formats/limits, non-obvious consequences, exceptions
+to act on, and errors (one line, about 12 words). Apply its hidden-helper test. Validate the user workflow plus long content,
 overflow, repeated selection, missing source, narrow layout, and all loading,
 complete, empty, and failed states. Update the design guide and
 `web/src/__tests__/designSystemParity.test.ts` when the shared contract changes.
