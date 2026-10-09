@@ -30,6 +30,12 @@ beforeEach(() => {
   (api.adminSetAdmin as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, user: USERS[1] });
 });
 
+// Each row has one Edit action; account changes open in the row beneath it.
+function openActions(email: string): HTMLElement {
+  fireEvent.click(screen.getByRole("button", { name: `Edit ${email}` }));
+  return screen.getByTestId(`user-actions-${email}`);
+}
+
 describe("UsersTab", () => {
   test("renders the user list", async () => {
     render(<UsersTab />);
@@ -46,7 +52,7 @@ describe("UsersTab", () => {
   test("disable button calls adminSetDisabled(email, true)", async () => {
     render(<UsersTab />);
     await waitFor(() => expect(screen.getByText("user@firm.com")).toBeInTheDocument());
-    const userRow = screen.getByText("user@firm.com").closest("tr")!;
+    const userRow = openActions("user@firm.com");
     fireEvent.click(within(userRow).getByRole("button", { name: /disable/i }));
     // Confirm in the shared dialog.
     const dialog = screen.getByRole("dialog", { name: /disable user@firm.com/i });
@@ -57,7 +63,7 @@ describe("UsersTab", () => {
   test("make admin button calls adminSetAdmin(email, true)", async () => {
     render(<UsersTab />);
     await waitFor(() => expect(screen.getByText("user@firm.com")).toBeInTheDocument());
-    const userRow = screen.getByText("user@firm.com").closest("tr")!;
+    const userRow = openActions("user@firm.com");
     fireEvent.click(within(userRow).getByRole("button", { name: /make admin/i }));
     const dialog = screen.getByRole("dialog", { name: /make user@firm.com an admin/i });
     fireEvent.click(within(dialog).getByRole("button", { name: /make admin/i }));
@@ -90,13 +96,13 @@ describe("UsersTab", () => {
   test("hides Disable and Revoke-admin on the signed-in admin's own row", async () => {
     render(<UsersTab currentEmail="admin@firm.com" />);
     await waitFor(() => expect(screen.getByText("admin@firm.com")).toBeInTheDocument());
-    const selfRow = screen.getByText("admin@firm.com").closest("tr")!;
+    const selfRow = openActions("admin@firm.com");
     expect(within(selfRow).queryByRole("button", { name: /disable/i })).toBeNull();
     expect(within(selfRow).queryByRole("button", { name: /revoke admin/i })).toBeNull();
     // Reset password stays available (a self-service-safe two-step reveal).
     expect(within(selfRow).getByRole("button", { name: /reset password/i })).toBeInTheDocument();
     // Other users' rows keep their controls.
-    const otherRow = screen.getByText("user@firm.com").closest("tr")!;
+    const otherRow = openActions("user@firm.com");
     expect(within(otherRow).getByRole("button", { name: /disable/i })).toBeInTheDocument();
   });
 
@@ -105,7 +111,7 @@ describe("UsersTab", () => {
       new Error("Cannot demote the only remaining admin. Promote another account first."));
     render(<UsersTab />);
     await waitFor(() => expect(screen.getByText("admin@firm.com")).toBeInTheDocument());
-    const adminRow = screen.getByText("admin@firm.com").closest("tr")!;
+    const adminRow = openActions("admin@firm.com");
     fireEvent.click(within(adminRow).getByRole("button", { name: /revoke admin/i }));
     const dialog = screen.getByRole("dialog", { name: /revoke admin from admin@firm.com/i });
     fireEvent.click(within(dialog).getByRole("button", { name: /revoke admin/i }));

@@ -195,7 +195,7 @@ describe("App routing", () => {
       }
       fireEvent.click(settings);
       const tabs = screen.getByRole("tablist", { name: "Settings sections" });
-      fireEvent.click(within(tabs).getByRole("tab", { name: "Agent instructions" }));
+      fireEvent.click(within(tabs).getByRole("tab", { name: "Team guidance" }));
       const editor = await screen.findByLabelText("Additional instructions");
       fireEvent.change(editor, { target: { value: "Unsaved practice" } });
       act(() => window.history.back());
@@ -223,7 +223,7 @@ describe("App routing", () => {
     const { unmount } = render(<App />);
     try {
       fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
-      fireEvent.click(within(screen.getByRole("tablist", { name: "Settings sections" })).getByRole("tab", { name: "Agent instructions" }));
+      fireEvent.click(within(screen.getByRole("tablist", { name: "Settings sections" })).getByRole("tab", { name: "Team guidance" }));
       const editor = await screen.findByLabelText("Additional instructions");
       fireEvent.change(editor, { target: { value: "Unsaved practice" } });
       fireEvent.click(screen.getByRole("button", { name: "Log out" }));

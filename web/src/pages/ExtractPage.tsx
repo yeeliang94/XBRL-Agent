@@ -382,13 +382,12 @@ export function ExtractPage({
   return (
     <>
       <PageHeader
-        eyebrow={state.isRunning || state.isComplete ? "Current filing" : undefined}
         title={state.hasError && !state.filename ? "Document unavailable" : state.isRunning
           ? state.filename ?? "Extraction in progress"
           : state.isComplete
             ? state.filename ?? "Extraction complete"
             : isResumedDraft
-              ? "Continue setup"
+              ? state.filename ?? "Continue setup"
             : "Add documents"}
       />
 

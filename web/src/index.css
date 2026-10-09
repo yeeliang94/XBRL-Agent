@@ -1113,7 +1113,9 @@ details[open] > summary::before {
   .app-sidebar .app-navigation-label { display: inline !important; }
   .app-sidebar .app-rail-brand { width: 100%; padding: 0 !important; justify-content: flex-start; }
   .app-sidebar .app-primary-navigation { flex-direction: row !important; flex-wrap: wrap; flex: 1; }
-  .app-sidebar .app-navigation-link { padding: 0 8px !important; justify-content: flex-start !important; font-size: 13px !important; }
+  .app-sidebar .app-navigation-link { width: auto !important; padding: 0 8px !important; justify-content: flex-start !important; font-size: 13px !important; }
+  /* Phones keep the primary destinations only; the full list is one tap away. */
+  .app-sidebar .app-document-navigation { display: none !important; }
   .app-sidebar .app-document-navigation { width: 100%; flex-direction: row !important; flex-wrap: wrap; overflow: visible !important; }
   .app-document-navigation > .app-navigation-label { width: 100%; }
   .app-document-list { width: 100%; flex-direction: row !important; flex-wrap: wrap; overflow: visible !important; }
@@ -1123,7 +1125,6 @@ details[open] > summary::before {
   .app-rail-toggle, .app-user { display: none !important; }
   .app-topbar { padding: 0 16px !important; }
   .queue-summary { gap: 16px !important; }
-  .queue-recent-row { align-items: flex-start !important; flex-wrap: wrap; gap: 12px !important; }
 }
 @media (max-width: 600px) {
   .document-list-row { grid-template-columns: minmax(0, 1fr) 112px !important; gap: 12px !important; }

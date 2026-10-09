@@ -28,7 +28,8 @@ interface Props {
 
 const CONFIDENCE_COLORS: Record<ConfidenceLevel, string> = {
   high: pwc.success,
-  medium: pwc.orange500,
+  // Fairly sure uses a lighter tint so it never reads as Please check.
+  medium: pwc.orange300,
   low: pwc.error,
 };
 
@@ -48,8 +49,8 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontWeight: pwc.weight.regular,
     fontSize: 14,
-    color: pwc.grey700,
-    width: 60,
+    color: pwc.grey900,
+    width: 260,
     flexShrink: 0,
   } as React.CSSProperties,
   select: {
@@ -62,7 +63,7 @@ const styles = {
     fontWeight: pwc.weight.regular,
     fontSize: 14,
     color: pwc.grey700,
-    width: 60,
+    width: 260,
     flexShrink: 0,
   } as React.CSSProperties,
   confidenceDot: {
@@ -95,7 +96,7 @@ export function VariantSelector({
       {/* Legend so the confidence dots aren't tooltip-only. */}
       <div style={styles.legend}>
         <span style={{ ...styles.confidenceDot, background: pwc.success }} /> Confident
-        <span style={{ ...styles.confidenceDot, background: pwc.orange500, marginLeft: pwc.space.md }} /> Fairly sure
+        <span style={{ ...styles.confidenceDot, background: CONFIDENCE_COLORS.medium, marginLeft: pwc.space.md }} /> Fairly sure
         <span style={{ ...styles.confidenceDot, background: pwc.error, marginLeft: pwc.space.md }} /> Please check
         <span style={{ ...styles.confidenceDot, background: pwc.grey300, marginLeft: pwc.space.md }} /> Not detected
       </div>
@@ -109,7 +110,7 @@ export function VariantSelector({
               style={isEnabled ? styles.label : styles.labelDisabled}
               title={statementLabel(stmt, filingStandard)}
             >
-              {stmt}
+              {statementLabel(stmt, filingStandard)}
             </span>
             <select
               role="combobox"

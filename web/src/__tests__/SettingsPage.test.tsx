@@ -35,26 +35,26 @@ describe("SettingsPage", () => {
   test("clicking the active instructions tab keeps the unsaved-edit guard", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(<SettingsPage isAdmin />);
-    fireEvent.click(within(tablist()).getByRole("tab", { name: "Agent instructions" }));
+    fireEvent.click(within(tablist()).getByRole("tab", { name: "Team guidance" }));
     const editor = await screen.findByLabelText("Additional instructions");
     fireEvent.change(editor, { target: { value: "Keep my edit" } });
-    fireEvent.click(within(tablist()).getByRole("tab", { name: "Agent instructions" }));
+    fireEvent.click(within(tablist()).getByRole("tab", { name: "Team guidance" }));
     fireEvent.click(within(tablist()).getByRole("tab", { name: "Account" }));
     expect(confirm).toHaveBeenCalledWith("Discard unsaved guidance?");
     expect(editor).toHaveValue("Keep my edit");
-    expect(within(tablist()).getByRole("tab", { name: "Agent instructions" })).toHaveAttribute("aria-selected", "true");
+    expect(within(tablist()).getByRole("tab", { name: "Team guidance" })).toHaveAttribute("aria-selected", "true");
     confirm.mockRestore();
   });
   test("admin sees General, Account, and Users tabs", () => {
     render(<SettingsPage isAdmin={true} />);
     const tabs = within(tablist()).getAllByRole("tab");
-    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Agent instructions", "Extraction", "Advanced", "Notes appearance", "Account", "Users"]);
+    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Team guidance", "Extraction", "Advanced", "Notes appearance", "Account", "Users"]);
   });
 
   test("non-admin does not see the Users tab", () => {
     render(<SettingsPage isAdmin={false} />);
     const tabs = within(tablist()).getAllByRole("tab");
-    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Agent instructions", "Extraction", "Advanced", "Notes appearance", "Account"]);
+    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Team guidance", "Extraction", "Advanced", "Notes appearance", "Account"]);
     expect(within(tablist()).queryByText("Users")).toBeNull();
   });
 

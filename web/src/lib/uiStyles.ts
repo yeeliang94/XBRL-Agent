@@ -511,6 +511,36 @@ export const ui = {
     fontVariantNumeric: "tabular-nums",
   } as CSSProperties,
 
+  // --- Segmented choice ----------------------------------------------------
+  // Mutually exclusive options (MFRS / MPERS, RM / RM '000). Same 40px height
+  // as every control and the same grey selected surface as tabs.
+  segmentGroup: {
+    display: "inline-flex",
+    alignSelf: "flex-start",
+    gap: 2,
+    minHeight: 40,
+    padding: 3,
+    border: `1px solid ${pwc.grey300}`,
+    borderRadius: tokens.radius.control,
+    background: tokens.surface.default,
+  } as CSSProperties,
+  segmentButton: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 14,
+    fontWeight: pwc.weight.medium,
+    minHeight: 32,
+    padding: "0 16px",
+    border: "none",
+    borderRadius: pwc.radius.sm,
+    background: "transparent",
+    color: tokens.color.text.secondary,
+    cursor: "pointer",
+  } as CSSProperties,
+  segmentButtonActive: {
+    background: pwc.grey100,
+    color: tokens.color.text.primary,
+  } as CSSProperties,
+
   // --- Tabs ---------------------------------------------------------------
   // Shared surface-tab geometry. Pages keep their own keyboard/selection
   // logic (role="tablist" etc.); active state uses fill and weight without

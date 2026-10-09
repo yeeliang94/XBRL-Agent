@@ -1356,7 +1356,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           Filing standard
           {standardWasDetected && <span style={styles.detectedBadge}>Detected</span>}
         </span>
-        <div className="segmented-control-group" style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
+        <div className="segmented-control-group" style={ui.segmentGroup}>
           {(["mfrs", "mpers"] as const).map((standard) => {
             const active = filingStandard === standard;
             return (
@@ -1366,19 +1366,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                 className="segmented-control-button"
                 aria-pressed={active}
                 onClick={() => handleFilingStandardChange(standard)}
-                style={{
-                  fontFamily: pwc.fontHeading,
-                  fontSize: 14,
-                  minHeight: 40,
-                  fontWeight: active ? 600 : 500,
-                  padding: "8px 24px",
-                  border: "none",
-                  borderRight: standard === "mfrs" ? `1px solid ${pwc.grey200}` : "none",
-                  borderRadius: 0,
-                  background: active ? pwc.black : pwc.white,
-                  color: active ? pwc.white : pwc.grey700,
-                  cursor: "pointer",
-                }}
+                style={{ ...ui.segmentButton, ...(active ? ui.segmentButtonActive : {}) }}
               >
                 {standard.toUpperCase()}
               </button>
@@ -1390,7 +1378,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       {/* Filing level: Company or Group */}
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Filing level</span>
-        <div className="segmented-control-group" style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
+        <div className="segmented-control-group" style={ui.segmentGroup}>
           {(["company", "group"] as const).map((level) => {
             const active = filingLevel === level;
             return (
@@ -1400,19 +1388,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                 className="segmented-control-button"
                 aria-pressed={active}
                 onClick={() => setFilingLevel(level)}
-                style={{
-                  fontFamily: pwc.fontHeading,
-                  fontSize: 14,
-                  minHeight: 40,
-                  fontWeight: active ? 600 : 500,
-                  padding: "8px 24px",
-                  border: "none",
-                  borderRight: level === "company" ? `1px solid ${pwc.grey200}` : "none",
-                  borderRadius: 0,
-                  background: active ? pwc.black : pwc.white,
-                  color: active ? pwc.white : pwc.grey700,
-                  cursor: "pointer",
-                }}
+                style={{ ...ui.segmentButton, ...(active ? ui.segmentButtonActive : {}) }}
               >
                 {level === "company" ? "Company" : "Group"}
               </button>
@@ -1438,8 +1414,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           values verbatim; the scout cross-checks it. Mirrors the toggles above. */}
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Denomination</span>
-        <div className="segmented-control-group" style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
-          {(["units", "thousands", "millions"] as const).map((d, idx) => {
+        <div className="segmented-control-group" style={ui.segmentGroup}>
+          {(["units", "thousands", "millions"] as const).map((d) => {
             const active = denomination === d;
             return (
               <button
@@ -1448,19 +1424,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                 className="segmented-control-button"
                 aria-pressed={active}
                 onClick={() => handleDenominationChange(d)}
-                style={{
-                  fontFamily: pwc.fontHeading,
-                  fontSize: 14,
-                  minHeight: 40,
-                  fontWeight: active ? 600 : 500,
-                  padding: "8px 24px",
-                  border: "none",
-                  borderRight: idx < 2 ? `1px solid ${pwc.grey200}` : "none",
-                  borderRadius: 0,
-                  background: active ? pwc.black : pwc.white,
-                  color: active ? pwc.white : pwc.grey700,
-                  cursor: "pointer",
-                }}
+                style={{ ...ui.segmentButton, ...(active ? ui.segmentButtonActive : {}) }}
               >
                 {DENOMINATION_LABELS[d]}
               </button>
