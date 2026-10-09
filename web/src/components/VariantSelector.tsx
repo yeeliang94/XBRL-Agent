@@ -98,8 +98,9 @@ export function VariantSelector({
         const variants = variantsFor(stmt, filingStandard);
         const isEnabled = enabledSet.has(stmt);
         return (
-          <div key={stmt} style={styles.row}>
+          <div key={stmt} className="statement-format-row" style={styles.row}>
             <span
+              className="statement-format-label"
               style={isEnabled ? styles.label : styles.labelDisabled}
               title={statementLabel(stmt, filingStandard)}
             >

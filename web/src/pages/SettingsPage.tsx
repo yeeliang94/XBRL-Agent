@@ -83,7 +83,7 @@ export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
       <PageHeader title="Settings" />
 
       <div className="settings-section-layout" style={styles.layout}>
-      <div style={styles.rail}>
+      <div className="settings-section-rail" style={styles.rail}>
       <div
         ref={tabBarRef}
         style={styles.tabBar}
