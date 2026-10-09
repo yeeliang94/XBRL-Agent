@@ -94,7 +94,7 @@ export function denominationLabel(denomination: string | null | undefined): stri
 /** Reviewer flag kinds (`stuck` / `disputes_prior` / `needs_human`) → labels
  *  that say what the flag means, not what the code is called. */
 const FLAG_KIND_LABELS: Record<string, string> = {
-  stuck: "Couldn't resolve — needs your decision",
+  stuck: "Couldn't resolve",
   disputes_prior: "Disagrees with an earlier figure",
   needs_human: "Needs your review",
 };

@@ -38,6 +38,9 @@ describe("ValidatorTab", () => {
 
   test("legacy summaries do not claim which year was checked", () => {
     render(<ValidatorTab crossChecks={[makeCrossChecks()[0]]} />);
+    // Passed checks are one line until their figures are opened.
+    expect(screen.queryByRole("columnheader", { name: "Saved comparison" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show figures" }));
     expect(screen.getByRole("columnheader", { name: "Saved comparison" })).toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "Current year" })).toBeNull();
     expect(screen.getByText(/Year detail was not saved/)).toBeInTheDocument();

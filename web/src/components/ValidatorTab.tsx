@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { STATUS_SYMBOLS, type StatusSymbol } from "../lib/runStatus";
@@ -76,6 +77,7 @@ function figureRows(comparands: CrossCheckComparand[]) {
 // ---------------------------------------------------------------------------
 
 export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = false }: ValidatorTabProps) {
+  const [openPassed, setOpenPassed] = useState<Set<string>>(() => new Set());
   if (crossChecks.length === 0) {
     return (
       <div style={styles.empty}>
@@ -111,8 +113,17 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
               <div style={styles.checkHeader}>
                 <h4 style={styles.checkTitle}><span title={check.name}>{label}</span></h4>
                 <span style={ui.status}><StatusIcon symbol={display.symbol} />{display.label}</span>
-                {target && <button type="button" className="pwc-btn-quiet" style={{ ...ui.buttonQuiet, marginRight: -15 }} onClick={() => onSelectTarget!(check.target_sheet!, check.target_row!)}>Review figures</button>}
+                {/* Routine passes stay one line; their figures open on demand. */}
+                {check.status === "passed" && (
+                  <button type="button" className="pwc-btn-quiet" style={{ ...ui.buttonQuiet, marginRight: -15 }}
+                    aria-expanded={openPassed.has(check.name)}
+                    onClick={() => setOpenPassed((open) => { const next = new Set(open); if (next.has(check.name)) next.delete(check.name); else next.add(check.name); return next; })}>
+                    {openPassed.has(check.name) ? "Hide figures" : "Show figures"}
+                  </button>
+                )}
+                {target && check.status !== "passed" && <button type="button" className="pwc-btn-quiet" style={{ ...ui.buttonQuiet, marginRight: -15 }} onClick={() => onSelectTarget!(check.target_sheet!, check.target_row!)}>Review figures</button>}
               </div>
+              {(check.status !== "passed" || openPassed.has(check.name)) && <>
               {hasValues ? (
                 <div role="region" aria-label={`${label} compared figures`} tabIndex={0} style={styles.tableRegion}>
                   <table aria-label={label} style={styles.table}>
@@ -139,6 +150,7 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                 {rows.length === 0 ? <span style={styles.footerNote}>Year detail was not saved for this check. Rerun checks to refresh.</span> : rows.some((row) => periods.some((period) => row.values.get(period)?.value == null)) && <span style={styles.footerNote}>— No saved figure for this year</span>}
               </div>}
               {check.message && <details style={styles.technicalDetails}><summary>Technical details</summary><p style={styles.detailText}>{check.message}</p></details>}
+              </>}
             </section>
           );
         })}

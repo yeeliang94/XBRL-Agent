@@ -91,7 +91,7 @@ const styles = {
   } as React.CSSProperties,
   sectionLabel: {
     ...ui.bodyText,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
   } as React.CSSProperties,
   setupGroup: {
     display: "flex",

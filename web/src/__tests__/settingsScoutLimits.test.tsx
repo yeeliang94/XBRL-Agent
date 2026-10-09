@@ -53,8 +53,8 @@ describe("Scout limits in Settings", () => {
   test("explains the defaults, disabled deadline, and safe ceiling", async () => {
     renderForm();
     await screen.findByLabelText(/Wall-clock timeout/i);
-    expect(screen.getByText(/Enter 0 to remove the overall Scout deadline/i)).toBeTruthy();
-    expect(screen.getByText(/Allow 1–40 turns/i)).toBeTruthy();
+    expect(screen.getByText(/Use 0 for no limit/i)).toBeTruthy();
+    expect(screen.getByText(/maximum 40/i)).toBeTruthy();
   });
 
   test("keeps an unsafe turn value visible and blocks the save", async () => {

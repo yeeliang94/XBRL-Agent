@@ -784,7 +784,8 @@ export function NotesReviewTab({
                           setActive((current) => ({ sheet: sheet.sheet, key: current.key + 1 }));
                         }}
                       >
-                        <span style={{ minWidth: 0 }}>{label} · {notesSheetDisplayName(sheet.sheet)}</span>
+                        {/* The sheet number stays in the accessible name only. */}
+                        <span style={{ minWidth: 0 }}>{notesSheetDisplayName(sheet.sheet)}</span>
                       </button>
                     );
                   })}

@@ -9,11 +9,12 @@ import { ElapsedTimer } from "./ElapsedTimer";
 import { PipelineStages } from "./PipelineStages";
 
 const activeStatuses = new Set(["queued", "working", "retrying"]);
-const labels = { not_started: "Waiting", queued: "Queued", working: "Working", retrying: "Retrying", succeeded: "Complete", failed: "Failed", cancelled: "Cancelled" };
+const labels = { not_started: "Waiting", queued: "Queued", working: "Working", retrying: "Retrying", succeeded: "Complete", failed: "Failed", cancelled: "Stopped" };
 
-function detailStatus({ complete, active, stopped }: { complete: boolean; active: boolean; stopped: boolean }) {
-  if (complete) return "Done";
-  if (stopped) return "Stopped";
+// One term per state, matching the rest of the app.
+function detailStatus({ complete, active, stopped, failed = false }: { complete: boolean; active: boolean; stopped: boolean; failed?: boolean }) {
+  if (complete) return "Complete";
+  if (stopped) return failed ? "Failed" : "Stopped";
   if (active) return "Working";
   return "Waiting";
 }
@@ -91,6 +92,7 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
   const active = snapshot != null && activeStatuses.has(snapshot.status);
   const phase = snapshot?.phase ?? "pending";
   const stopped = snapshot?.status === "failed" || snapshot?.status === "cancelled";
+  const failed = snapshot?.status === "failed";
   const pagesComplete = snapshot?.prepared === true || phase === "building_map" || phase === "reconciling_map" || phase === "awaiting_confirmation";
   const mapComplete = phase === "awaiting_confirmation";
   const mapActive = phase === "building_map" || phase === "reconciling_map";
@@ -108,7 +110,7 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
   return <section aria-label="Document preparation" style={{ padding: `${pwc.space.lg}px 0` }}>
     <div style={{ display: "flex", alignItems: "center", gap: pwc.space.md, flexWrap: "wrap" }}>
       <h2 style={{ ...ui.sectionTitle, margin: 0 }}>Document preparation</h2>
-      <span>{snapshot ? labels[snapshot.status] : missingDocument ? "Unavailable" : "Connecting"}</span>
+      <span data-testid="preparation-status">{snapshot ? labels[snapshot.status] : missingDocument ? "Unavailable" : "Connecting"}</span>
       {snapshot?.started_at != null && (active
         ? <ElapsedTimer startTime={snapshot.started_at * 1000} isRunning />
         : snapshot.updated_at != null ? <span>{formatElapsedMs(Math.max(0, snapshot.updated_at - snapshot.started_at) * 1000)}</span> : null)}
@@ -142,22 +144,26 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
             : "Start document preparation."}
       </p>
     ) : null}
-    {!missingDocument && <ol aria-label="Document preparation steps" style={{ listStyle: "none", margin: 0, padding: 0, borderTop: `1px solid ${pwc.grey200}` }}>
+    {!missingDocument && <details open={snapshot?.status !== "succeeded"} style={{ marginTop: pwc.space.sm }}>
+    <summary style={{ fontWeight: pwc.weight.medium, minHeight: 40 }}>
+      {snapshot?.status === "succeeded" ? `Preparation details${total > 0 ? ` · ${total} pages` : ""}` : "Preparation steps"}
+    </summary>
+    <ol aria-label="Document preparation steps" style={{ listStyle: "none", margin: 0, padding: 0, borderTop: `1px solid ${pwc.grey200}` }}>
       {[
         {
           label: "Read source pages",
           detail: total > 0 ? `Pages captured: ${captured} of ${total}` : "Waiting for page count",
-          state: detailStatus({ complete: readComplete, active: active && phase === "preparing_pages" && !readComplete, stopped: stopped && !readComplete }),
+          state: detailStatus({ complete: readComplete, active: active && phase === "preparing_pages" && !readComplete, stopped: stopped && !readComplete, failed }),
         },
         {
           label: "Check page readings and continuations",
           detail: total > 0 ? `Pages checked: ${checked} of ${total}` : "Waiting for page count",
-          state: detailStatus({ complete: checkComplete, active: active && phase === "preparing_pages" && checked > 0 && !checkComplete, stopped: stopped && !checkComplete }),
+          state: detailStatus({ complete: checkComplete, active: active && phase === "preparing_pages" && checked > 0 && !checkComplete, stopped: stopped && !checkComplete, failed }),
         },
         {
           label: "Build document map",
           detail: phase === "reconciling_map" ? "Reconciling statement and note ownership" : "Identify statements, formats, notes and denomination",
-          state: detailStatus({ complete: mapComplete, active: active && mapActive, stopped: stopped && pagesComplete }),
+          state: detailStatus({ complete: mapComplete, active: active && mapActive, stopped: stopped && pagesComplete, failed }),
         },
         {
           label: "Confirm detected setup",
@@ -166,13 +172,14 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
         },
       ].map((step) => (
         <li key={step.label} className="preparation-step-row" style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) minmax(220px, 2fr) 120px", gap: pwc.space.md, alignItems: "center", padding: `${pwc.space.sm}px 0`, borderBottom: `1px solid ${pwc.grey200}`, fontSize: 14 }}>
-          <strong style={{ fontFamily: pwc.fontHeading, fontWeight: pwc.weight.medium }}>{step.label}</strong>
+          <span style={{ fontFamily: pwc.fontHeading }}>{step.label}</span>
           <span style={{ color: pwc.grey700 }}>{step.detail}</span>
-          <span style={{ textAlign: "right", color: step.state === "Action required" ? pwc.orange700 : step.state === "Stopped" ? pwc.errorText : pwc.grey700, fontWeight: step.state === "Working" || step.state === "Action required" ? 600 : 400 }}>
+          <span style={{ textAlign: "right", color: step.state === "Action required" || step.state === "Failed" ? pwc.orange700 : pwc.grey700, fontWeight: step.state === "Working" || step.state === "Action required" ? pwc.weight.medium : pwc.weight.regular }}>
             {step.state}
           </span>
         </li>
       ))}
-    </ol>}
+    </ol>
+    </details>}
   </section>;
 }
