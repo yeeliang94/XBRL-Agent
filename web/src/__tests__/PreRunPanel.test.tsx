@@ -127,7 +127,7 @@ describe("PreRunPanel", () => {
     );
     // Format overrides stay visible with Advanced collapsed; the repeats
     // control and the "leave blank" hint are gone.
-    expect(screen.getByText("Statement format overrides")).toBeInTheDocument();
+    expect(screen.getByText("Statement formats")).toBeInTheDocument();
     expect(screen.queryByText(/leave a format blank/i)).toBeNull();
     expect(screen.queryByText(/repeats \(consistency\)/i)).toBeNull();
     expect(screen.queryByTestId("repeats-2")).toBeNull();
@@ -137,11 +137,11 @@ describe("PreRunPanel", () => {
     const onRun = vi.fn();
     render(<PreRunPanel sessionId="first-period" getSettings={vi.fn().mockResolvedValue(mockSettings)}
       initialConfig={{ first_financial_statements: true }} onRun={onRun} />);
-    const periods = await screen.findByRole("combobox", { name: "Reporting periods" });
-    expect(periods).toHaveValue("first");
+    const periods = await screen.findByRole("group", { name: "Reporting periods" });
+    expect(within(periods).getByRole("button", { name: "Current only" })).toHaveAttribute("aria-pressed", "true");
     startExtraction();
     expect(onRun).toHaveBeenLastCalledWith(expect.objectContaining({ first_financial_statements: true }));
-    fireEvent.change(periods, { target: { value: "comparative" } });
+    fireEvent.click(within(periods).getByRole("button", { name: "Current and prior" }));
     startExtraction();
     expect(onRun).toHaveBeenLastCalledWith(expect.objectContaining({ first_financial_statements: false }));
   });
@@ -306,7 +306,7 @@ describe("PreRunPanel", () => {
     // first. Filter by variant-specific options (same pattern the Run test
     // uses) to pin the first SOFP variant dropdown.
     await waitFor(() => {
-      const sofpSelect = screen.getAllByRole("combobox").find(
+      const sofpSelect = screen.getAllByRole("combobox", { hidden: true }).find(
         (el) => el.querySelector("option[value='CuNonCu']"),
       ) as HTMLSelectElement;
       expect(sofpSelect.value).toBe("CuNonCu");
@@ -412,7 +412,7 @@ describe("PreRunPanel", () => {
     // Same filter-by-variant-option trick as the auto-detect test — index 0
     // now belongs to the inline scout model dropdown.
     await waitFor(() => {
-      const sofpSelect = screen.getAllByRole("combobox").find(
+      const sofpSelect = screen.getAllByRole("combobox", { hidden: true }).find(
         (el) => el.querySelector("option[value='CuNonCu']"),
       ) as HTMLSelectElement;
       expect(sofpSelect).toHaveValue("CuNonCu");
@@ -513,7 +513,7 @@ describe("PreRunPanel", () => {
     // selector always renders all 5 dropdowns (Fix B). Identify SOFP by
     // its variant-specific option (CuNonCu is unique to SOFP) — the inline
     // scout model dropdown now occupies index 0.
-    const sofpVariant = screen.getAllByRole("combobox").find(
+    const sofpVariant = screen.getAllByRole("combobox", { hidden: true }).find(
       (el) => el.querySelector("option[value='CuNonCu']"),
     ) as HTMLSelectElement;
     fireEvent.change(sofpVariant, { target: { value: "CuNonCu" } });
@@ -525,7 +525,7 @@ describe("PreRunPanel", () => {
       expect(screen.getByText(/didn't detect any statements/i)).toBeInTheDocument();
     });
     // After the empty-scout return, the manual variant must still be set.
-    const sofpVariantAfter = screen.getAllByRole("combobox").find(
+    const sofpVariantAfter = screen.getAllByRole("combobox", { hidden: true }).find(
       (el) => el.querySelector("option[value='CuNonCu']"),
     ) as HTMLSelectElement;
     expect(sofpVariantAfter.value).toBe("CuNonCu");
@@ -927,7 +927,6 @@ describe("PreRunPanel", () => {
     );
     await openAdvanced();
     expect(screen.queryByRole("checkbox", { name: /scanned image/i })).toBeNull();
-    expect(screen.getByText(/Text and scanned pages are read automatically/)).toBeInTheDocument();
   });
 
   test("scout selects its reading method without a manual scan override", async () => {
@@ -1288,13 +1287,13 @@ describe("PreRunPanel", () => {
     // Wait for scout to settle. SOFP suggestion is valid and should land;
     // SOCIE=SoRE is not valid on MFRS and must be blanked.
     await waitFor(() => {
-      const sofpSelect = screen.getAllByRole("combobox").find(
+      const sofpSelect = screen.getAllByRole("combobox", { hidden: true }).find(
         (el) => el.querySelector("option[value='CuNonCu']"),
       ) as HTMLSelectElement;
       expect(sofpSelect.value).toBe("CuNonCu");
     });
 
-    const socieSelect = screen.getAllByRole("combobox").find(
+    const socieSelect = screen.getAllByRole("combobox", { hidden: true }).find(
       (el) => {
         const opts = Array.from((el as HTMLSelectElement).options).map((o) => o.value);
         return opts.includes("Default") && !opts.includes("SoRE")
@@ -1648,10 +1647,10 @@ describe("Upload-owned preparation", () => {
         ],
       } })} />);
     await screen.findByRole("button", { name: /start extraction/i });
+    // Once prepared, the notes list starts folded behind its summary.
+    fireEvent.click(screen.getByRole("button", { name: /notes templates/i }));
     fireEvent.click(screen.getByRole("checkbox", { name: /corporate information \(note 10\)/i }));
     expect(screen.getByText("All document notes included")).toBeInTheDocument();
-    expect(screen.getByText(/a notes run includes corporate information, accounting policies, and list of notes/i))
-      .toBeInTheDocument();
   });
 
   test("preserves a legacy saved denomination without selection metadata", async () => {
@@ -1717,7 +1716,7 @@ describe("Upload-owned preparation", () => {
       } })} />);
 
     await waitFor(() => expect(screen.getByRole("button", { name: "RM mil" })).toHaveAttribute("aria-pressed", "true"));
-    expect(screen.getByTestId("detected-denomination")).toHaveTextContent("Document scan detected RM mil");
+    expect(screen.getByTestId("detected-denomination")).toHaveTextContent("Detected RM mil");
     const confirm = screen.getByRole("button", { name: "Confirm setup and start extraction" });
     expect(confirm).toBeEnabled();
     startExtraction();
@@ -1791,7 +1790,7 @@ describe("Upload-owned preparation", () => {
         preparation={preparation({ attempt_id: "", status: "not_started", stage: "pending", phase: "pending", message: "Not started" })} />);
       await openAdvanced();
       fireEvent.click(screen.getByRole("button", { name: /preview scan/i }));
-      await waitFor(() => expect(screen.getAllByRole<HTMLSelectElement>("combobox")
+      await waitFor(() => expect(screen.getAllByRole<HTMLSelectElement>("combobox", { hidden: true })
         .find((element) => element.querySelector("option[value='CuNonCu']"))).toHaveValue("CuNonCu"));
       startExtraction();
       expect(onRun.mock.calls[0][0].variants.SOFP).toBe("CuNonCu");

@@ -56,16 +56,6 @@ const styles = {
   topbar: {
     ...ui.appTopbar,
   } as const,
-  headerRight: {
-    display: "flex",
-    alignItems: "center",
-    gap: pwc.space.md,
-  } as const,
-  logoutButton: {
-    ...ui.buttonGhost,
-    ...ui.buttonSm,
-    color: tokens.color.text.secondary,
-  } as const,
   // The concepts review workspace is a 3-column side-by-side surface that
   // genuinely benefits from the full viewport — the max-width cap left wide
   // gutters and squeezed the grid + PDF. No max-width here; tighter side
@@ -807,20 +797,21 @@ export default function App() {
           </button>
           {user && <div className="app-user" style={{ display: "flex", alignItems: "center", gap: 10, borderTop: `1px solid ${pwc.grey200}`, padding: "16px 8px 0", marginTop: 8 }}>
             <span aria-hidden="true" style={{ display: "grid", placeItems: "center", width: 30, height: 30, flexShrink: 0, borderRadius: "50%", background: pwc.grey100, fontSize: 12 }}>{(user.display_name || user.email).slice(0, 2).toUpperCase()}</span>
-            <div className="app-navigation-label" style={{ minWidth: 0 }}>
+            <div className="app-navigation-label" style={{ minWidth: 0, flex: 1 }}>
               <div style={{ fontSize: 13, overflowWrap: "anywhere" }}>{user.display_name || user.email}</div>
               <div style={ui.metadata}>{user.is_admin ? "Administrator" : "User"}</div>
             </div>
+            {user.provider !== "dev" && <button type="button" aria-label="Log out" data-tooltip="Log out" onClick={handleLogout}
+              className={`${uiClass.btnQuiet} app-logout`} style={{ ...ui.iconButton, flexShrink: 0 }}><Icon glyph={Logout} size={20} /></button>}
           </div>}
         </div>
       </aside>
       <div className="app-workspace" style={{ minWidth: 0 }}>
-      <header className="app-topbar" style={{ ...styles.topbar, zIndex: 30, borderBottom: `1px solid ${pwc.grey200}`, height: 64 }}>
-        {backLink && <button type="button" className={uiClass.btnQuiet} style={{ ...ui.buttonQuiet, marginLeft: -10, padding: "0 10px" }} onClick={backLink.onClick}><ArrowBack size={20} />{backLink.label}</button>}
-        <div style={{ ...styles.headerRight, marginLeft: "auto" }}>
-          {user?.provider !== "dev" && <button type="button" aria-label="Log out" data-tooltip="Log out" onClick={handleLogout} style={styles.logoutButton}><Icon glyph={Logout} size={20} /></button>}
-        </div>
-      </header>
+      {/* Only sub-pages have a top bar, and it holds just the back link; main
+          pages start with their title. */}
+      {backLink && <header className="app-topbar" style={{ ...styles.topbar, zIndex: 30, borderBottom: `1px solid ${pwc.grey200}`, height: 64 }}>
+        <button type="button" className={uiClass.btnQuiet} style={{ ...ui.buttonQuiet, marginLeft: -10, padding: "0 10px" }} onClick={backLink.onClick}><ArrowBack size={20} />{backLink.label}</button>
+      </header>}
       <main id="main-content" tabIndex={-1} className="app-main" style={reviewFocused || state.view === "concepts" ? styles.mainFull : styles.mainHistory}>
         {state.view === "settings" && <SettingsPage isAdmin={Boolean(user?.is_admin)} currentEmail={user?.email}
           onFieldLabels={canonicalEnabled ? () => { if (!confirmNavigationLeave()) return; dispatch({ type: "SET_VIEW", payload: "concepts" }); dispatch({ type: "SET_SELECTED_RUN_ID", payload: null }); } : undefined} />}

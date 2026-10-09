@@ -1093,7 +1093,7 @@ details[open] > summary::before {
   .app-navigation-label { display: none; }
   .app-navigation-link { justify-content: center !important; padding: 0 !important; }
   .app-rail-brand { padding: 0 !important; justify-content: center; }
-  .app-user { padding-left: 0 !important; padding-right: 0 !important; justify-content: center; }
+  .app-user { padding-left: 0 !important; padding-right: 0 !important; justify-content: center; flex-direction: column; }
 }
 /* Sidebar tooltips appear only when labels are hidden (collapsed rail), to
    the right of the icon so they never cover the neighbouring item. */
@@ -1122,7 +1122,10 @@ details[open] > summary::before {
   .app-document-navigation .app-navigation-link { max-width: 100%; }
   .app-sidebar .app-rail-footer { margin: 0 !important; }
   .app-sidebar [data-tooltip]::after { display: none; }
-  .app-rail-toggle, .app-user { display: none !important; }
+  .app-rail-toggle { display: none !important; }
+  /* Phones keep only the log-out action from the user row. */
+  .app-user { border: 0 !important; padding: 0 !important; margin: 0 !important; }
+  .app-user > :not(.app-logout) { display: none !important; }
   .app-topbar { padding: 0 16px !important; }
   .queue-summary { gap: 16px !important; }
 }
