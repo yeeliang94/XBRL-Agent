@@ -1019,9 +1019,8 @@ describe("PreRunPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/found\s*0\s*notes/i)).toBeInTheDocument();
+      expect(screen.getByText(/no notes found\. check that the pdf includes readable notes pages/i)).toBeInTheDocument();
     });
-    expect(screen.getByText(/no notes were found.*check that the pages/i)).toBeInTheDocument();
 
     fetchSpy.mockRestore();
   });
@@ -1065,9 +1064,9 @@ describe("PreRunPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/found\s*2\s*notes/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /notes in the document/i })).toHaveTextContent("2");
     });
-    expect(screen.queryByText(/no notes were found.*check that the pages/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no notes found/i)).not.toBeInTheDocument();
 
     fetchSpy.mockRestore();
   });
@@ -1540,17 +1539,19 @@ describe("notes inventory editor", () => {
 
   test("warns about the gap scout left and names the missing number", async () => {
     await renderWithInventory();
-    expect(screen.getByText(/Found 2 notes in the document\./)).toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: /notes in the document/i });
+    expect(toggle).toHaveTextContent("2");
     // Note 2 sits between two discovered notes — exactly the run-74 symptom.
-    expect(screen.getByText(/Note number 2 was not found/)).toBeInTheDocument();
+    expect(screen.getByText(/Note 2 not found/)).toBeInTheDocument();
+    // A missing number is the one case that needs a person, so the list opens.
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
   });
 
   test("operator can add the missing note without re-running the pre-scan", async () => {
     await renderWithInventory();
-    fireEvent.click(screen.getByRole("button", { name: /review or edit the notes list/i }));
-
     const list = screen.getByRole("list", { name: /discovered notes/i });
     expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: /^add note$/i }));
 
     fireEvent.change(screen.getByLabelText(/missing note number/i), {
       target: { value: "2" },
@@ -1565,12 +1566,12 @@ describe("notes inventory editor", () => {
     });
     expect(within(list).getByText("Significant accounting policies")).toBeInTheDocument();
     // Gap closed, so the warning retracts.
-    expect(screen.queryByText(/was not found/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not found/)).not.toBeInTheDocument();
   });
 
   test("refuses a duplicate note number", async () => {
     await renderWithInventory();
-    fireEvent.click(screen.getByRole("button", { name: /review or edit the notes list/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^add note$/i }));
     fireEvent.change(screen.getByLabelText(/missing note number/i), {
       target: { value: "1" },
     });
@@ -1583,7 +1584,6 @@ describe("notes inventory editor", () => {
 
   test("operator can remove a wrongly-detected note", async () => {
     await renderWithInventory();
-    fireEvent.click(screen.getByRole("button", { name: /review or edit the notes list/i }));
     fireEvent.click(screen.getByRole("button", { name: /remove note 3/i }));
     const list = screen.getByRole("list", { name: /discovered notes/i });
     await waitFor(() => {
@@ -1611,7 +1611,7 @@ describe("notes inventory editor", () => {
       await waitFor(() => {
         expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
       });
-      fireEvent.click(screen.getByRole("button", { name: /review or edit the notes list/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^add note$/i }));
       fireEvent.change(screen.getByLabelText(/missing note number/i), {
         target: { value: "2" },
       });
