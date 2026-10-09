@@ -593,7 +593,7 @@ textarea:focus {
 }
 .pwc-tab[aria-selected="true"],
 .pwc-tab[aria-current="page"] {
-  background: #F5F7F8 !important;
+  background: #EEEFF1 !important; /* grey100 — the one selected surface */
 }
 
 /* Pointer-selected tabs keep the quiet selected surface. Keyboard focus still
