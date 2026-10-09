@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Close } from "./iconGlyphs";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { userMessage } from "../lib/errors";
@@ -99,9 +100,16 @@ export function HumanFileDialog({ runId, open, defaultUnit, existing, onClose, o
       aria-label="Compare with human file"
     >
       <div style={{ ...ui.dialog, maxWidth: 480 }} className="pwc-dialog-enter">
-        <h2 style={{ ...ui.dialogTitle, marginBottom: pwc.space.md }}>
-          {replacing ? "Replace human file" : "Compare with human file"}
-        </h2>
+        {/* Same header as the other dialogs: title left, close at the right. */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: pwc.space.md, marginBottom: pwc.space.md }}>
+          <h2 style={{ ...ui.dialogTitle, margin: 0 }}>
+            {replacing ? "Replace human file" : "Compare with human file"}
+          </h2>
+          <button type="button" aria-label="Close" data-tooltip="Close" disabled={busy} onClick={onClose}
+            className={uiClass.btnQuiet} style={{ ...ui.iconButton, minWidth: 40, minHeight: 40, marginRight: -8 }}>
+            <Close size={20} />
+          </button>
+        </div>
         {done ? (
           <div data-testid="human-file-success" style={styles.stack}>
             <p role="status" style={styles.body}>

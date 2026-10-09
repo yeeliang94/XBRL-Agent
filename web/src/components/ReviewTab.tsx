@@ -88,12 +88,12 @@ function fmt(v: number | null): string {
   return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
-function flagDecisionSummary(flag: FlagRow): string {
-  const target = flag.target_sheet && flag.target_row != null
-    ? `${flag.target_sheet} row ${flag.target_row}`
-    : "the affected figure";
-  const evidence = flag.pdf_page != null ? ` against source PDF page ${flag.pdf_page}` : " against the source PDF";
-  return `The AI review could not safely resolve ${target}. Review it${evidence} and decide whether the extracted figure should change.`;
+// Plain words only: the figure's name when known, never a sheet/row ID
+// (those stay in the Open in Figures hover text).
+function flagDecisionSummary(flag: FlagRow, label?: string | null): string {
+  const target = label ? label : "this figure";
+  const evidence = flag.pdf_page != null ? `page ${flag.pdf_page} of the PDF` : "the source PDF";
+  return `The AI couldn't confirm ${target}. Check it against ${evidence} and record your decision.`;
 }
 
 /**
@@ -514,7 +514,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
         <>
           <h3 style={styles.h3}>
             {openFlags.length > 0
-              ? `Needs your decision (${openFlags.length})`
+              ? `Decisions (${openFlags.length})`
               : "Reviewer decisions (all resolved)"}
           </h3>
         <div style={styles.flagStack}>
@@ -537,7 +537,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
                   </button>
                 )}
               </div>
-              <p style={styles.flagReason}>{flagDecisionSummary(f)}</p>
+              <p style={styles.flagReason}>{flagDecisionSummary(f, data.diff.find((d) => d.concept_uuid === f.concept_uuid)?.label)}</p>
               {f.reasoning && (
                 <details style={styles.technicalDetails}>
                   <summary>Show technical details</summary>

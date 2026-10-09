@@ -28,8 +28,9 @@ interface Props {
 
 const CONFIDENCE_COLORS: Record<ConfidenceLevel, string> = {
   high: pwc.success,
-  // Fairly sure uses a lighter tint so it never reads as Please check.
-  medium: pwc.orange300,
+  // Only Please check is orange; Fairly sure is a neutral grey so the two
+  // never read as the same state.
+  medium: pwc.grey500,
   low: pwc.error,
 };
 
