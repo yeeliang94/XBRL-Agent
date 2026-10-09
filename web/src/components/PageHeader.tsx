@@ -51,7 +51,7 @@ const styles: Record<string, CSSProperties> = {
   eyebrow: {
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
     color: tokens.color.text.secondary,
     marginBottom: pwc.space.sm,
   },

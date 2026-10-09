@@ -165,7 +165,7 @@ describe("SettingsModal — P3 enhancements", () => {
 
     // Plain-English helper copy (Phase 6): no more "Enterprise LiteLLM" /
     // "Bruno" jargon.
-    expect(screen.getByText(/web address of your organisation/)).toBeInTheDocument();
+    expect(screen.getByText(/Must start with https/)).toBeInTheDocument();
     expect(screen.getByText(/access key for your organisation/)).toBeInTheDocument();
     // Model helper (the field is a text input here since this mock returns no
     // available_models; D4 shows a picker when models are present).

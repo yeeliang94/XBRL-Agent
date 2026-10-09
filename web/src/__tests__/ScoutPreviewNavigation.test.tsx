@@ -140,7 +140,7 @@ describe("preview scan navigation", () => {
     });
 
     await waitFor(() => {
-      const sofpVariant = screen.getAllByRole("combobox").find(
+      const sofpVariant = screen.getAllByRole("combobox", { hidden: true }).find(
         (element) => element.querySelector("option[value='CuNonCu']"),
       ) as HTMLSelectElement | undefined;
       expect(sofpVariant?.value).toBe("CuNonCu");

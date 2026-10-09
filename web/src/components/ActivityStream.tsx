@@ -1,7 +1,8 @@
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AgentTabStatus, ReasoningBlock, SSEEvent, ToolTimelineEntry } from "../lib/types";
 import { buildActivitySentences } from "../lib/buildActivitySentences";
 import { pwc } from "../lib/theme";
+import { ui } from "../lib/uiStyles";
 
 interface Props {
   events: SSEEvent[];
@@ -11,6 +12,11 @@ interface Props {
   status?: AgentTabStatus;
   streamKey: string;
   recorded?: boolean;
+  /** Tool calls, model and usage for this workstream. When supplied, one
+   *  "Technical detail" checkbox swaps the plain-language stream for it, so
+   *  the operator never has to compare two activity panels. */
+  technical?: ReactNode;
+  onTechnicalChange?: (open: boolean) => void;
 }
 
 interface UpdateProps {
@@ -57,29 +63,55 @@ export function ActivityStream({
   status,
   streamKey,
   recorded = false,
+  technical,
+  onTechnicalChange,
 }: Props) {
+  const [showTechnical, setShowTechnical] = useState(false);
   const items = useMemo(
     () => buildActivitySentences(events, toolTimeline, status).reverse(),
     [events, toolTimeline, reasoningBlocks, status],
   );
   const scrollRef = useRef<HTMLOListElement>(null);
+  // Page-level follow: true only while the operator sits at the page bottom,
+  // so opening Activity never jumps the page.
+  const pageFollowRef = useRef(false);
   const followLatestRef = useRef(true);
-  const previousStreamKeyRef = useRef(streamKey);
   const latest = items[items.length - 1] ?? null;
   const followKey = `${latest?.id ?? "empty"}:${latest?.text.length ?? 0}`;
+  const previousUpdateRef = useRef({ streamKey, followKey });
 
   const announcement = latest?.text ?? "";
 
   useEffect(() => {
-    if (previousStreamKeyRef.current !== streamKey) {
-      previousStreamKeyRef.current = streamKey;
+    const streamChanged = previousUpdateRef.current.streamKey !== streamKey;
+    const hasNewUpdate = !streamChanged && previousUpdateRef.current.followKey !== followKey;
+    previousUpdateRef.current = { streamKey, followKey };
+    if (streamChanged) {
       followLatestRef.current = true;
     }
     const node = scrollRef.current;
-    if (node && followLatestRef.current) {
-      node.scrollTop = node.scrollHeight;
+    if (!node) return;
+    if (node.scrollHeight > node.clientHeight) {
+      // Bounded by a narrow layout: follow inside the list.
+      if (followLatestRef.current) node.scrollTop = node.scrollHeight;
+      return;
     }
-  }, [followKey, streamKey]);
+    // The list grows with the page. Follow new updates only while the
+    // operator is already at the bottom of the page.
+    if (isRunning && pageFollowRef.current && hasNewUpdate) {
+      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
+    }
+  }, [followKey, streamKey, isRunning]);
+
+  useEffect(() => {
+    const onScroll = () => {
+      const root = document.documentElement;
+      pageFollowRef.current = root.scrollHeight - window.scrollY - window.innerHeight <= 48;
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   const handleScroll = useCallback(() => {
     const node = scrollRef.current;
@@ -98,8 +130,17 @@ export function ActivityStream({
       >
         {announcement}
       </span>
-      <div style={styles.heading}>{recorded ? "Recorded activity" : "Live activity"}</div>
-      <ol
+      <div style={styles.headingRow}>
+        <div style={styles.heading}>{recorded ? "Recorded activity" : "Live activity"}</div>
+        {technical != null && (
+          <label style={styles.technicalToggle}>
+            <input type="checkbox" style={ui.checkbox} checked={showTechnical}
+              onChange={(event) => { setShowTechnical(event.target.checked); onTechnicalChange?.(event.target.checked); }} />
+            Technical detail
+          </label>
+        )}
+      </div>
+      {showTechnical && technical != null ? <div data-testid="activity-technical">{technical}</div> : <ol
         ref={scrollRef}
         className="agent-scroll"
         aria-label="Activity updates"
@@ -119,7 +160,7 @@ export function ActivityStream({
               isLatest={index === items.length - 1}
             />
         ))}
-      </ol>
+      </ol>}
     </section>
   );
 }
@@ -130,19 +171,33 @@ const styles = {
     padding: `${pwc.space.lg}px 0 ${pwc.space.sm}px`,
     borderTop: `1px solid ${pwc.grey100}`,
   } as const,
-  heading: {
-    minHeight: 24,
-    fontFamily: pwc.fontHeading,
-    fontSize: 12,
-    fontWeight: pwc.weight.semibold,
-    color: pwc.grey700,
+  headingRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.md,
+    minHeight: 40,
+    marginBottom: pwc.space.sm,
   } as const,
+  heading: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 14,
+    fontWeight: pwc.weight.medium,
+    color: pwc.grey900,
+  } as const,
+  technicalToggle: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+    fontFamily: pwc.fontBody,
+    fontSize: 14,
+    color: pwc.grey900,
+    cursor: "pointer",
+  } as const,
+  // The list grows with the page; only narrow layouts bound it.
   feed: {
-    maxHeight: "min(52vh, 520px)",
     margin: 0,
     padding: `${pwc.space.xs}px ${pwc.space.sm}px ${pwc.space.xs}px 0`,
-    overflowY: "auto" as const,
-    overscrollBehavior: "contain" as const,
     listStyle: "none",
     scrollBehavior: "auto" as const,
   } as const,

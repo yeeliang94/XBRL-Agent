@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { StrictMode } from "react";
+import { describe, expect, test, vi } from "vitest";
 import { ActivityStream } from "../components/ActivityStream";
 import type { SSEEvent } from "../lib/types";
 
@@ -12,6 +13,41 @@ function status(message: string, timestamp: number): SSEEvent {
 }
 
 describe("ActivityStream", () => {
+  test.each([true, false])("follows new page updates only from the bottom (initially at bottom: %s)", (atBottom) => {
+    let pageHeight = atBottom ? window.innerHeight : window.innerHeight + 500;
+    const pageSize = vi.spyOn(document.documentElement, "scrollHeight", "get").mockImplementation(() => pageHeight);
+    const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    const first = status("Reading page 1", 1);
+    const view = (events: SSEEvent[], streamKey = "scout") => (
+      <StrictMode><ActivityStream events={events} toolTimeline={[]} reasoningBlocks={[]} isRunning streamKey={streamKey} /></StrictMode>
+    );
+    try {
+      const { rerender } = render(view([first]));
+      expect(scrollTo).not.toHaveBeenCalled();
+      pageHeight += 200;
+      rerender(view([first, status("Reading page 2", 2)]));
+      if (atBottom) expect(scrollTo).toHaveBeenCalledWith({ top: pageHeight, behavior: "auto" });
+      else expect(scrollTo).not.toHaveBeenCalled();
+
+      scrollTo.mockClear();
+      fireEvent.scroll(window); // Operator is reading above the new page bottom.
+      pageHeight += 200;
+      rerender(view([first, status("Reading page 2", 2), status("Reading page 3", 3)]));
+      expect(scrollTo).not.toHaveBeenCalled();
+
+      pageHeight = window.innerHeight;
+      fireEvent.scroll(window);
+      rerender(view([first], "notes"));
+      expect(scrollTo).not.toHaveBeenCalled();
+      pageHeight += 200;
+      rerender(view([first, status("Reading page 4", 4)], "notes"));
+      expect(scrollTo).toHaveBeenCalledWith({ top: pageHeight, behavior: "auto" });
+    } finally {
+      pageSize.mockRestore();
+      scrollTo.mockRestore();
+    }
+  });
+
   test("keeps provider reasoning out of the operator activity feed", () => {
     render(
       <ActivityStream

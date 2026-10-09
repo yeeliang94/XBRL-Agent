@@ -104,11 +104,11 @@ const buttonQuiet: CSSProperties = {
 // Sentence-case headers (design-system Tables): no tracked uppercase.
 const thBase: CSSProperties = {
   textAlign: "left",
-  background: component.table.header.surface,
-  fontSize: 13,
+  background: "transparent",
+  fontSize: 12,
   letterSpacing: 0,
   color: component.table.header.text,
-  fontWeight: pwc.weight.semibold,
+  fontWeight: pwc.weight.regular,
   borderBottom: `1px solid ${tokens.color.border.subtle}`,
 };
 
@@ -179,7 +179,7 @@ export const ui = {
     fontFamily: pwc.fontHeading,
     fontSize: 12,
     lineHeight: 1.4,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
     letterSpacing: 0,
     color: tokens.color.text.secondary,
   } as CSSProperties,
@@ -267,6 +267,25 @@ export const ui = {
     padding: `0 ${tokens.space.pageGutter}px`,
     background: tokens.surface.canvas,
   } as CSSProperties,
+  // Sidebar link — one geometry for primary navigation, recent documents,
+  // View all, Settings and the collapse control. Selection uses the shared
+  // selected surface (grey 200 on the grey sidebar) and medium weight.
+  navLink: {
+    ...buttonQuiet,
+    justifyContent: "flex-start",
+    gap: 10,
+    minHeight: 40,
+    width: "100%",
+    padding: "0 10px",
+    textAlign: "left",
+    fontWeight: pwc.weight.regular,
+    color: tokens.color.text.primary,
+    textDecoration: "none",
+  } as CSSProperties,
+  navLinkActive: {
+    background: pwc.grey200,
+    fontWeight: pwc.weight.medium,
+  } as CSSProperties,
   paneDivider: {
     borderLeft: `1px solid ${tokens.color.border.subtle}`,
   } as CSSProperties,
@@ -280,14 +299,9 @@ export const ui = {
     background: tokens.surface.canvas,
   } as CSSProperties,
   reviewSelection: {
-    background: "transparent",
+    background: pwc.grey100,
     color: tokens.color.text.primary,
-    fontWeight: pwc.weight.semibold,
-  } as CSSProperties,
-  reviewSelectionMarker: {
-    flexShrink: 0,
-    color: tokens.color.text.primary,
-    alignSelf: "center",
+    fontWeight: pwc.weight.medium,
   } as CSSProperties,
   flatList: {
     borderTop: `1px solid ${tokens.color.border.subtle}`,
@@ -369,20 +383,20 @@ export const ui = {
     color: tokens.color.text.secondary,
   } as CSSProperties,
 
-  // Single-line controls use one fixed 44px height so a row of mixed
-  // inputs, selects and date pickers shares a baseline.
+  // Every single-line control — input, select, button, segmented choice —
+  // shares one 40px height so mixed rows line up.
   input: {
     ...controlBase,
-    height: 44,
-    minHeight: 44,
+    height: 40,
+    minHeight: 40,
     padding: `0 ${pwc.space.lg}px`,
   } as CSSProperties,
 
   select: {
     ...controlBase,
     borderColor: pwc.grey300,
-    height: 44,
-    minHeight: 44,
+    height: 40,
+    minHeight: 40,
     padding: `0 ${pwc.space.lg}px`,
   } as CSSProperties,
 
@@ -446,11 +460,10 @@ export const ui = {
     borderColor: pwc.orange500,
   } as CSSProperties,
 
-  // Size modifiers — spread after a variant: { ...ui.buttonPrimary, ...ui.buttonSm }
-  // Compact desktop control (34px) — use only where controls are separated;
-  // nothing interactive falls below the WCAG 24px minimum.
+  // Size modifier kept for existing call sites. Buttons now share one 40px
+  // height everywhere, so it only tightens horizontal padding.
   buttonSm: {
-    minHeight: 34,
+    minHeight: 40,
     padding: "0 12px",
     fontSize: 14,
   } as CSSProperties,
@@ -498,6 +511,36 @@ export const ui = {
     fontVariantNumeric: "tabular-nums",
   } as CSSProperties,
 
+  // --- Segmented choice ----------------------------------------------------
+  // Mutually exclusive options (MFRS / MPERS, RM / RM '000). Same 40px height
+  // as every control and the same grey selected surface as tabs.
+  segmentGroup: {
+    display: "inline-flex",
+    alignSelf: "flex-start",
+    gap: 2,
+    minHeight: 40,
+    padding: 3,
+    border: `1px solid ${pwc.grey300}`,
+    borderRadius: tokens.radius.control,
+    background: tokens.surface.default,
+  } as CSSProperties,
+  segmentButton: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 14,
+    fontWeight: pwc.weight.medium,
+    minHeight: 32,
+    padding: "0 16px",
+    border: "none",
+    borderRadius: pwc.radius.sm,
+    background: "transparent",
+    color: tokens.color.text.secondary,
+    cursor: "pointer",
+  } as CSSProperties,
+  segmentButtonActive: {
+    background: pwc.grey100,
+    color: tokens.color.text.primary,
+  } as CSSProperties,
+
   // --- Tabs ---------------------------------------------------------------
   // Shared surface-tab geometry. Pages keep their own keyboard/selection
   // logic (role="tablist" etc.); active state uses fill and weight without
@@ -509,7 +552,7 @@ export const ui = {
     overflowX: "auto",
   } as CSSProperties,
   tab: {
-    minHeight: 34,
+    minHeight: 40,
     padding: "0 16px",
     fontFamily: pwc.fontHeading,
     fontSize: 14,
@@ -527,8 +570,8 @@ export const ui = {
   } as CSSProperties,
   tabActive: {
     color: tokens.color.text.primary,
-    background: tokens.surface.sunken,
-    fontWeight: pwc.weight.semibold,
+    background: pwc.grey100,
+    fontWeight: pwc.weight.medium,
   } as CSSProperties,
 
   // --- Dialog -------------------------------------------------------------
@@ -689,21 +732,23 @@ export const ui = {
     overflow: "hidden",
   } as CSSProperties,
   // Standard density (40px rows).
+  // Cells carry right padding only, so the first column starts on the same
+  // left edge as the page title and controls above the table.
   th: {
     ...thBase,
-    padding: `10px ${pwc.space.lg}px`,
+    padding: `8px ${pwc.space.lg}px 8px 0`,
   } as CSSProperties,
   td: {
-    padding: `10px ${pwc.space.lg}px`,
+    padding: `10px ${pwc.space.lg}px 10px 0`,
     borderBottom: `1px solid ${tokens.color.border.subtle}`,
   } as CSSProperties,
   // Comfortable density (48px rows) — setup surfaces, two-line content.
   thComfortable: {
     ...thBase,
-    padding: `14px ${pwc.space.lg}px`,
+    padding: `8px ${pwc.space.lg}px 8px 0`,
   } as CSSProperties,
   tdComfortable: {
-    padding: `14px ${pwc.space.lg}px`,
+    padding: `14px ${pwc.space.lg}px 14px 0`,
     borderBottom: `1px solid ${tokens.color.border.subtle}`,
   } as CSSProperties,
 
@@ -712,10 +757,10 @@ export const ui = {
   thDense: {
     ...thBase,
     fontSize: 12,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    padding: `${pwc.space.sm}px ${pwc.space.md}px ${pwc.space.sm}px 0`,
   } as CSSProperties,
   tdDense: {
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    padding: `${pwc.space.sm}px ${pwc.space.md}px ${pwc.space.sm}px 0`,
     borderBottom: `1px solid ${pwc.grey100}`,
   } as CSSProperties,
 };

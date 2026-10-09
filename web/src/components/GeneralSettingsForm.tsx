@@ -112,11 +112,20 @@ const styles = {
   } as React.CSSProperties,
   label: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 650,
+    fontWeight: 500,
     fontSize: 14,
     color: pwc.grey700,
     display: "block",
     marginBottom: pwc.space.xs,
+  } as React.CSSProperties,
+  // Disclosure headings keep the shared summary layout from index.css (flex
+  // row with the chevron); never give a <summary> display:block.
+  summary: {
+    fontFamily: pwc.fontHeading,
+    fontWeight: pwc.weight.medium,
+    fontSize: 14,
+    color: pwc.black,
+    minHeight: 40,
   } as React.CSSProperties,
   labelExtra: {
     fontFamily: pwc.fontBody,
@@ -574,7 +583,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       <div hidden={!shown("general")}>
       <SettingsSectionHeading
         title="Service connection"
-        description="Connect the application to your organisation’s AI service. These settings are shared by everyone."
+        description="Shared by everyone."
       />
       {/* Proxy URL */}
       <div style={styles.fieldGroup}>
@@ -607,8 +616,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           <p style={styles.errorText}>{errors.proxyUrl}</p>
         ) : (
           <p style={styles.helperText}>
-            The web address of your organisation&apos;s AI service — ask your IT
-            team if you&apos;re unsure. Must start with https://.
+            Must start with https://.
           </p>
         )}
         {localOverrideKeys.has("proxy_url") && (
@@ -626,7 +634,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       {/* API Key */}
       <div style={styles.fieldGroup}>
         <label style={styles.label} htmlFor="ai-service-api-key">
-          API Key
+          API key
           {apiKeyPreview && (
             <span style={styles.labelExtra}>(current: {apiKeyPreview})</span>
           )}
@@ -673,11 +681,8 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       </div>
       <div hidden={!shown("extraction")}>
       <SettingsSectionHeading title="Extraction"
-        description="Choose models for extraction and review. PDF and Word documents are prepared automatically after upload, including scanned-page text capture and source checks." />
-      <SettingsSectionHeading
-        title="Default models"
-        description="Choose the model used when a new extraction starts. Existing runs are unchanged."
-      />
+        description="PDF and Word documents are prepared automatically, including scanned-page text capture and source checks." />
+      <SettingsSectionHeading title="Default models" description="Applies to new runs." />
       <div style={styles.fieldGrid}>
       {/* Model — a picker of known models (config/models.json) instead of a
           typo-prone free-text field (D4). Falls back to a text input when the
@@ -725,7 +730,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           <p style={styles.errorText}>{errors.model}</p>
         ) : (
           <p style={styles.helperText}>
-            The default model for new runs. Role-specific choices below take priority; you can also choose models during run setup.
+            The default model for new runs.
           </p>
         )}
         {localOverrideKeys.has("model") && (
@@ -753,15 +758,12 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           {defaultModels.scout && !availableModels.some((m) => m.id === defaultModels.scout) && <option value={defaultModels.scout}>{defaultModels.scout} (custom)</option>}
           {availableModels.map((m) => <option key={m.id} value={m.id}>{m.display_name || m.id}</option>)}
         </select>
-        <p style={styles.helperText}>Scout locates statements and notes. Its page hints help the extraction agents.</p>
+        <p style={styles.helperText}>Finds the statements and notes.</p>
       </div>
       </div>
 
       <div style={styles.fieldGroup}>
         <label style={styles.label}>Models by task</label>
-        <p style={styles.helperText}>
-          Choose a different model for document scanning, a statement, notes, or review. A role set to Follow default model uses the Model above.
-        </p>
         <button
           type="button"
           aria-expanded={showRoleModels}
@@ -821,15 +823,10 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       {/* Per-role reasoning controls are rarely changed; keep them closed so
           the page leads with the settings people actually adjust. */}
       <details style={styles.fieldGroup}>
-        <summary style={styles.label}>AI reasoning</summary>
+        <summary style={styles.summary}>AI reasoning</summary>
       <div style={styles.fieldGroup}>
         <label style={styles.label}>Thinking level</label>
-        <p style={styles.helperText}>
-          How much reasoning each part of the run does before answering.
-          Leave a row on <strong>Provider default</strong> to keep today&apos;s
-          behaviour. Higher levels cost more and take longer — thinking is
-          billed at the output rate.
-        </p>
+        <p style={styles.helperText}>Higher levels cost more and take longer.</p>
         {THINKING_ROLES.map(({ key, label, hint }) => {
           const roleModel = defaultModels[key] || model;
           const choices = levelChoicesByModel[roleModel] || levelChoices;
@@ -871,12 +868,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         <label style={styles.label} htmlFor="reasoning-summary-visibility">
           Provider reasoning summaries
         </label>
-        <p style={styles.helperText}>
-          Requests readable provider summaries without exposing private chain of
-          thought. This setting is separate from thinking level and applies to
-          OpenAI models using the Responses API. Other transports show an
-          unavailable state instead of a blank panel.
-        </p>
+        <p style={styles.helperText}>OpenAI models only.</p>
         <select
           id="reasoning-summary-visibility"
           aria-label="Provider reasoning summary visibility"
@@ -903,7 +895,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
 
       <SettingsSectionHeading
         title="Scout limits"
-        description="Set how long the document scan may run before extraction continues without its page hints."
+        description="How long the document scan may run."
       />
       <div style={styles.fieldGrid}>
         <div style={styles.fieldGroup}>
@@ -929,9 +921,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             style={{ ...ui.input, width: "100%" }}
           />
           <p style={styles.helperText}>
-            Default: 600 seconds. Increase this for long or scanned filings.
-            Enter 0 to remove the overall Scout deadline; the per-turn timeout
-            still applies.
+            Default 600. Use 0 for no limit.
           </p>
         </div>
 
@@ -959,7 +949,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             style={{ ...ui.input, width: "100%" }}
           />
           <p style={styles.helperText}>
-            Default: 40 turns. One turn is an AI response during the document scan. Allow 1–40 turns; increase the limit if the scan stops before locating the statements.
+            Default 40, maximum 40.
           </p>
         </div>
       </div>
@@ -968,13 +958,8 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       <div hidden={!shown("advanced")}>
       <SettingsSectionHeading
         title="Automatic review"
-        description="These defaults apply to future runs and can increase processing time and usage."
+        description="Figures and notes are reviewed against the PDF after extraction. Applies to new runs."
       />
-      <p style={styles.helperText}>
-        Figures and prose notes are reviewed automatically after extraction.
-        Reviews use the source PDF and may increase processing time and usage.
-        A review with no applicable content shows its reason in Activity.
-      </p>
 
       <div style={styles.fieldGroup}>
         <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
@@ -987,11 +972,11 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           />
           <span style={styles.label}>Check notes coverage against the document inventory</span>
         </label>
-        <p style={styles.helperText}>Compares the source note inventory with extracted notes to identify missing or misplaced content.</p>
+        <p style={styles.helperText}>Flags missing or misplaced notes.</p>
       </div>
 
       <SettingsSectionHeading title="Notes source integrity"
-        description="Prepared documents with notes are checked automatically for missing, duplicated or altered source content, regardless of the legacy source-check mode. Incomplete checks remain unresolved." />
+        description="Prepared documents with notes are checked automatically for missing, duplicated or altered content." />
 
       <div style={styles.fieldGroup}>
         <label style={styles.label} htmlFor="cross-check-tolerance">Cross-check tolerance (RM)</label>
@@ -1013,7 +998,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           }}
           style={{ ...ui.input, width: 180 }}
         />
-        <p style={styles.helperText}>Differences within this amount are accepted by numerical cross-checks. Use 0 to flag every difference.</p>
+        <p style={styles.helperText}>Use 0 to flag every difference.</p>
       </div>
 
 
@@ -1023,10 +1008,10 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         <>
           <SettingsSectionHeading
             title="Advanced settings"
-            description="Optional feature switches and processing limits. Each control explains its effect; settings marked for restart take effect after the server restarts."
+            description="Some take effect after a server restart."
           />
           <details>
-            <summary style={styles.label}>Show advanced settings</summary>
+            <summary style={styles.summary}>More settings</summary>
             <AdvancedSettingsSection
               rows={advancedRows}
               edits={advancedEdits}
@@ -1045,7 +1030,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       {shown("general") && !readOnly && (
         <div style={{ marginTop: pwc.space.xl }}>
           <h3 style={styles.sectionTitle}>Restore defaults</h3>
-          <p style={styles.helperText}>Restore GPT-6 Luna for all tasks, Scout 600 seconds / 40 turns, and notes tables with no borders or fill. Prior-run hints are disabled.</p>
+          <p style={styles.helperText}>Resets models, limits and notes appearance for everyone.</p>
           <button type="button" style={ui.buttonSecondary} disabled={!loaded || loading || saving || testing} onClick={() => setResetOpen(true)}>Reset settings to defaults</button>
         </div>
       )}
@@ -1090,7 +1075,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
                   <span className="pwc-spinner" style={styles.testSpinner} /> Testing...
                 </>
               ) : (
-                "Test Connection"
+                "Test connection"
               )}
             </button>
           ) : (

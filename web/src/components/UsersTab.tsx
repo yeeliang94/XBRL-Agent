@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { Fragment, useState, useEffect, useCallback } from "react";
 import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
@@ -21,6 +21,8 @@ import {
 // ---------------------------------------------------------------------------
 
 const MIN_LEN = 8;
+
+const visuallyHidden: React.CSSProperties = { position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap" };
 
 const styles = {
   helperText: {
@@ -45,21 +47,19 @@ const styles = {
     width: "100%",
     borderCollapse: "collapse" as const,
     fontFamily: pwc.fontBody,
-    fontSize: 13,
+    fontSize: 14,
   } as React.CSSProperties,
-  // Shared compact table density (design-system Tables).
+  // Shared standard table density (design-system Tables).
   th: {
-    ...ui.thDense,
+    ...ui.th,
   } as React.CSSProperties,
   td: {
-    ...ui.tdDense,
+    ...ui.td,
     color: pwc.grey900,
     verticalAlign: "middle" as const,
   } as React.CSSProperties,
   actionBtn: {
     ...ui.buttonSecondary,
-    ...ui.buttonSm,
-    marginRight: pwc.space.xs,
   } as React.CSSProperties,
   addForm: {
     marginTop: pwc.space.xl,
@@ -68,8 +68,8 @@ const styles = {
   } as React.CSSProperties,
   addRow: {
     display: "flex",
-    gap: pwc.space.sm,
-    alignItems: "center",
+    gap: pwc.space.lg,
+    alignItems: "flex-end",
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
   // Shared input primitive (Phase 6 layout normalization) instead of the
@@ -78,20 +78,18 @@ const styles = {
     ...ui.input,
   } as React.CSSProperties,
   heading: {
-    fontFamily: pwc.fontHeading,
-    fontWeight: 650,
-    fontSize: 14,
-    color: pwc.grey700,
-    marginBottom: pwc.space.sm,
+    ...ui.sectionTitle,
+    marginBottom: pwc.space.lg,
   } as React.CSSProperties,
-  saveButton: { ...ui.buttonPrimary, ...ui.buttonSm } as React.CSSProperties,
+  saveButton: { ...ui.buttonPrimary } as React.CSSProperties,
   checkboxLabel: {
     display: "flex",
     alignItems: "center",
     gap: pwc.space.sm,
+    minHeight: 40,
     fontFamily: pwc.fontBody,
     fontSize: 14,
-    color: pwc.grey700,
+    color: pwc.grey900,
     cursor: "pointer",
   } as React.CSSProperties,
   // Visible field labels for the add-user form (UX-QA #8) — stacked above each
@@ -99,11 +97,11 @@ const styles = {
   fieldLabel: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: 2,
+    gap: pwc.space.sm,
     fontFamily: pwc.fontHeading,
-    fontSize: 12,
-    fontWeight: pwc.weight.semibold,
-    color: pwc.grey700,
+    fontSize: 14,
+    fontWeight: pwc.weight.medium,
+    color: pwc.grey900,
   } as React.CSSProperties,
   youLabel: {
     ...ui.badge,
@@ -138,6 +136,8 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
   // Inline reset-password target (the row currently being reset, by email)
   const [resetTarget, setResetTarget] = useState<string | null>(null);
   const [resetValue, setResetValue] = useState("");
+  // The row whose account actions are open (one at a time).
+  const [editing, setEditing] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // One shared confirm dialog for the one-click account actions (disable/
   // enable, make/revoke admin) — they change who can sign in or administer the
@@ -207,9 +207,6 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
 
   return (
     <div>
-      <p style={styles.helperText}>
-        Manage who can sign in and who can change shared settings. Changes apply immediately.
-      </p>
       {error && <p style={styles.error} role="alert">{error}</p>}
       {notice && <p style={styles.notice} role="status" aria-live="polite">{notice}</p>}
 
@@ -222,11 +219,11 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
       <table className="settings-users-table" style={styles.table}>
         <thead>
           <tr>
-            <th style={styles.th}>Email</th>
             <th style={styles.th}>Name</th>
-            <th style={styles.th}>Status</th>
+            <th style={styles.th}>Email</th>
             <th style={styles.th}>Role</th>
-            <th style={styles.th}>Actions</th>
+            <th style={styles.th}>Status</th>
+            <th style={{ ...styles.th, textAlign: "right" }}><span style={visuallyHidden}>Actions</span></th>
           </tr>
         </thead>
         <tbody>
@@ -234,32 +231,70 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
             // Don't offer the signed-in admin controls that could lock them
             // out of their own account (UX-QA #13).
             const isSelf = currentEmail != null && u.email === currentEmail;
+            const open = editing === u.email;
             return (
-            <tr key={u.email}>
-              <td style={styles.td}>{u.email}</td>
+            <Fragment key={u.email}>
+            <tr>
               <td style={styles.td}>
                 {u.display_name}{isSelf && <span style={styles.youLabel}>You</span>}
               </td>
-              <td style={styles.td}>{u.disabled ? "Disabled" : "Active"}</td>
+              <td style={{ ...styles.td, color: pwc.grey700 }}>{u.email}</td>
               <td style={styles.td}>{u.is_admin ? "Administrator" : "Standard user"}</td>
-              <td style={styles.td}>
-                {!isSelf && (
+              <td style={styles.td}>{u.disabled ? "Disabled" : "Active"}</td>
+              <td style={{ ...styles.td, textAlign: "right" }}>
+                {/* One action per row; account changes open beneath it. */}
+                <button
+                  type="button"
+                  className={uiClass.btnQuiet}
+                  style={{ ...ui.buttonQuiet, marginRight: -15 }}
+                  aria-expanded={open}
+                  aria-label={`Edit ${u.email}`}
+                  onClick={() => { setEditing(open ? null : u.email); setResetTarget(null); setResetValue(""); setError(null); }}
+                >
+                  {open ? "Close" : "Edit"}
+                </button>
+              </td>
+            </tr>
+            {open && (
+            <tr data-testid={`user-actions-${u.email}`}>
+              <td colSpan={5} style={{ ...styles.td, padding: `${pwc.space.md}px 0 ${pwc.space.lg}px` }}>
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: pwc.space.sm }}>
+                {resetTarget === u.email ? (
+                  <>
+                    <input
+                      type="password"
+                      value={resetValue}
+                      onChange={(e) => setResetValue(e.target.value)}
+                      placeholder="New password"
+                      aria-label={`New password for ${u.email}`}
+                      autoComplete="new-password"
+                      style={{ ...styles.input, width: 240 }}
+                    />
+                    <button
+                      className={uiClass.btnPrimary}
+                      style={styles.saveButton}
+                      disabled={busy}
+                      onClick={() => handleResetSubmit(u.email)}
+                    >
+                      Set new password
+                    </button>
+                    <button
+                      type="button"
+                      className={uiClass.btnQuiet}
+                      style={ui.buttonQuiet}
+                      onClick={() => { setResetTarget(null); setResetValue(""); }}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
                   <button
                     className={uiClass.btnSecondary}
                     style={styles.actionBtn}
                     disabled={busy}
-                    onClick={() =>
-                      setPending({
-                        title: u.disabled ? `Enable ${u.email}?` : `Disable ${u.email}?`,
-                        message: u.disabled
-                          ? "This account will be able to sign in again."
-                          : "This account will no longer be able to sign in. Any active sessions end.",
-                        confirmLabel: u.disabled ? "Enable" : "Disable",
-                        act: () => adminSetDisabled(u.email, !u.disabled),
-                      })
-                    }
+                    onClick={() => { setResetTarget(u.email); setResetValue(""); setError(null); }}
                   >
-                    {u.disabled ? "Enable" : "Disable"}
+                    Reset password
                   </button>
                 )}
                 {!isSelf && (
@@ -281,47 +316,30 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
                     {u.is_admin ? "Revoke admin" : "Make admin"}
                   </button>
                 )}
-                {resetTarget === u.email ? (
-                  <span style={{ display: "inline-flex", gap: pwc.space.xs, alignItems: "center" }}>
-                    <span style={styles.resetTarget}>New password for {u.email}</span>
-                    <input
-                      type="password"
-                      value={resetValue}
-                      onChange={(e) => setResetValue(e.target.value)}
-                      placeholder="New password"
-                      aria-label={`New password for ${u.email}`}
-                      autoComplete="new-password"
-                      style={styles.input}
-                    />
-                    <button
-                      className={uiClass.btnPrimary}
-                      style={styles.saveButton}
-                      disabled={busy}
-                      onClick={() => handleResetSubmit(u.email)}
-                    >
-                      Set new password
-                    </button>
-                    <button
-                      type="button"
-                      className={uiClass.btnSubtle}
-                      style={styles.actionBtn}
-                      onClick={() => { setResetTarget(null); setResetValue(""); }}
-                    >
-                      Cancel
-                    </button>
-                  </span>
-                ) : (
+                {!isSelf && (
                   <button
-                    className={uiClass.btnSecondary}
-                    style={styles.actionBtn}
+                    className={u.disabled ? uiClass.btnSecondary : uiClass.btnDanger}
+                    style={u.disabled ? styles.actionBtn : ui.buttonDanger}
                     disabled={busy}
-                    onClick={() => { setResetTarget(u.email); setResetValue(""); setError(null); }}
+                    onClick={() =>
+                      setPending({
+                        title: u.disabled ? `Enable ${u.email}?` : `Disable ${u.email}?`,
+                        message: u.disabled
+                          ? "This account will be able to sign in again."
+                          : "This account will no longer be able to sign in. Any active sessions end.",
+                        confirmLabel: u.disabled ? "Enable" : "Disable",
+                        act: () => adminSetDisabled(u.email, !u.disabled),
+                      })
+                    }
                   >
-                    Reset password
+                    {u.disabled ? "Enable" : "Disable"}
                   </button>
                 )}
+                </div>
               </td>
             </tr>
+            )}
+            </Fragment>
             );
           })}
         </tbody>
@@ -329,7 +347,7 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
       </div>
 
       <div style={styles.addForm}>
-        <p style={styles.heading}>Add user</p>
+        <h3 style={styles.heading}>Add user</h3>
         {/* autoComplete guards (UX-QA #8): an email field directly above a
             password field triggers the browser's login-form heuristic, which
             autofilled the admin's own email into Name and their saved password
@@ -362,7 +380,7 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
             />
           </label>
           <label className="settings-users-field" style={styles.fieldLabel}>
-            Password (min 8 characters)
+            Password
             <input
               type="password"
               value={newPassword}

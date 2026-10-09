@@ -120,7 +120,7 @@ select:disabled {
     }
 
     select:not([multiple]):not([size]) option:checked {
-      font-weight: 650;
+      font-weight: 500;
     }
 
     select:not([multiple]):not([size]) option:disabled {
@@ -196,10 +196,11 @@ input[type="checkbox"]:disabled:indeterminate {
   }
 }
 
-/* UI emphasis uses the emphasis weight (680). Note content keeps its own
+/* UI emphasis uses the medium weight (500); bold is for headings. Note content
+   and prepared note previews keep their own
    source-styled weights in NotesReviewTab.css. */
-:where(strong, b):not(.notes-review-tab *) {
-  font-weight: 680;
+:where(strong, b):not(.notes-review-tab *, .notes-output-preview *) {
+  font-weight: 500;
 }
 
 /* Working status icon: one slow rotation while work is live; static under
@@ -230,7 +231,7 @@ h2 {
   color: #FFFFFF;
   font-family: "Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 14px;
-  font-weight: 650;
+  font-weight: 500;
   text-decoration: none;
   transform: translateY(-200%);
   transition: transform var(--motion-fast) var(--motion-standard);
@@ -592,7 +593,7 @@ textarea:focus {
 }
 .pwc-tab[aria-selected="true"],
 .pwc-tab[aria-current="page"] {
-  background: #F5F7F8 !important;
+  background: #EEEFF1 !important; /* grey100 — the one selected surface */
 }
 
 /* Pointer-selected tabs keep the quiet selected surface. Keyboard focus still
@@ -611,8 +612,11 @@ textarea:focus {
 
 @media (max-width: 760px) {
   .settings-section-layout { grid-template-columns: minmax(0, 1fr) !important; gap: 24px !important; }
-  .settings-section-layout > [role="tablist"] { flex-direction: row !important; flex-wrap: wrap; }
-  .settings-section-layout > [role="tablist"] > button { width: auto !important; }
+  .settings-section-rail { flex-direction: row !important; flex-wrap: wrap; }
+  .settings-section-rail > [role="tablist"] { flex-direction: row !important; flex-wrap: wrap; }
+  .settings-section-rail button { width: auto !important; }
+  .statement-format-row { display: grid !important; grid-template-columns: minmax(0, 1fr) 16px; }
+  .statement-format-label { grid-column: 1 / -1; width: auto !important; }
   .notes-appearance-layout {
     grid-template-columns: minmax(0, 1fr) !important;
   }
@@ -680,7 +684,8 @@ textarea:focus {
 }
 
 /* Every native disclosure uses the same chevron as DisclosureChevron: the
-   Material Rounded chevron_right, grey at rest, turning down when open. */
+   Material Rounded chevron_right, grey at rest, turning down when open. The
+   title comes first and the chevron follows it, as in the setup sections. */
 summary {
   list-style: none;
   display: flex;
@@ -691,7 +696,7 @@ summary {
 summary::-webkit-details-marker {
   display: none;
 }
-summary::before {
+summary::after {
   content: "";
   width: 20px;
   height: 20px;
@@ -701,7 +706,7 @@ summary::before {
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M536.92-480.62 358.77-659.15q-7.08-6.7-6.77-15.81.31-9.12 7.39-16 7.07-6.89 16.3-6.89t16.31 7.08l189.92 189.92q4.62 4.62 6.81 9.43 2.19 4.8 2.19 10.61T588.73-470q-2.19 5-6.81 9.62L391.38-269.85q-6.69 6.7-15.8 6.58-9.12-.12-16.19-7.19-7.08-7.08-7.08-16.31 0-9.23 7.08-16.31l177.53-177.54Z'/%3E%3C/svg%3E") center / 20px no-repeat;
   transition: transform var(--motion-fast) var(--motion-standard);
 }
-details[open] > summary::before {
+details[open] > summary::after {
   transform: rotate(90deg);
 }
 
@@ -1092,11 +1097,16 @@ details[open] > summary::before {
   .app-navigation-label { display: none; }
   .app-navigation-link { justify-content: center !important; padding: 0 !important; }
   .app-rail-brand { padding: 0 !important; justify-content: center; }
-  .app-user { padding-left: 0 !important; padding-right: 0 !important; justify-content: center; }
+  .app-user { padding-left: 0 !important; padding-right: 0 !important; justify-content: center; flex-direction: column; }
 }
-.app-sidebar [data-tooltip]::after { left: 0; transform: translate(0, 2px); }
+/* Sidebar tooltips appear only when labels are hidden (collapsed rail), to
+   the right of the icon so they never cover the neighbouring item. */
+.app-sidebar [data-tooltip]::after { left: calc(100% + 8px); bottom: auto; top: 50%; transform: translate(0, -50%); }
 .app-sidebar [data-tooltip]:hover::after,
-.app-sidebar [data-tooltip]:focus-visible::after { transform: translate(0, 0); }
+.app-sidebar [data-tooltip]:focus-visible::after { transform: translate(0, -50%); }
+@container app-navigation (min-width: 81px) {
+  .app-sidebar [data-tooltip]::after { display: none; }
+}
 @media (max-width: 1000px) and (min-width: 781px) {
   .app-shell { grid-template-columns: 72px minmax(0, 1fr) !important; }
   .app-rail-toggle { display: none !important; }
@@ -1107,17 +1117,21 @@ details[open] > summary::before {
   .app-sidebar .app-navigation-label { display: inline !important; }
   .app-sidebar .app-rail-brand { width: 100%; padding: 0 !important; justify-content: flex-start; }
   .app-sidebar .app-primary-navigation { flex-direction: row !important; flex-wrap: wrap; flex: 1; }
-  .app-sidebar .app-navigation-link { padding: 0 8px !important; justify-content: flex-start !important; font-size: 13px !important; }
+  .app-sidebar .app-navigation-link { width: auto !important; padding: 0 8px !important; justify-content: flex-start !important; font-size: 13px !important; }
+  /* Phones keep the primary destinations only; the full list is one tap away. */
+  .app-sidebar .app-document-navigation { display: none !important; }
   .app-sidebar .app-document-navigation { width: 100%; flex-direction: row !important; flex-wrap: wrap; overflow: visible !important; }
   .app-document-navigation > .app-navigation-label { width: 100%; }
   .app-document-list { width: 100%; flex-direction: row !important; flex-wrap: wrap; overflow: visible !important; }
   .app-document-navigation .app-navigation-link { max-width: 100%; }
   .app-sidebar .app-rail-footer { margin: 0 !important; }
   .app-sidebar [data-tooltip]::after { display: none; }
-  .app-rail-toggle, .app-user { display: none !important; }
+  .app-rail-toggle { display: none !important; }
+  /* Phones keep only the log-out action from the user row. */
+  .app-user { border: 0 !important; padding: 0 !important; margin: 0 !important; }
+  .app-user > :not(.app-logout) { display: none !important; }
   .app-topbar { padding: 0 16px !important; }
   .queue-summary { gap: 16px !important; }
-  .queue-recent-row { align-items: flex-start !important; flex-wrap: wrap; gap: 12px !important; }
 }
 @media (max-width: 600px) {
   .document-list-row { grid-template-columns: minmax(0, 1fr) 112px !important; gap: 12px !important; }

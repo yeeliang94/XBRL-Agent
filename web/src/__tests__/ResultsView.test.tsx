@@ -255,7 +255,7 @@ describe("ResultsView — P4", () => {
   test("uses a quiet selected surface without an active underline", () => {
     renderResults();
     const summaryBtn = screen.getByRole("button", { name: /summary/i });
-    expect(summaryBtn.style.background).toBe("rgb(245, 247, 248)");
+    expect(summaryBtn.style.background).toBe("rgb(238, 239, 241)");
     expect(summaryBtn.style.borderBottom).toBe("");
   });
 });

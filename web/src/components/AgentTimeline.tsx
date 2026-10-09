@@ -52,8 +52,6 @@ const styles = {
     flexDirection: "column" as const,
     gap: 0,
     padding: 0,
-    overflowY: "auto" as const,
-    maxHeight: 500,
   } as React.CSSProperties,
   empty: {
     padding: `${pwc.space.xxl}px ${pwc.space.lg}px`,
@@ -67,11 +65,11 @@ const styles = {
     alignItems: "center",
     justifyContent: "space-between",
     gap: pwc.space.sm,
-    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
+    padding: "10px 0",
     marginTop: 0,
     borderRadius: 0,
     border: "none",
-    borderTop: `1px solid ${pwc.grey200}`,
+    borderTop: `1px solid ${pwc.grey100}`,
     background: pwc.white,
   } as React.CSSProperties,
   terminalMain: {
@@ -81,16 +79,16 @@ const styles = {
     minWidth: 0,
   } as React.CSSProperties,
   terminalDot: {
-    width: 12,
-    height: 12,
+    width: 7,
+    height: 7,
     borderRadius: "50%",
     display: "inline-block",
     flexShrink: 0,
   } as React.CSSProperties,
   terminalLabel: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: pwc.fontBody,
     fontSize: 14,
-    fontWeight: 680,
+    fontWeight: pwc.weight.regular,
     color: pwc.grey900,
   } as React.CSSProperties,
   // Status is carried by the dot, icon and text. Direction A does not add a
@@ -100,23 +98,22 @@ const styles = {
   } as React.CSSProperties,
   terminalError: {
     borderLeft: "none",
-    background: pwc.orange50,
   } as React.CSSProperties,
   warningsBlock: {
     marginTop: 0,
-    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
+    padding: "10px 0",
     borderRadius: 0,
     background: pwc.white,
     border: "none",
-    borderTop: `1px solid ${pwc.grey200}`,
+    borderTop: `1px solid ${pwc.grey100}`,
     fontFamily: pwc.fontBody,
-    fontSize: 12,
+    fontSize: 13,
     color: pwc.grey800,
   } as React.CSSProperties,
   warningsTitle: {
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 600,
     color: pwc.grey800,
     marginBottom: 4,
   } as React.CSSProperties,
@@ -126,10 +123,10 @@ const styles = {
   } as React.CSSProperties,
   reasoningRow: {
     display: "grid",
-    gridTemplateColumns: "18px minmax(0, 1fr)",
-    gap: pwc.space.sm,
-    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
-    borderTop: `1px solid ${pwc.grey200}`,
+    gridTemplateColumns: "7px minmax(0, 1fr)",
+    gap: pwc.space.md,
+    padding: "10px 0",
+    borderTop: `1px solid ${pwc.grey100}`,
     background: pwc.white,
   } as React.CSSProperties,
   reasoningRail: {
@@ -138,8 +135,8 @@ const styles = {
     paddingTop: 3,
   } as React.CSSProperties,
   reasoningDot: {
-    width: 8,
-    height: 8,
+    width: 7,
+    height: 7,
     borderRadius: "50%",
     background: pwc.orange500,
     boxShadow: `0 0 0 3px ${pwc.orange50}`,
@@ -154,14 +151,14 @@ const styles = {
     flexWrap: "wrap" as const,
     gap: pwc.space.xs,
     marginBottom: pwc.space.xs,
-    fontFamily: pwc.fontHeading,
-    fontSize: 12,
-    fontWeight: 680,
-    color: pwc.grey800,
+    fontFamily: pwc.fontBody,
+    fontSize: 14,
+    fontWeight: pwc.weight.regular,
+    color: pwc.grey900,
   } as React.CSSProperties,
   reasoningMeta: {
     fontFamily: pwc.fontBody,
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: 400,
     color: pwc.grey500,
   } as React.CSSProperties,
@@ -175,6 +172,15 @@ const styles = {
     overflowWrap: "anywhere" as const,
   } as React.CSSProperties,
 };
+
+// Provider summaries arrive as Markdown; show the words, not the ** marks.
+function stripMarkdownEmphasis(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/__(.+?)__/g, "$1")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
 function durationLabel(durationMs: number | null): string | null {
   if (durationMs == null) return null;
@@ -204,8 +210,8 @@ function ReasoningRow({ block, isRunning }: { block: ReasoningBlock; isRunning: 
           className={isActive ? "reasoning-stream-pulse" : undefined}
           style={{
             ...styles.reasoningDot,
-            background: isActive ? pwc.orange500 : pwc.grey400,
-            boxShadow: isActive ? `0 0 0 3px ${pwc.orange50}` : "none",
+            background: isActive ? pwc.orange500 : pwc.grey300,
+            boxShadow: "none",
           }}
         />
       </span>
@@ -218,7 +224,7 @@ function ReasoningRow({ block, isRunning }: { block: ReasoningBlock; isRunning: 
           </span>
         </div>
         <p style={styles.reasoningText}>
-          {content}
+          {stripMarkdownEmphasis(content)}
           {isActive ? <span className="reasoning-stream-cursor" aria-hidden="true" /> : null}
         </p>
       </div>
@@ -252,7 +258,7 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
             <div style={styles.terminalMain}>
               <span
                 aria-hidden="true"
-                style={{ ...styles.terminalDot, background: pwc.success, boxShadow: `0 0 0 3px ${pwc.successBg}` }}
+                style={{ ...styles.terminalDot, background: pwc.grey300 }}
               />
               <span style={styles.terminalLabel}>{event.event === "run_complete" ? "Run finished" : "Workstream finished"}</span>
             </div>
@@ -291,7 +297,7 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
       return (
         <div
           data-terminal="completed-with-errors"
-          style={{ ...styles.terminalRow, background: pwc.orange50 }}
+          style={styles.terminalRow}
         >
           <div style={styles.terminalMain}>
             <span

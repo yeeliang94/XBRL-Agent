@@ -9,7 +9,8 @@ import { PageHeader } from "../components/PageHeader";
 import { HistoryPage } from "./HistoryPage";
 import { ArrowForward } from "../components/iconGlyphs";
 import { StatusLabel } from "../components/StatusLabel";
-import { runStatusDisplay } from "../lib/runStatus";
+import { StatusIcon } from "../components/StatusIcon";
+import { runStatusDisplay, STATUS_SYMBOLS, type StatusSymbol } from "../lib/runStatus";
 
 /** One serial poll for the document list and switcher; preparation is durable. */
 export function useDocuments(enabled: boolean) {
@@ -58,6 +59,21 @@ export function useDocuments(enabled: boolean) {
   }, [enabled, visible, pages, revision]);
   return { runs, total, error, loading, refresh,
     loadMore: () => setPages((value) => value + 1) };
+}
+
+/** Status family for a document's current stage — drives the one icon the
+ *  sidebar shows beside a recent document instead of a second line of text. */
+export function documentStageSymbol(run: Pick<RunSummaryJson, "status" | "preparation">): StatusSymbol {
+  if (run.status === "draft") {
+    const prep = run.preparation;
+    if (prep?.status === "failed") return STATUS_SYMBOLS.failure;
+    if (prep?.status === "cancelled") return STATUS_SYMBOLS.inactive;
+    if (prep?.phase === "awaiting_confirmation") return STATUS_SYMBOLS.attention;
+    if (prep?.status === "working" || prep?.status === "retrying" || prep?.status === "queued") return STATUS_SYMBOLS.inProgress;
+    return STATUS_SYMBOLS.inactive;
+  }
+  if (run.status === "running") return STATUS_SYMBOLS.inProgress;
+  return runStatusDisplay(run.status).symbol;
 }
 
 export function documentStageLabel(run: Pick<RunSummaryJson, "status" | "preparation" | "pipeline_stage">): string {
@@ -116,16 +132,16 @@ export function DocumentsPage({ documents, section, onSection, onAdd, onOpen }: 
     return () => { cancelled = true; };
   }, [section, documents.loading, documents.total, queueRevision, summaryRetry]);
   return <div style={{ ...ui.pageWide, display: "flex", flexDirection: "column", gap: 24 }}>
-    <PageHeader eyebrow="Your workspace" title="Work queue" actions={<button type="button" className={uiClass.btnPrimary} style={ui.buttonPrimary} onClick={onAdd}>Add documents</button>} />
-    {section === "progress" && <section aria-label="Queue summary" style={{ borderBottom: `1px solid ${pwc.grey200}`, paddingBottom: 24 }}>
-      <div className="queue-summary" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 24 }}>
+    <PageHeader title={section === "history" ? "History" : "Work queue"} actions={<button type="button" className={uiClass.btnPrimary} style={ui.buttonPrimary} onClick={onAdd}>Add documents</button>} />
+    {section === "progress" && <section aria-label="Queue summary">
+      <div className="queue-summary" style={{ display: "flex", flexWrap: "wrap", gap: 48 }}>
         {([
           ["In queue", documents.loading || documents.error ? undefined : documents.total],
           ["Of these, not started", summary?.drafts],
           ["Completed this month", summary?.completedThisMonth],
-        ] as const).map(([label, count]) => <div key={label} style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
+        ] as const).map(([label, count]) => <div key={label} style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
           <span style={ui.metadata}>{label}</span>
-          <span style={{ ...ui.pageTitle, fontVariantNumeric: "tabular-nums" }}>{count ?? "—"}</span>
+          <span style={{ ...ui.bodyText, fontSize: 20, lineHeight: 1.4, fontVariantNumeric: "tabular-nums" }}>{count ?? "—"}</span>
         </div>)}
       </div>
       {summaryError && <div role="status" style={{ ...ui.metadata, display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
@@ -156,36 +172,37 @@ export function DocumentsPage({ documents, section, onSection, onAdd, onOpen }: 
         {documents.error && <p role="alert" style={ui.bodyText}>{documents.error}</p>}
         {documents.loading ? <p role="status" style={ui.bodyText}>Loading documents…</p> : documents.runs.length === 0 && !documents.error ?
           <p style={ui.bodyText}>No documents in progress.</p> : <div role="table" aria-label="Documents in progress">
-            <div role="row" className="document-list-row" style={{ ...rowStyle, color: pwc.grey700, fontSize: 12, padding: "0 0 12px" }}>
-              <span role="columnheader">Document</span><span role="columnheader">Current stage</span><span role="columnheader">Action</span>
+            <div role="row" className="document-list-row" style={headerRowStyle}>
+              <span role="columnheader">Document</span><span role="columnheader">Stage</span><span role="columnheader" style={{ textAlign: "right" }}>Action</span>
             </div>
             {documents.runs.map((run) => <div role="row" key={run.id} className="document-list-row" style={rowStyle}>
-              <div role="cell" style={{ minWidth: 0 }}><button type="button" onClick={() => onOpen(run)} style={{ ...ui.buttonQuiet, padding: 0, minHeight: 0, maxWidth: "100%", justifyContent: "flex-start", textAlign: "left", whiteSpace: "normal", overflowWrap: "anywhere" }}>{run.pdf_filename}</button>
-                <div style={{ ...ui.metadata, marginTop: 8 }}>{run.status === "draft" ? "Setup" : `${(run.filing_standard || "mfrs").toUpperCase()} · ${run.filing_level === "group" ? "Group" : "Company"}`}</div>
-              </div>
-              <span role="cell" style={{ paddingTop: 2, color: run.preparation?.action_required ? pwc.errorText : pwc.black }}>{documentStageLabel(run)}</span>
-              <div role="cell"><button type="button" style={{ ...ui.buttonGhost, width: "100%", justifyContent: "flex-start", padding: 0 }} onClick={() => onOpen(run)}>{run.status === "draft" ? "Open setup" : "Open"}</button></div>
+              <div role="cell" style={{ minWidth: 0 }}><button type="button" title={run.pdf_filename} onClick={() => onOpen(run)} style={nameButtonStyle}>{run.pdf_filename}</button></div>
+              <span role="cell" style={{ ...ui.status, fontSize: 14 }}><StatusIcon symbol={documentStageSymbol(run)} />{documentStageLabel(run)}</span>
+              <div role="cell" style={{ textAlign: "right" }}><button type="button" className={uiClass.btnQuiet} style={{ ...ui.buttonQuiet, marginRight: -15 }} onClick={() => onOpen(run)}>{run.status === "draft" ? "Open setup" : "Open"}</button></div>
             </div>)}
           </div>}
-        {documents.runs.length < documents.total && <button type="button" style={ui.buttonGhost} onClick={documents.loadMore}>Load more documents</button>}
-        <section aria-label="Recent results" style={{ marginTop: 32 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 16, marginBottom: 12 }}>
+        {documents.runs.length < documents.total && <div style={{ marginTop: 16 }}><button type="button" className={uiClass.btnSecondary} style={ui.buttonSecondary} onClick={documents.loadMore}>Load more documents</button></div>}
+        <section aria-label="Recent results" style={{ marginTop: 40 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 16, marginBottom: 8 }}>
             <h2 style={ui.sectionTitle}>Recent results</h2>
-            <button type="button" style={ui.buttonGhost} onClick={() => onSection("history")}>View history<ArrowForward size={16} /></button>
+            <button type="button" className={uiClass.btnQuiet} style={{ ...ui.buttonQuiet, marginRight: -15 }} onClick={() => onSection("history")}>View history<ArrowForward size={16} /></button>
           </div>
           {recentLoading ? <p role="status" style={ui.metadata}>Loading recent results…</p>
             : recentError ? <p role="status" style={ui.metadata}>Recent results unavailable. <button type="button" style={ui.buttonGhost} onClick={() => onSection("history")}>Open history</button></p>
             : recent.length === 0 ? <p style={ui.metadata}>No results yet.</p>
-            : recent.map((run) => <div key={run.id} className="queue-recent-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 24, padding: "16px 0", borderBottom: `1px solid ${pwc.grey100}` }}>
+            : recent.map((run) => <div key={run.id} className="document-list-row queue-recent-row" style={rowStyle}>
               <div style={{ minWidth: 0 }}>
-                <button type="button" style={{ ...ui.buttonQuiet, padding: 0, minHeight: 0, maxWidth: "100%", textAlign: "left", whiteSpace: "normal", justifyContent: "flex-start", overflowWrap: "anywhere" }} onClick={() => onOpen(run)}>{run.pdf_filename}</button>
-                <div style={{ ...ui.metadata, marginTop: 8 }}>{(run.filing_standard || "mfrs").toUpperCase()} · {run.filing_level === "group" ? "Group" : "Company"}</div>
+                <button type="button" title={run.pdf_filename} style={nameButtonStyle} onClick={() => onOpen(run)}>{run.pdf_filename}</button>
               </div>
               <StatusLabel state="inactive" symbol={runStatusDisplay(run.status).symbol} label={runStatusDisplay(run.status).label} />
+              <span style={{ ...ui.metadata, textAlign: "right" }}>{(run.filing_standard || "mfrs").toUpperCase()} · {run.filing_level === "group" ? "Group" : "Company"}</span>
             </div>)}
         </section>
       </>}
     </section>
   </div>;
 }
-const rowStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "minmax(0, 1.5fr) minmax(0, 1fr) 132px", gap: 24, alignItems: "start", padding: "20px 0", borderBottom: `1px solid ${pwc.grey100}`, fontFamily: pwc.fontBody, fontSize: 14 };
+// One grid for in-progress rows and recent results so their columns line up.
+const rowStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "minmax(0, 1.5fr) minmax(0, 1fr) 160px", gap: 24, alignItems: "center", minHeight: 48, padding: "4px 0", borderBottom: `1px solid ${pwc.grey100}`, fontFamily: pwc.fontBody, fontSize: 14 };
+const headerRowStyle: React.CSSProperties = { ...rowStyle, minHeight: 0, padding: "0 0 8px", borderBottom: `1px solid ${pwc.grey200}`, color: pwc.grey700, fontSize: 12 };
+const nameButtonStyle: React.CSSProperties = { ...ui.buttonQuiet, padding: 0, minHeight: 0, maxWidth: "100%", display: "block", textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: pwc.weight.regular };

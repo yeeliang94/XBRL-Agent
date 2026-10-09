@@ -118,7 +118,7 @@ describe("App routing", () => {
     try {
       const { default: App } = await import("../App");
       render(<App />);
-      const sidebar = screen.getByRole("navigation", { name: "In-progress documents" });
+      const sidebar = screen.getByRole("navigation", { name: "Recent documents" });
       await waitFor(() => expect(within(sidebar).getAllByRole("button", { name: /^Open / })).toHaveLength(Math.min(count + 1, 3)));
       expect(within(sidebar).getByRole("button", { name: "Open Document 42" })).toHaveAttribute("aria-current", "page");
       expect(within(sidebar).getByRole("button", { name: "Open Filing 1.pdf" })).toBeInTheDocument();
@@ -195,7 +195,7 @@ describe("App routing", () => {
       }
       fireEvent.click(settings);
       const tabs = screen.getByRole("tablist", { name: "Settings sections" });
-      fireEvent.click(within(tabs).getByRole("tab", { name: "Agent instructions" }));
+      fireEvent.click(within(tabs).getByRole("tab", { name: "Team guidance" }));
       const editor = await screen.findByLabelText("Additional instructions");
       fireEvent.change(editor, { target: { value: "Unsaved practice" } });
       act(() => window.history.back());
@@ -223,7 +223,7 @@ describe("App routing", () => {
     const { unmount } = render(<App />);
     try {
       fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
-      fireEvent.click(within(screen.getByRole("tablist", { name: "Settings sections" })).getByRole("tab", { name: "Agent instructions" }));
+      fireEvent.click(within(screen.getByRole("tablist", { name: "Settings sections" })).getByRole("tab", { name: "Team guidance" }));
       const editor = await screen.findByLabelText("Additional instructions");
       fireEvent.change(editor, { target: { value: "Unsaved practice" } });
       fireEvent.click(screen.getByRole("button", { name: "Log out" }));

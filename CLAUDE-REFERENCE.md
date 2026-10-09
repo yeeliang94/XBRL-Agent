@@ -460,7 +460,10 @@ element named in a screenshot. Specifically:
   not shown as complete. Pinned by `web/src/__tests__/ExtractPage.test.tsx`.
 
 Before changing UI, classify visible content as keep, shorten, relocate, show
-only when relevant, or remove. Validate the user workflow plus long content,
+only when relevant, or remove. Follow the design guide's Writing and microcopy section:
+labels, options and buttons must carry the meaning on their own, and helper
+text is allowed only for formats/limits, non-obvious consequences, exceptions
+to act on, and errors (one line, about 12 words). Apply its hidden-helper test. Validate the user workflow plus long content,
 overflow, repeated selection, missing source, narrow layout, and all loading,
 complete, empty, and failed states. Update the design guide and
 `web/src/__tests__/designSystemParity.test.ts` when the shared contract changes.
@@ -1974,7 +1977,11 @@ current-consumer filtering, and historical readability),
     (`reviewer` ∈ `_AGENT_ROLES`).
 - **Frontend:** the **Review** tab (`web/src/components/ReviewTab.tsx`) + Values
   tab + `/concepts/{id}` alias show whenever `/api/config` reports
-  `canonical_mode: true`. Reviewer API: `GET /review`, `POST /flags/{id}/answer`,
+  `canonical_mode: true`. Reviewer flags carry their figure label from the exact
+  saved concept UUID, including unchanged and retired historical concepts;
+  missing labels retain a visible worksheet/row fallback. Pinned by
+  `tests/test_reviewer_routes.py` and `web/src/__tests__/ReviewTab.test.tsx`.
+  Reviewer API: `GET /review`, `POST /flags/{id}/answer`,
   `POST /re-review`, `GET /re-review/status`, `POST /revert-to-original`.
   - **Manual re-review is async** (a pass runs minutes): `POST /re-review` only
     LAUNCHES it on a dedicated thread with its own event loop, tracked in the

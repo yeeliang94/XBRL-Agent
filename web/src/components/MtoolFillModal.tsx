@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
+import { STATUS_SYMBOLS } from "../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 import { ApiError, userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
@@ -49,9 +51,18 @@ interface NotesError {
   detail?: string;
 }
 
+// Workbook-structure faults are explained as the action the operator can
+// take, never as the internal sheet or XML part that is missing.
+function plainNotesCause(cause: string): string {
+  if (/FootnoteTexts|sharedStrings/i.test(cause)) {
+    return "This template has no space for written notes. Export a fresh template from mTool, or turn off filling the written notes.";
+  }
+  return cause;
+}
+
 function notesErrorMessage(error: NotesError): string {
   const identity = [error.label, error.key].filter(Boolean).join(" · ");
-  const cause = error.error ?? error.detail ?? "Notes could not be filled. Try again or complete them in mTool.";
+  const cause = plainNotesCause(error.error ?? error.detail ?? "Notes could not be filled. Try again or complete them in mTool.");
   return identity ? `${identity}: ${cause}` : cause;
 }
 
@@ -216,6 +227,9 @@ interface Props {
   runId: number;
   open: boolean;
   onClose: () => void;
+  /** Shown at the top when the run is not ready to file, so preparing a
+   *  draft needs one dialog rather than a confirmation followed by another. */
+  notice?: React.ReactNode;
 }
 
 type DetectedTemplateSettings = {
@@ -326,7 +340,7 @@ const styles = {
   } as React.CSSProperties,
   summaryValue: {
     fontSize: 16,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.regular,
     color: pwc.grey900,
     lineHeight: 1.2,
   } as React.CSSProperties,
@@ -500,7 +514,7 @@ function detectedToColumnMap(
   return seed;
 }
 
-export function MtoolFillModal({ runId, open, onClose }: Props) {
+export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
   const replacementInputRef = useRef<HTMLInputElement>(null);
   const [meta, setMeta] = useState<FillMeta | null>(null);
   const [notesStale, setNotesStale] = useState(false);
@@ -1029,6 +1043,14 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
 
   if (!open) return null;
 
+  const fillBlockedReason = templateSettings?.filing_family_match === false
+    ? "Choose a template that matches this run's filing"
+    : selectedSheets?.length === 0
+      ? "Select at least one sheet"
+      : fillNotes && notesStale
+        ? "Refresh the notes preview first"
+        : null;
+
   return (
     <div
       className="pwc-dialog-scrim-enter"
@@ -1056,6 +1078,12 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           </button>
         </div>
         <div style={{ overflowY: "auto", minHeight: 0, flex: "1 1 auto" }}>
+        {notice && (
+          <p role="note" style={{ ...ui.bodyText, display: "flex", alignItems: "flex-start", gap: pwc.space.sm, margin: `0 0 ${pwc.space.md}px` }}>
+            <StatusIcon symbol={STATUS_SYMBOLS.attention} style={{ marginTop: 2 }} />
+            <span>{notice}</span>
+          </p>
+        )}
         {!file && <p style={styles.sub}>Upload an empty .xlsx template exported from mTool.</p>}
 
         <fieldset disabled={busy || downloading || fillQueued} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
@@ -1074,7 +1102,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         {file && (
           <div style={styles.selectedFile}>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: pwc.weight.semibold, overflowWrap: "anywhere" }}>{file.name}</div>
+              <div style={{ fontWeight: pwc.weight.medium, overflowWrap: "anywhere" }}>{file.name}</div>
             </div>
             <button type="button" className={uiClass.btnSecondary}
               style={{ ...ui.buttonSecondary, flexShrink: 0 }}
@@ -1224,7 +1252,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 style={{
                   borderTop: `1px solid ${pwc.grey200}`,
                   paddingTop: pwc.space.md,
-                  fontSize: 12,
+                  fontSize: 14,
                 }}
                 aria-label="Notes preview"
               >
@@ -1243,7 +1271,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 {preview.errors.length > 0 && (
                   <div style={{ ...ui.alertError, marginTop: pwc.space.sm }}>
                     <div style={{ fontWeight: pwc.weight.medium }}>
-                      {preview.errors.length} problem(s) would stop the notes from landing:
+                      {preview.errors.length === 1
+                        ? "1 problem stops the notes from being filled:"
+                        : `${preview.errors.length} problems stop the notes from being filled:`}
                     </div>
                     <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
                       {preview.errors.slice(0, 4).map((e, i) => (
@@ -1380,84 +1410,89 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           </div>
         )}
 
-        {columnPrompt && (
-          <div
-            style={{
-              borderTop: `1px solid ${pwc.grey200}`,
-              paddingTop: pwc.space.md,
-              marginTop: pwc.space.sm,
-              fontSize: 12,
-              color: pwc.grey700,
-            }}
-          >
-            {columnPrompt}
-          </div>
-        )}
-
-        {columnMap && (
-          <div
-            style={{
-              borderTop: columnPrompt ? "none" : `1px solid ${pwc.grey200}`,
-              paddingTop: columnPrompt ? pwc.space.sm : pwc.space.md,
-              marginTop: pwc.space.md,
-              fontSize: 12,
-            }}
+        {columnMap && (() => {
+          // One table: a row per worksheet, a column per Excel letter. Roles
+          // are the union across sheets so every row lines up.
+          const roles = Array.from(new Set(Object.values(columnMap).flatMap((cfg) => Object.keys(cfg.columns))));
+          const roleLabel = (role: string) => {
+            const text = role.replace(/_/g, " ");
+            return text.charAt(0).toUpperCase() + text.slice(1);
+          };
+          const cellInput: React.CSSProperties = { ...ui.input, width: 64, padding: 0, textAlign: "center", textTransform: "uppercase" };
+          return (
+          <section
+            style={{ borderTop: `1px solid ${pwc.grey200}`, paddingTop: pwc.space.lg, marginTop: pwc.space.lg }}
             aria-label="Column layout editor"
           >
-            <div style={{ fontWeight: pwc.weight.medium, marginBottom: 2 }}>
-              {columnConfidence === "high"
-                ? "Period columns detected"
-                : "Confirm period columns"}
-            </div>
-            <div style={{ color: pwc.grey700, marginBottom: pwc.space.sm }}>
-              {columnConfidence === "high"
-                ? "Only change these if the year labels in your template show a different layout."
-                : "Enter the row-label column and the figure columns shown by their letters in Excel (for example D, E, F)."}
-            </div>
-            {Object.entries(columnMap).map(([sheet, cfg]) => (
-              <div key={sheet} style={{ marginBottom: pwc.space.sm }}>
-                <div style={{ color: pwc.grey700, marginBottom: 2 }}>{sheet}</div>
-                <label style={{ marginRight: pwc.space.md }}>
-                  Labels{" "}
-                  <input
-                    aria-label={`${sheet} label column`}
-                    value={cfg.label_column}
-                    onChange={(e) =>
-                      setColumnMap((m) =>
-                        m
-                          ? { ...m, [sheet]: { ...m[sheet], label_column: e.target.value.toUpperCase() } }
-                          : m
-                      )
-                    }
-                    style={{ width: 44, textTransform: "uppercase" }}
-                  />
-                </label>
-                {Object.keys(cfg.columns).map((role) => (
-                  <label key={role} style={{ marginRight: pwc.space.md }}>
-                    {role.replace(/_/g, " ")}{" "}
-                    <input
-                      aria-label={`${sheet} ${role} column`}
-                      value={cfg.columns[role]}
-                      onChange={(e) =>
-                        setColumnMap((m) =>
-                          m
-                            ? {
-                                ...m,
-                                [sheet]: {
-                                  ...m[sheet],
-                                  columns: { ...m[sheet].columns, [role]: e.target.value.toUpperCase() },
-                                },
-                              }
-                            : m
-                        )
-                      }
-                      style={{ width: 44, textTransform: "uppercase" }}
-                    />
-                  </label>
+            <h3 style={{ ...ui.subsectionTitle, marginBottom: pwc.space.xs }}>
+              {columnConfidence === "high" ? "Excel columns" : "Confirm Excel columns"}
+            </h3>
+            <p style={{ ...ui.metadata, margin: `0 0 ${pwc.space.md}px` }}>
+              {columnPrompt ?? (columnConfidence === "high"
+                ? "Change only if your template uses a different layout."
+                : "Enter the column letters for labels and each year, for example D, E, F.")}
+            </p>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+              <thead>
+                <tr>
+                  <th style={ui.th}>Worksheet</th>
+                  <th style={{ ...ui.th, width: 80 }}>Labels</th>
+                  {roles.map((role) => <th key={role} style={{ ...ui.th, width: 96 }}>{roleLabel(role)}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(columnMap).map(([sheet, cfg]) => (
+                  <tr key={sheet}>
+                    <td style={{ ...ui.td, padding: `${pwc.space.xs}px ${pwc.space.lg}px ${pwc.space.xs}px 0` }} title={sheet}>
+                      {friendlyMtoolSheetName(sheet)}
+                    </td>
+                    <td style={{ ...ui.td, padding: `${pwc.space.xs}px ${pwc.space.lg}px ${pwc.space.xs}px 0` }}>
+                      <input
+                        aria-label={`${sheet} label column`}
+                        value={cfg.label_column}
+                        onChange={(e) =>
+                          setColumnMap((m) =>
+                            m
+                              ? { ...m, [sheet]: { ...m[sheet], label_column: e.target.value.toUpperCase() } }
+                              : m
+                          )
+                        }
+                        style={cellInput}
+                      />
+                    </td>
+                    {roles.map((role) => (
+                      <td key={role} style={{ ...ui.td, padding: `${pwc.space.xs}px ${pwc.space.lg}px ${pwc.space.xs}px 0` }}>
+                        {role in cfg.columns && (
+                          <input
+                            aria-label={`${sheet} ${role} column`}
+                            value={cfg.columns[role]}
+                            onChange={(e) =>
+                              setColumnMap((m) =>
+                                m
+                                  ? {
+                                      ...m,
+                                      [sheet]: {
+                                        ...m[sheet],
+                                        columns: { ...m[sheet].columns, [role]: e.target.value.toUpperCase() },
+                                      },
+                                    }
+                                  : m
+                              )
+                            }
+                            style={cellInput}
+                          />
+                        )}
+                      </td>
+                    ))}
+                  </tr>
                 ))}
-              </div>
-            ))}
-          </div>
+              </tbody>
+            </table>
+          </section>
+          );
+        })()}
+        {!columnMap && columnPrompt && (
+          <p style={{ ...ui.metadata, marginTop: pwc.space.md }}>{columnPrompt}</p>
         )}
 
         </div>
@@ -1626,7 +1661,13 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
 
         </div>
         <div style={{ ...styles.actions, flexShrink: 0, paddingTop: pwc.space.md, borderTop: `1px solid ${pwc.grey200}` }}>
-          {!report && <button type="button" onClick={onClose} className={uiClass.btnGhost} style={ui.buttonGhost}>Cancel</button>}
+          {/* Say why Fill is unavailable, beside the button it affects. */}
+          {!report && file && !busy && !fillQueued && fillBlockedReason && (
+            <span role="status" style={{ ...ui.metadata, marginRight: "auto", alignSelf: "center", display: "inline-flex", alignItems: "center", gap: pwc.space.sm }}>
+              <StatusIcon symbol={STATUS_SYMBOLS.attention} />{fillBlockedReason}
+            </span>
+          )}
+          {!report && <button type="button" onClick={onClose} className={uiClass.btnSecondary} style={ui.buttonSecondary}>Cancel</button>}
           <button
             type="button"
             ref={fillButtonRef}

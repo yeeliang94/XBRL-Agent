@@ -4,6 +4,8 @@ import type { AgentTabStatus, FilingStandard } from "../lib/types";
 import { NON_AGENT_TAB_IDS } from "../lib/agentTabKinds";
 import { workstreamStatusLabel } from "../lib/workstreamStatus";
 import { statementCodeSubtitle } from "../lib/sheetLabels";
+import { STATUS_SYMBOLS, type StatusSymbol } from "../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -88,6 +90,15 @@ const WORKSTREAM_LABELS: Record<string, string> = {
   validator: "Cross-checks",
 };
 
+/** The roster's plain-language name for a workstream role, so the detail
+ *  pane can use the same title as the list. */
+export function workstreamTitle(role: string, filingStandard?: unknown): string | null {
+  if (filingStandard === "clbg" && (role === "SOPL" || role === "SOCIE")) {
+    return statementCodeSubtitle(role, filingStandard) ?? null;
+  }
+  return WORKSTREAM_LABELS[role] ?? null;
+}
+
 function workstreamLabel(agent: AgentTabState, filingStandard?: unknown): string {
   if (filingStandard === "clbg") {
     const statement = [agent.agentId, agent.role].find((code) => code === "SOPL" || code === "SOCIE");
@@ -112,16 +123,29 @@ function workstreamKind(agent: AgentTabState): string {
 // Status badge — small indicator showing agent state
 // ---------------------------------------------------------------------------
 
-function StatusBadge({ status }: { status: AgentTabStatus }) {
+// The same status icons used across the app, so a workstream reads like
+// every other status. A finished workstream that still needs a human look
+// shows the attention icon.
+const STATUS_ICON_SYMBOL: Record<AgentTabStatus, StatusSymbol> = {
+  complete: STATUS_SYMBOLS.success,
+  running: STATUS_SYMBOLS.inProgress,
+  aborting: STATUS_SYMBOLS.inProgress,
+  failed: STATUS_SYMBOLS.failure,
+  cancelled: STATUS_SYMBOLS.inactive,
+  skipped: STATUS_SYMBOLS.inactive,
+  pending: STATUS_SYMBOLS.inactive,
+};
+
+function StatusBadge({ status, flagged = false }: { status: AgentTabStatus; flagged?: boolean }) {
   const spec = STATUS_BADGES[status];
   return (
     <span
       data-status={status}
       className="pwc-status-change"
-      style={spec.wrapper}
+      style={{ display: "inline-flex", width: 18, justifyContent: "center", flexShrink: 0 }}
       aria-label={spec.label}
     >
-      <span style={spec.dot} />
+      <StatusIcon symbol={flagged ? STATUS_SYMBOLS.attention : STATUS_ICON_SYMBOL[status]} />
     </span>
   );
 }
@@ -222,7 +246,7 @@ function AgentTabsImpl({
         className="agent-tab"
         style={{ ...styles.tab, ...(isActive ? styles.tabActive : {}) }}
       >
-        <StatusBadge status={agent.status} />
+        <StatusBadge status={agent.status} flagged={Boolean(agent.flag)} />
         <span style={styles.tabLabelStack}>
           <span style={styles.tabLabelText}>{displayLabel}</span>
           {agent.task && (
@@ -242,15 +266,9 @@ function AgentTabsImpl({
           <span
             aria-label={`Needs your review: ${agent.flag}`}
             title={agent.flag}
-            style={{
-              marginLeft: 4,
-              color: pwc.warningText,
-              fontSize: 12,
-              fontWeight: pwc.weight.medium,
-              whiteSpace: "nowrap",
-            }}
+            style={styles.tabStatus}
           >
-            ⚠ Needs review
+            Needs review
           </span>
         )}
         {!agent.flag && (
@@ -264,10 +282,7 @@ function AgentTabsImpl({
 
   return (
     <div className="workstream-nav" style={styles.tabBar}>
-      <div style={styles.navigatorHeader}>
-        <div style={styles.navigatorTitle}>Run activity</div>
-      </div>
-
+      {/* No list heading: the Activity tab already names this view. */}
       <div role="tablist" aria-label="Run workstreams" aria-orientation="vertical" style={styles.tabList}>
         {visiblePreparation.length > 0 && (
           <div role="presentation" data-bucket="preparation" style={styles.tabGroup}>
@@ -400,29 +415,12 @@ const styles = {
     alignItems: "stretch" as const,
     background: pwc.white,
     minWidth: 0,
-    overflowY: "auto" as const,
-    maxHeight: 620,
   },
   tabList: {
     display: "flex",
     flexDirection: "column" as const,
     alignItems: "stretch" as const,
   } as React.CSSProperties,
-  navigatorHeader: {
-    display: "flex",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: pwc.space.md,
-    minHeight: 42,
-    padding: `0 9px`,
-  },
-  navigatorTitle: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 16,
-    lineHeight: 1.3,
-    fontWeight: pwc.weight.semibold,
-    color: pwc.grey900,
-  },
   navigatorCount: {
     flexShrink: 0,
     fontFamily: pwc.fontBody,
@@ -440,7 +438,7 @@ const styles = {
     padding: `0 ${pwc.space.sm}px ${pwc.space.xs}px`,
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
     color: pwc.grey700,
     letterSpacing: "0.02em",
   },
@@ -464,8 +462,8 @@ const styles = {
   },
   tabActive: {
     color: pwc.grey900,
-    fontWeight: pwc.weight.semibold,
-    background: pwc.grey50,
+    fontWeight: pwc.weight.medium,
+    background: pwc.grey100,
   },
   tabSkeleton: {
     color: pwc.grey300,

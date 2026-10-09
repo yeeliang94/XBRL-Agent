@@ -257,7 +257,6 @@ export function PdfSourcePane({
                   }}
                 >
                   <span>Page {page}</span>
-                  {page === current && <ChevronRight size={16} style={ui.reviewSelectionMarker} />}
                 </button>
               ))}
             </div>
@@ -439,7 +438,7 @@ const styles = {
     cursor: "pointer",
     listStyle: "none",
     fontSize: 13,
-    fontWeight: 650,
+    fontWeight: 500,
   } as React.CSSProperties,
   sourcesPanel: {
     position: "absolute" as const,

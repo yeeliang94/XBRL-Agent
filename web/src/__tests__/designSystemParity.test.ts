@@ -32,6 +32,7 @@ describe("XBRL design system is the production authority", () => {
     expect(designSystem).toContain("Notes appearance keeps Custom colour selected when its colour matches a preset");
     expect(designSystem).toContain("Disable reset confirmation while an appearance save is in progress");
     expect(designSystem).toContain("saved workstream tabs name and control their selected panel through matching ARIA references");
+    expect(designSystem).toContain("wrapping navigation on narrow screens, including the Field labels action");
     expect(designSystem).toContain("Keep unsaved shared edits");
     expect(designSystem).toContain("require confirmation that names the shared scope");
     expect(designSystem).toContain("preserve the connection, access key, team guidance, accounts and existing runs");
@@ -49,9 +50,15 @@ describe("XBRL design system is the production authority", () => {
     expect(prototype).toContain("Direction A — focused workspace");
   });
 
+  test("states the writing rules: main copy carries meaning, helper text is the exception", () => {
+    expect(designSystem).toContain('<section id="writing">');
+    expect(designSystem).toContain("Helper text is the exception, not the default.");
+    expect(designSystem).toContain("Read the screen with all helper text hidden.");
+  });
+
   test("keeps notes field hierarchy and coverage in the source inventory", () => {
     expect(designSystem).toContain("plain bold field headings above white note content");
-    expect(designSystem).toContain("Selected Notes items use bold black text and a small right-pointing chevron without a fill");
+    expect(designSystem).toContain("Selected Notes items use the shared Grey 100 selected surface and medium weight");
     expect(designSystem).toContain("Comparison pairs share one field heading and shared grid rows for actions, editing tools and content");
     expect(designSystem).toContain("Open prose fields that hold AI or human content by default as bordered read-only previews");
     expect(designSystem).toContain("keep empty fields collapsed in compact clickable rows");
@@ -147,7 +154,7 @@ describe("Direction A semantic roles", () => {
     expect(designSystem).toContain(`--weight-emphasis: ${pwc.weight.semibold}`);
     expect(ui.buttonPrimary.minHeight).toBe(40);
     expect(ui.buttonPrimary.padding).toBe("0 15px");
-    expect(ui.buttonSm.minHeight).toBe(34);
+    expect(ui.buttonSm.minHeight).toBe(40);
   });
 });
 
@@ -197,6 +204,7 @@ describe("Direction A shell and responsive composition", () => {
     ]) {
       expect(designSystem).toContain(requirement);
     }
+    expect(designSystem).toContain("stack statement format labels above readable full-width dropdowns");
     expect(prototype).toContain("@media (max-width: 1100px)");
     expect(prototype).toContain("@media (max-width: 780px)");
   });
@@ -251,7 +259,9 @@ describe("Direction A shell and responsive composition", () => {
     expect(designSystem).toContain("even when no agents started or no output folder exists");
     expect(designSystem).toContain("one flat chronological <em>Live activity</em> stream (or <em>Recorded activity</em> for settled workstreams)");
     expect(designSystem).toContain("no event cards, navigation buttons or nested activity panels");
-    expect(designSystem).toContain("Follow new updates only while the operator remains at the bottom");
+    expect(designSystem).toContain("Opening Activity never scrolls the page");
+    expect(designSystem).toContain("Follow new updates when it opens at the bottom and only while the operator remains there");
+    expect(designSystem).toContain("Decision cards name the affected figure even when its value is unchanged");
     expect(designSystem).toContain("Keep tool operations, provider reasoning, tokens and request metadata in closed technical diagnostics");
     expect(designSystem).toContain("the activity roster shows item states without a second completion total");
     expect(prototype).toContain("Live activity");

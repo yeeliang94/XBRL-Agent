@@ -422,7 +422,7 @@ const styles = {
   runEventsSummary: {
     padding: pwc.space.md,
     cursor: "pointer",
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
   } as React.CSSProperties,
   runEventList: {
     margin: 0,
@@ -471,7 +471,7 @@ const styles = {
   } as React.CSSProperties,
   agentName: {
     fontFamily: pwc.fontMono,
-    fontWeight: 680,
+    fontWeight: 400,
     fontSize: 14,
     color: pwc.grey900,
   } as React.CSSProperties,
@@ -511,7 +511,7 @@ const styles = {
     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
     borderBottom: `1px solid ${pwc.grey200}`,
     color: pwc.grey700,
-    fontWeight: 680,
+    fontWeight: 400,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   thNum: {
@@ -519,7 +519,7 @@ const styles = {
     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
     borderBottom: `1px solid ${pwc.grey200}`,
     color: pwc.grey700,
-    fontWeight: 680,
+    fontWeight: 400,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   td: {
@@ -570,7 +570,7 @@ const styles = {
     cursor: "pointer",
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 680,
+    fontWeight: 500,
     color: pwc.grey700,
   } as React.CSSProperties,
   tracePre: {

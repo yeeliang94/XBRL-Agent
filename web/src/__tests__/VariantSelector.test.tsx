@@ -107,10 +107,10 @@ describe("VariantSelector", () => {
       />,
     );
 
-    const dot = container.querySelector("[data-testid='confidence-SOFP']") as HTMLElement;
-    expect(dot).toBeInTheDocument();
-    expect(dot.style.background).toBe("transparent");
-    expect(dot.title).toMatch(/automatic scan will choose a format/i);
+    // No mark until a detected format needs checking.
+    const slot = container.querySelector("[data-testid='confidence-SOFP']") as HTMLElement;
+    expect(slot).toBeInTheDocument();
+    expect(slot).toBeEmptyDOMElement();
   });
 
   test("selected value reflects current selection", () => {

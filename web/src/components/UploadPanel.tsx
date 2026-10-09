@@ -16,7 +16,7 @@ interface Props {
 // Client-side upload cap — mirrors the backend body limit. Kept here rather
 // than a shared constants module so the friendly MB label can be built from
 // the same number without risking drift between value and copy.
-const MAX_UPLOAD_MB = 100;
+const MAX_UPLOAD_MB = 50;
 const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 
 const styles = {
@@ -29,31 +29,6 @@ const styles = {
     alignItems: "center",
     justifyContent: "space-between",
   } as React.CSSProperties,
-  fileInfo: {
-    display: "flex",
-    alignItems: "center",
-    gap: pwc.space.md,
-  } as React.CSSProperties,
-  fileIcon: {
-    width: 32,
-    height: 32,
-    background: pwc.grey50,
-    border: "none",
-    borderRadius: pwc.radius.sm,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    color: pwc.error,
-    fontSize: 12,
-    fontWeight: pwc.weight.semibold,
-    fontFamily: pwc.fontMono,
-  } as React.CSSProperties,
-  fileName: {
-    fontFamily: pwc.fontBody,
-    fontWeight: 650,
-    color: pwc.grey900,
-    fontSize: 14,
-  } as React.CSSProperties,
   runButton: {
     padding: "10px 24px",
     backgroundColor: pwc.black,
@@ -62,7 +37,7 @@ const styles = {
     borderRadius: pwc.radius.md,
     fontSize: 14,
     fontFamily: pwc.fontHeading,
-    fontWeight: 680,
+    fontWeight: 500,
     cursor: "pointer",
   } as React.CSSProperties,
   runningRow: {
@@ -160,27 +135,19 @@ export function UploadPanel({ onUpload, onUploadFiles, isRunning, filename, star
           onFiles={onUploadFiles ? handleFiles : undefined}
         >
           <span style={styles.uploadHint}>
-            or choose a file from your computer · up to {MAX_UPLOAD_MB} MB
+            Up to {MAX_UPLOAD_MB} MB each
           </span>
           {uploading && <span style={styles.uploading} role="status" aria-live="polite">Uploading…</span>}
         </FileDropzone>
-      ) : (
+      ) : isRunning ? (
+        // The file name is the page title, so only the live timer remains.
         <div style={styles.fileRow}>
-          <div style={styles.fileInfo}>
-            <div style={styles.fileIcon}>
-              {filename.toLowerCase().endsWith(".docx") ? "DOC" : "PDF"}
-            </div>
-            <span style={styles.fileName}>{filename}</span>
+          <div style={styles.runningRow}>
+            <div data-testid="run-spinner" className="pwc-spinner" style={styles.spinner} />
+            {startTime && <ElapsedTimer startTime={startTime} isRunning={isRunning} />}
           </div>
-
-          {isRunning && (
-            <div style={styles.runningRow}>
-              <div data-testid="run-spinner" className="pwc-spinner" style={styles.spinner} />
-              {startTime && <ElapsedTimer startTime={startTime} isRunning={isRunning} />}
-            </div>
-          )}
         </div>
-      )}
+      ) : null}
       {error && <p style={styles.error} role="alert">{error}</p>}
     </div>
   );

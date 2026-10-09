@@ -127,7 +127,7 @@ describe("PreRunPanel", () => {
     );
     // Format overrides stay visible with Advanced collapsed; the repeats
     // control and the "leave blank" hint are gone.
-    expect(screen.getByText("Statement format overrides")).toBeInTheDocument();
+    expect(screen.getByText("Statement formats")).toBeInTheDocument();
     expect(screen.queryByText(/leave a format blank/i)).toBeNull();
     expect(screen.queryByText(/repeats \(consistency\)/i)).toBeNull();
     expect(screen.queryByTestId("repeats-2")).toBeNull();
@@ -137,11 +137,11 @@ describe("PreRunPanel", () => {
     const onRun = vi.fn();
     render(<PreRunPanel sessionId="first-period" getSettings={vi.fn().mockResolvedValue(mockSettings)}
       initialConfig={{ first_financial_statements: true }} onRun={onRun} />);
-    const periods = await screen.findByRole("combobox", { name: "Reporting periods" });
-    expect(periods).toHaveValue("first");
+    const periods = await screen.findByRole("group", { name: "Reporting periods" });
+    expect(within(periods).getByRole("button", { name: "Current only" })).toHaveAttribute("aria-pressed", "true");
     startExtraction();
     expect(onRun).toHaveBeenLastCalledWith(expect.objectContaining({ first_financial_statements: true }));
-    fireEvent.change(periods, { target: { value: "comparative" } });
+    fireEvent.click(within(periods).getByRole("button", { name: "Current and prior" }));
     startExtraction();
     expect(onRun).toHaveBeenLastCalledWith(expect.objectContaining({ first_financial_statements: false }));
   });
@@ -166,11 +166,12 @@ describe("PreRunPanel", () => {
       />,
     );
 
+    // Open sections show just their title; the summary appears when folded.
     const statementToggle = await screen.findByRole("button", {
-      name: /statements to extract 5 of 5 selected/i,
+      name: /^statements to extract$/i,
     });
     const notesToggle = screen.getByRole("button", {
-      name: /notes templates 5 of 5 selected/i,
+      name: /^notes templates$/i,
     });
 
     expect(statementToggle).toHaveAttribute("aria-expanded", "true");
@@ -178,6 +179,7 @@ describe("PreRunPanel", () => {
 
     fireEvent.click(statementToggle);
     expect(statementToggle).toHaveAttribute("aria-expanded", "false");
+    expect(statementToggle).toHaveTextContent("5 of 5 selected");
     expect(screen.queryByRole("region", { name: /statements to extract/i })).not.toBeInTheDocument();
 
     fireEvent.click(notesToggle);
@@ -306,7 +308,7 @@ describe("PreRunPanel", () => {
     // first. Filter by variant-specific options (same pattern the Run test
     // uses) to pin the first SOFP variant dropdown.
     await waitFor(() => {
-      const sofpSelect = screen.getAllByRole("combobox").find(
+      const sofpSelect = screen.getAllByRole("combobox", { hidden: true }).find(
         (el) => el.querySelector("option[value='CuNonCu']"),
       ) as HTMLSelectElement;
       expect(sofpSelect.value).toBe("CuNonCu");
@@ -412,7 +414,7 @@ describe("PreRunPanel", () => {
     // Same filter-by-variant-option trick as the auto-detect test — index 0
     // now belongs to the inline scout model dropdown.
     await waitFor(() => {
-      const sofpSelect = screen.getAllByRole("combobox").find(
+      const sofpSelect = screen.getAllByRole("combobox", { hidden: true }).find(
         (el) => el.querySelector("option[value='CuNonCu']"),
       ) as HTMLSelectElement;
       expect(sofpSelect).toHaveValue("CuNonCu");
@@ -513,7 +515,7 @@ describe("PreRunPanel", () => {
     // selector always renders all 5 dropdowns (Fix B). Identify SOFP by
     // its variant-specific option (CuNonCu is unique to SOFP) — the inline
     // scout model dropdown now occupies index 0.
-    const sofpVariant = screen.getAllByRole("combobox").find(
+    const sofpVariant = screen.getAllByRole("combobox", { hidden: true }).find(
       (el) => el.querySelector("option[value='CuNonCu']"),
     ) as HTMLSelectElement;
     fireEvent.change(sofpVariant, { target: { value: "CuNonCu" } });
@@ -525,7 +527,7 @@ describe("PreRunPanel", () => {
       expect(screen.getByText(/didn't detect any statements/i)).toBeInTheDocument();
     });
     // After the empty-scout return, the manual variant must still be set.
-    const sofpVariantAfter = screen.getAllByRole("combobox").find(
+    const sofpVariantAfter = screen.getAllByRole("combobox", { hidden: true }).find(
       (el) => el.querySelector("option[value='CuNonCu']"),
     ) as HTMLSelectElement;
     expect(sofpVariantAfter.value).toBe("CuNonCu");
@@ -927,7 +929,6 @@ describe("PreRunPanel", () => {
     );
     await openAdvanced();
     expect(screen.queryByRole("checkbox", { name: /scanned image/i })).toBeNull();
-    expect(screen.getByText(/Text and scanned pages are read automatically/)).toBeInTheDocument();
   });
 
   test("scout selects its reading method without a manual scan override", async () => {
@@ -1018,9 +1019,8 @@ describe("PreRunPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/found\s*0\s*notes/i)).toBeInTheDocument();
+      expect(screen.getByText(/no notes found\. check that the pdf includes readable notes pages/i)).toBeInTheDocument();
     });
-    expect(screen.getByText(/no notes were found.*check that the pages/i)).toBeInTheDocument();
 
     fetchSpy.mockRestore();
   });
@@ -1064,9 +1064,9 @@ describe("PreRunPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/found\s*2\s*notes/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /notes in the document/i })).toHaveTextContent("2");
     });
-    expect(screen.queryByText(/no notes were found.*check that the pages/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no notes found/i)).not.toBeInTheDocument();
 
     fetchSpy.mockRestore();
   });
@@ -1288,13 +1288,13 @@ describe("PreRunPanel", () => {
     // Wait for scout to settle. SOFP suggestion is valid and should land;
     // SOCIE=SoRE is not valid on MFRS and must be blanked.
     await waitFor(() => {
-      const sofpSelect = screen.getAllByRole("combobox").find(
+      const sofpSelect = screen.getAllByRole("combobox", { hidden: true }).find(
         (el) => el.querySelector("option[value='CuNonCu']"),
       ) as HTMLSelectElement;
       expect(sofpSelect.value).toBe("CuNonCu");
     });
 
-    const socieSelect = screen.getAllByRole("combobox").find(
+    const socieSelect = screen.getAllByRole("combobox", { hidden: true }).find(
       (el) => {
         const opts = Array.from((el as HTMLSelectElement).options).map((o) => o.value);
         return opts.includes("Default") && !opts.includes("SoRE")
@@ -1539,17 +1539,19 @@ describe("notes inventory editor", () => {
 
   test("warns about the gap scout left and names the missing number", async () => {
     await renderWithInventory();
-    expect(screen.getByText(/Found 2 notes in the document\./)).toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: /notes in the document/i });
+    expect(toggle).toHaveTextContent("2");
     // Note 2 sits between two discovered notes — exactly the run-74 symptom.
-    expect(screen.getByText(/Note number 2 was not found/)).toBeInTheDocument();
+    expect(screen.getByText(/Note 2 not found/)).toBeInTheDocument();
+    // A missing number is the one case that needs a person, so the list opens.
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
   });
 
   test("operator can add the missing note without re-running the pre-scan", async () => {
     await renderWithInventory();
-    fireEvent.click(screen.getByRole("button", { name: /review or edit the notes list/i }));
-
     const list = screen.getByRole("list", { name: /discovered notes/i });
     expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: /^add note$/i }));
 
     fireEvent.change(screen.getByLabelText(/missing note number/i), {
       target: { value: "2" },
@@ -1564,12 +1566,12 @@ describe("notes inventory editor", () => {
     });
     expect(within(list).getByText("Significant accounting policies")).toBeInTheDocument();
     // Gap closed, so the warning retracts.
-    expect(screen.queryByText(/was not found/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not found/)).not.toBeInTheDocument();
   });
 
   test("refuses a duplicate note number", async () => {
     await renderWithInventory();
-    fireEvent.click(screen.getByRole("button", { name: /review or edit the notes list/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^add note$/i }));
     fireEvent.change(screen.getByLabelText(/missing note number/i), {
       target: { value: "1" },
     });
@@ -1582,7 +1584,6 @@ describe("notes inventory editor", () => {
 
   test("operator can remove a wrongly-detected note", async () => {
     await renderWithInventory();
-    fireEvent.click(screen.getByRole("button", { name: /review or edit the notes list/i }));
     fireEvent.click(screen.getByRole("button", { name: /remove note 3/i }));
     const list = screen.getByRole("list", { name: /discovered notes/i });
     await waitFor(() => {
@@ -1610,7 +1611,7 @@ describe("notes inventory editor", () => {
       await waitFor(() => {
         expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
       });
-      fireEvent.click(screen.getByRole("button", { name: /review or edit the notes list/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^add note$/i }));
       fireEvent.change(screen.getByLabelText(/missing note number/i), {
         target: { value: "2" },
       });
@@ -1648,10 +1649,10 @@ describe("Upload-owned preparation", () => {
         ],
       } })} />);
     await screen.findByRole("button", { name: /start extraction/i });
-    fireEvent.click(screen.getByRole("checkbox", { name: /corporate information \(note 10\)/i }));
+    // Once prepared, the notes list starts folded behind its summary.
     expect(screen.getByText("All document notes included")).toBeInTheDocument();
-    expect(screen.getByText(/a notes run includes corporate information, accounting policies, and list of notes/i))
-      .toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /notes templates/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /corporate information \(note 10\)/i }));
   });
 
   test("preserves a legacy saved denomination without selection metadata", async () => {
@@ -1717,7 +1718,7 @@ describe("Upload-owned preparation", () => {
       } })} />);
 
     await waitFor(() => expect(screen.getByRole("button", { name: "RM mil" })).toHaveAttribute("aria-pressed", "true"));
-    expect(screen.getByTestId("detected-denomination")).toHaveTextContent("Document scan detected RM mil");
+    expect(screen.getByTestId("detected-denomination")).toHaveTextContent("Detected RM mil");
     const confirm = screen.getByRole("button", { name: "Confirm setup and start extraction" });
     expect(confirm).toBeEnabled();
     startExtraction();
@@ -1791,7 +1792,7 @@ describe("Upload-owned preparation", () => {
         preparation={preparation({ attempt_id: "", status: "not_started", stage: "pending", phase: "pending", message: "Not started" })} />);
       await openAdvanced();
       fireEvent.click(screen.getByRole("button", { name: /preview scan/i }));
-      await waitFor(() => expect(screen.getAllByRole<HTMLSelectElement>("combobox")
+      await waitFor(() => expect(screen.getAllByRole<HTMLSelectElement>("combobox", { hidden: true })
         .find((element) => element.querySelector("option[value='CuNonCu']"))).toHaveValue("CuNonCu"));
       startExtraction();
       expect(onRun.mock.calls[0][0].variants.SOFP).toBe("CuNonCu");

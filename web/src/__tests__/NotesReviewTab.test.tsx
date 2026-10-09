@@ -275,17 +275,18 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
 
     const nav = screen.getByRole("navigation", { name: /notes sheet navigator/i });
     const corporate = within(nav).getByRole("button", { name: /corporate information/i });
-    expect(corporate).toHaveStyle({ background: "transparent", fontWeight: 680 });
-    expect(corporate.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    // Selection uses the shared grey surface and medium weight, like every
+    // other list and tab in the app.
+    expect(corporate).toHaveStyle({ background: "rgb(238, 239, 241)", fontWeight: 500 });
     fireEvent.click(within(nav).getByRole("button", {
       name: /summary of accounting policies/i,
     }));
 
     expect(screen.getByTestId("sheet-title")).toHaveTextContent("Summary of Accounting Policies");
     expect(corporate).not.toHaveAttribute("aria-current");
-    expect(corporate.querySelector('[aria-hidden="true"]')).toBeNull();
+    expect(corporate).toHaveStyle({ background: "transparent" });
     expect(within(nav).getByRole("button", { name: /summary of accounting policies/i }))
-      .toHaveStyle({ background: "transparent", fontWeight: 680 });
+      .toHaveStyle({ background: "rgb(238, 239, 241)", fontWeight: 500 });
   });
 
   test("renders one row per cell with label on left, html on right", async () => {
@@ -2095,15 +2096,13 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     const [first, second] = await screen.findAllByTestId("notes-numeric-row");
     fireEvent.mouseDown(first);
     expect(first).toHaveAttribute("aria-selected", "true");
-    expect(within(first).getByRole("rowheader").querySelector('[aria-hidden="true"]')).not.toBeNull();
-    expect(first).toHaveStyle({ background: pwc.white });
+    // The selected row uses the shared grey selection surface.
+    expect(first).toHaveStyle({ background: pwc.grey100 });
     expect(second).toHaveStyle({ background: pwc.white });
     fireEvent.focus(within(second).getByTestId("numeric-input-7-cy"));
     expect(second).toHaveAttribute("aria-selected", "true");
     expect(first).toHaveAttribute("aria-selected", "false");
-    expect(within(first).getByRole("rowheader").querySelector('[aria-hidden="true"]')).toBeNull();
-    expect(within(second).getByRole("rowheader").querySelector('[aria-hidden="true"]')).not.toBeNull();
-    expect(second).toHaveStyle({ background: pwc.white });
+    expect(second).toHaveStyle({ background: pwc.grey100 });
     expect(first).toHaveStyle({ background: pwc.white });
   });
 
@@ -3248,7 +3247,7 @@ describe("NotesReviewTab — AI formatter", () => {
     expect(within(inventory).getByText(/Exact field not recorded/)).toBeVisible();
     expect(within(inventory).queryByLabelText("Destinations for note 2")).not.toBeInTheDocument();
     fireEvent.click(within(inventory).getByTestId("source-note-2"));
-    expect(within(inventory).getByTestId("source-note-2")).toHaveStyle({ background: "transparent", fontWeight: 680 });
+    expect(within(inventory).getByTestId("source-note-2")).toHaveStyle({ background: "rgb(238, 239, 241)", fontWeight: 500 });
     const destinations = within(inventory).getByLabelText("Destinations for note 2");
     expect(within(destinations).getByRole("button", { name: "Property, plant and equipment" })).toBeVisible();
     fireEvent.click(within(destinations).getByRole("button", { name: "Property, plant and equipment" }));

@@ -111,14 +111,14 @@ const styles = {
   } as React.CSSProperties,
   message: {
     flex: 1,
-    fontWeight: 650,
+    fontWeight: 500,
   } as React.CSSProperties,
   closeBtn: {
     background: "none",
     border: "none",
     cursor: "pointer",
     fontSize: 14,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: pwc.weight.medium,
     padding: 0,
     lineHeight: 1,
   } as React.CSSProperties,
