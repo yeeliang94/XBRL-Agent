@@ -1343,7 +1343,11 @@ Key invariants:
     supplied with all failed-table findings for the note, not only its last
     finding. Each table cites its actual inspected source pages; tables within
     one note may have different citations. All known note source pages are
-    attached before checking. Empty or unseen-page citations stay unresolved.
+    loaded independently before checking. A note with any missing source image
+    stays unresolved without blocking notes whose images are complete. Empty,
+    unseen-page or other-note citations stay unresolved. A table's citations
+    must belong to its own note's recorded source pages; source-viewing tools
+    remain unrestricted and may inspect any valid PDF page.
     The correction is
     checked once. Only passed rows reach existing CAS writes
     and snapshots; grouped task results retain each part's visual assessment

@@ -558,6 +558,56 @@ async def test_visual_failure_is_corrected_once_before_saving(monkeypatch, forma
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["foreign_citation", "missing_image"])
+async def test_real_visual_check_saves_only_verified_notes(monkeypatch, formatter_db, failure):
+    from types import SimpleNamespace
+
+    from db import repository as repo
+    import notes.agent as na
+    import notes.visual_review as vr
+
+    db, _, run_id = formatter_db
+    with repo.db_session(db) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113,
+                               label="Other", html=_TABLE_HTML, source_pages=[4])
+    good = json.loads(_GOOD_PATCH)
+    patch = {**good, "cells": [*good["cells"], {**good["cells"][0], "row": 113}]}
+
+    async def render(_path, page, _dpi, **_kwargs):
+        if failure == "missing_image" and page == 4:
+            raise ValueError("Source page could not be rendered")
+        return b"source image"
+
+    class Reviewer:
+        async def run(self, *_args, **_kwargs):
+            assessments = [{"row": 112, "table": 0, "status": "pass",
+                            "source_pages": [4 if failure == "foreign_citation" else 3],
+                            "reason": "Matches source."}]
+            if failure == "foreign_citation":
+                assessments.append({"row": 113, "table": 0, "status": "pass",
+                                    "source_pages": [4], "reason": "Matches source."})
+            return SimpleNamespace(output={"tables": assessments}, all_messages=lambda: [])
+
+    monkeypatch.setattr(na, "_render_one_page_single_flight", render)
+    monkeypatch.setattr(vr, "create_visual_review_agent",
+                        lambda **_kw: (Reviewer(), SimpleNamespace(viewed_pages=set())))
+    result = await _run_formatter_with_fake_agent(
+        monkeypatch, formatter_db, _FakeAgent([json.dumps(patch)]),
+        visual_check=vr.check_visual_rows,
+    )
+    failed_row = 112 if failure == "foreign_citation" else 113
+    saved_row = 113 if failure == "foreign_citation" else 112
+    assert not result["ok"] and result["changed_rows"] == 1
+    assert result["error_type"] == "visual_review_failed"
+    assert result["failed_rows"] == [failed_row]
+    with repo.db_session(db) as conn:
+        cells = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
+        assert cells[failed_row].html == _TABLE_HTML
+        assert cells[saved_row].html != _TABLE_HTML
+        assert set(repo.fetch_notes_format_snapshots(conn, run_id, _SHEET)) == {saved_row}
+
+
+@pytest.mark.asyncio
 async def test_failed_visual_recheck_saves_only_unrelated_passed_note(monkeypatch, formatter_db):
     from db import repository as repo
     db, _, run_id = formatter_db

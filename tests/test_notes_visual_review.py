@@ -12,6 +12,7 @@ from notes import visual_review as vr
 def review_harness(monkeypatch):
     import notes.formatting_agent as fa
     original_factory = vr.create_visual_review_agent
+    original_preload = fa._preload_source_pages
     calls = []
     def prepare(html, style):
         return "<table><tr><td>prepared</td></tr></table>", {"html_sha256": "abc"}
@@ -33,7 +34,7 @@ def review_harness(monkeypatch):
                   run_id=1, db_path="unused", pdf_path="unused", sheet="Notes-Listofnotes",
                   model="unused", usage=RunUsage(), limits=UsageLimits(request_limit=16),
                   output_dir="", trace_label="test")
-    return kwargs, decision, SimpleNamespace(calls=calls, factory=original_factory)
+    return kwargs, decision, SimpleNamespace(calls=calls, factory=original_factory, preload=original_preload)
 
 
 @pytest.mark.asyncio
@@ -48,7 +49,7 @@ async def test_prepared_output_is_given_to_fresh_reviewer(review_harness):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("defect", ["missing", "duplicate", "unexpected", "unseen", "unresolved", "missing_source"])
+@pytest.mark.parametrize("defect", ["missing", "duplicate", "unexpected", "unseen", "unresolved", "missing_source", "foreign_note", "mixed_notes"])
 async def test_incomplete_or_ambiguous_assessment_never_passes(review_harness, defect):
     kwargs, decision, _ = review_harness
     if defect == "missing":
@@ -61,19 +62,36 @@ async def test_incomplete_or_ambiguous_assessment_never_passes(review_harness, d
         decision[0]["source_pages"] = [3, 4]
     elif defect == "missing_source":
         decision[0]["source_pages"] = []
+    elif defect in {"foreign_note", "mixed_notes"}:
+        kwargs["rows"][113] = kwargs["rows"][112]
+        kwargs["cells"].append(SimpleNamespace(row=113, source_pages=[4]))
+        decision.append({"row": 113, "table": 0, "status": "pass", "source_pages": [4],
+                         "reason": "The other note was checked on page 4."})
+        decision[0]["source_pages"] = [4] if defect == "foreign_note" else [3, 4]
     else:
         decision[0]["status"] = "unresolved"
     errors, _ = await vr.check_visual_rows(**kwargs)
     assert 112 in errors
+    if defect in {"foreign_note", "mixed_notes"}:
+        assert 113 not in errors
 
 
 @pytest.mark.asyncio
-async def test_tables_on_different_pages_use_their_own_source_citations(review_harness):
+@pytest.mark.parametrize("shared_page", [False, True])
+async def test_tables_on_different_pages_use_their_own_source_citations(review_harness, shared_page):
     kwargs, decision, _ = review_harness
     kwargs["rows"][112] += "<table><tr><td>Comparative</td><td>2</td></tr></table>"
     kwargs["cells"][0].source_pages = [3, 4]
     decision.append({"row": 112, "table": 1, "status": "pass", "source_pages": [4],
                      "reason": "Second table checked on its source page."})
+    if shared_page:
+        kwargs["rows"][113] = kwargs["rows"][112]
+        kwargs["cells"].append(SimpleNamespace(row=113, source_pages=[4]))
+        decision.extend([
+            {"row": 113, "table": table, "status": "pass", "source_pages": [4],
+             "reason": "This note shares page 4 with the preceding note."}
+            for table in (0, 1)
+        ])
     errors, _ = await vr.check_visual_rows(**kwargs)
     assert errors == {}
 
@@ -126,15 +144,36 @@ async def test_exhausted_review_budget_returns_unresolved_assessment(review_harn
 
 
 @pytest.mark.asyncio
-async def test_missing_source_images_never_reaches_the_reviewer(review_harness, monkeypatch):
+@pytest.mark.parametrize("scenario", ["all_missing", "other_note", "continuation"])
+async def test_missing_source_images_only_block_affected_notes(review_harness, monkeypatch, scenario):
     import notes.formatting_agent as fa
-    kwargs, _, harness = review_harness
+    import notes.agent as source_agent
+    kwargs, decision, harness = review_harness
     calls = harness.calls
-    async def missing(pdf_path, pages):
-        return [], set()
-    monkeypatch.setattr(fa, "_preload_source_pages", missing)
+    if scenario != "all_missing":
+        kwargs["rows"][113] = kwargs["rows"][112]
+        kwargs["cells"].append(SimpleNamespace(row=113, source_pages=[4] if scenario == "other_note" else [3]))
+        if scenario == "continuation":
+            kwargs["cells"][0].source_pages = [3, 4]
+            decision[0]["row"] = 113
+
+    async def render(pdf_path, page, dpi, **kwargs):
+        if scenario == "all_missing" or page == 4:
+            raise ValueError("Source page cannot be rendered")
+        return b"source image"
+    monkeypatch.setattr(source_agent, "_render_one_page_single_flight", render)
+    monkeypatch.setattr(fa, "_preload_source_pages", harness.preload)
     errors, _ = await vr.check_visual_rows(**kwargs)
-    assert 112 in errors and calls == []
+    if scenario == "all_missing":
+        assert 112 in errors and calls == []
+    else:
+        unresolved = 113 if scenario == "other_note" else 112
+        reviewed = 112 if scenario == "other_note" else 113
+        assert set(errors) == {unresolved}
+        assert len(calls) == 1
+        prompt = calls[0][0]
+        assert any(f"FORMATTED NOTE ROW {reviewed}" in part for part in prompt if isinstance(part, str))
+        assert not any(f"FORMATTED NOTE ROW {unresolved}" in part for part in prompt if isinstance(part, str))
 
 
 def test_evidence_is_the_prepared_copy_output():

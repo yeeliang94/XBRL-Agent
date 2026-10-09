@@ -6,6 +6,7 @@ unresolved, not a successful check.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -80,12 +81,12 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
                 for index, _ in enumerate(BeautifulSoup(html, "html.parser").find_all("table"))}
     if not expected:
         return {}, {"tables": [], "evidence": {}}
-    errors, evidence, content = {}, {}, []
+    errors, evidence, content_by_row = {}, {}, {}
     for row in sorted({row for row, _ in expected}):
         try:
             prepared, identity = prepare_note_evidence(rows[row], style)
             evidence[row] = identity
-            content.append(
+            content_by_row[row] = (
                 f"FORMATTED NOTE ROW {row}; geometry: " + json.dumps(_table_geometry(rows[row]))
                 + "\nPREPARED OUTPUT HTML:\n" + prepared
             )
@@ -95,11 +96,25 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
     if not reviewable:
         return errors, {"tables": [], "evidence": evidence}
     source_pages = sorted({p for row, _ in reviewable for p in by_row[row].source_pages})
-    source, attached = await _preload_source_pages(pdf_path, source_pages)
-    if set(source_pages) != attached:
-        for row, _ in reviewable:
+    # Load each unique page independently, using the existing shared renderer.
+    # A failed continuation page blocks its note, not another note in the batch.
+    page_results = await asyncio.gather(*(
+        _preload_source_pages(pdf_path, [page]) for page in source_pages
+    ))
+    source_by_page = {
+        page: content for page, (content, loaded) in zip(source_pages, page_results)
+        if page in loaded
+    }
+    for row in {row for row, _ in reviewable}:
+        required_pages = set(by_row[row].source_pages)
+        if not required_pages or not required_pages.issubset(source_by_page):
             errors[row] = "Source PDF images are incomplete; visual comparison is unresolved."
+    reviewable = {key for key in reviewable if key[0] not in errors}
+    if not reviewable:
         return errors, {"tables": [], "evidence": evidence}
+    attached = {page for row, _ in reviewable for page in by_row[row].source_pages}
+    source = [part for page in sorted(attached) for part in source_by_page[page]]
+    content = [content_by_row[row] for row in sorted({row for row, _ in reviewable})]
     agent, deps = create_visual_review_agent(
         run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
         model=model,
@@ -143,6 +158,8 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
             issue = "Visual assessment did not cite a source page."
         elif not set(assessment.source_pages).issubset(deps.viewed_pages):
             issue = "Visual assessment cited unseen source pages."
+        elif not set(assessment.source_pages).issubset(by_row[assessment.row].source_pages):
+            issue = "Visual assessment cited pages outside this note's source pages."
         elif assessment.status != "pass":
             issue = assessment.reason
         if issue:
