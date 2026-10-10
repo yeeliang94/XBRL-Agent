@@ -362,7 +362,8 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     const humanCells = screen.getAllByTestId("notes-human-cell");
     expect(within(humanCells[0]).queryByRole("img")).toBeNull();
     expect(humanCells).toHaveLength(1);
-    expect(screen.getByText("Human legal name").parentElement).toHaveStyle({ borderColor: pwc.grey300 });
+    // Read-only human content matches the AI note preview: no editor border.
+    expect(screen.getByText("Human legal name").parentElement).toHaveStyle({ borderColor: "transparent" });
     expect(screen.getByText("Human legal name").parentElement).toHaveClass("notes-human-content");
     // Include the production stylesheet so a CSS height cap or scroll trap
     // cannot pass merely because the inline style omits maxHeight.
@@ -2064,6 +2065,14 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     expect(within(rows[2]).getByTestId("numeric-human-6-base-cy")).toHaveTextContent("125");
     expect(within(rows[0]).getByTestId("numeric-human-6-Ordinary-cy")).toHaveTextContent("100");
     expect(within(rows[1]).getByTestId("numeric-human-6-Preference-cy")).toHaveTextContent("25");
+    // The AI/human boundary continues from the header through category and total rows.
+    expect(screen.getByRole("columnheader", { name: "Human CY" })).toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
+    expect(screen.getByRole("columnheader", { name: "Human PY" })).not.toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
+    for (const row of rows) {
+      const cells = within(row).getAllByRole("cell");
+      expect(cells[2]).toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
+      expect(cells[3]).not.toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
+    }
     expect(within(rows[1]).getByRole("img", { name: "Differs from human" })).toBeInTheDocument();
     const input = within(rows[1]).getByTestId("numeric-input-6-cy");
     fireEvent.change(input, { target: { value: "25" } });

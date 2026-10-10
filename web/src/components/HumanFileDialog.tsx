@@ -4,6 +4,7 @@ import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { userMessage } from "../lib/errors";
 import { DENOMINATION_LABELS } from "../lib/types";
+import { FileDropzone } from "./FileDropzone";
 import {
   uploadHumanFile,
   type HumanFileRecord,
@@ -86,6 +87,12 @@ export function HumanFileDialog({ runId, open, defaultUnit, existing, onClose, o
     }
   };
 
+  const chooseFile = (next: File) => {
+    setFile(next);
+    setConfirmReplace(false);
+    setError(null);
+  };
+
   const warning = done?.summary.magnitude_warning;
 
   return (
@@ -124,39 +131,46 @@ export function HumanFileDialog({ runId, open, defaultUnit, existing, onClose, o
             )}
             <div style={{ ...ui.dialogActionBar, marginTop: 0 }}>
               <button type="button" className={uiClass.btnPrimary}
-                style={{ ...ui.buttonPrimary, ...ui.buttonSm }} onClick={onClose}>
+                style={ui.buttonPrimary} onClick={onClose}>
                 View comparison
               </button>
             </div>
           </div>
         ) : (
           <div style={styles.stack}>
-            <div style={styles.field}>
-              <label htmlFor="human-file-input" style={ui.fieldLabel}>mTool file</label>
-              <div style={styles.fileChoice}>
+            {file ? (
+              <div style={styles.selectedFile}>
+                <span style={styles.fileName}>{file.name}</span>
                 <button type="button" className={uiClass.btnSecondary}
-                  style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
+                  style={{ ...ui.buttonSecondary, flexShrink: 0 }}
                   disabled={busy} onClick={() => fileRef.current?.click()}>
-                  {file ? "Change file" : "Choose mTool file"}
+                  Change file
                 </button>
-                <span style={ui.supportingText}>{file?.name ?? ".xlsx or .xlsm"}</span>
+                <input
+                  ref={fileRef}
+                  data-testid="human-file-input"
+                  type="file"
+                  accept=".xlsx,.xlsm"
+                  aria-label="mTool file"
+                  style={{ display: "none" }}
+                  disabled={busy}
+                  onChange={(e) => {
+                    const next = e.target.files?.[0];
+                    e.target.value = "";
+                    if (next) chooseFile(next);
+                  }}
+                />
               </div>
-              <input
-                ref={fileRef}
-                id="human-file-input"
-                data-testid="human-file-input"
-                type="file"
+            ) : (
+              <FileDropzone
                 accept=".xlsx,.xlsm"
-                aria-label="mTool file"
-                style={{ display: "none" }}
+                label="Drop the filled mTool file (.xlsx or .xlsm) here or choose a file"
+                inputLabel="mTool file"
+                testId="human-file-dropzone"
                 disabled={busy}
-                onChange={(e) => {
-                  setFile(e.target.files?.[0] ?? null);
-                  setConfirmReplace(false);
-                  setError(null);
-                }}
+                onFile={chooseFile}
               />
-            </div>
+            )}
             <div style={styles.field}>
               <label htmlFor="human-file-unit" style={ui.fieldLabel}>Unit of the file&apos;s figures</label>
               <select
@@ -180,16 +194,16 @@ export function HumanFileDialog({ runId, open, defaultUnit, existing, onClose, o
             {error && (
               <div role="alert" style={ui.alertError} data-testid="human-file-error">{error}</div>
             )}
-            <div style={{ ...ui.dialogActionBar, marginTop: 0, gap: pwc.space.sm }}>
-              <button type="button" className={uiClass.btnSecondary}
-                style={{ ...ui.buttonSecondary, ...ui.buttonSm }} onClick={onClose} disabled={busy}>
+            <div style={{ ...ui.dialogActionBar, marginTop: 0 }}>
+              <button type="button" className={uiClass.btnQuiet}
+                style={ui.buttonQuiet} onClick={onClose} disabled={busy}>
                 Cancel
               </button>
               <button
                 type="button"
                 data-testid="human-file-submit"
                 className={uiClass.btnPrimary}
-                style={{ ...ui.buttonPrimary, ...ui.buttonSm }}
+                style={ui.buttonPrimary}
                 onClick={() => void submit()}
                 disabled={!file || busy}
               >
@@ -206,6 +220,7 @@ export function HumanFileDialog({ runId, open, defaultUnit, existing, onClose, o
 const styles = {
   stack: { display: "flex", flexDirection: "column", gap: pwc.space.lg } as React.CSSProperties,
   field: { display: "flex", flexDirection: "column", gap: pwc.space.sm } as React.CSSProperties,
-  fileChoice: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: pwc.space.md } as React.CSSProperties,
+  selectedFile: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: pwc.space.md } as React.CSSProperties,
+  fileName: { minWidth: 0, fontWeight: pwc.weight.semibold, overflowWrap: "anywhere" } as React.CSSProperties,
   body: { ...ui.bodyText, margin: 0 } as React.CSSProperties,
 };

@@ -60,9 +60,9 @@ describe("XBRL design system is the production authority", () => {
     expect(designSystem).toContain("plain bold field headings above white note content");
     expect(designSystem).toContain("Selected Notes items use the shared Grey 100 selected surface and medium weight");
     expect(designSystem).toContain("Comparison pairs share one field heading and shared grid rows for actions, editing tools and content");
-    expect(designSystem).toContain("Open prose fields that hold AI or human content by default as bordered read-only previews");
+    expect(designSystem).toContain("Open prose fields that hold AI or human content by default as unbordered read-only previews");
     expect(designSystem).toContain("keep empty fields collapsed in compact clickable rows");
-    expect(designSystem).toContain("Give human note blocks the same thin neutral border");
+    expect(designSystem).toContain("Human note blocks are unbordered read-only content with the same 12px inset");
     expect(designSystem).toContain("do not repeat the checklist below the editor");
     expect(designSystem).toContain("without warning counts or repeated review banners");
     expect(designSystem).toContain("Keep incomplete output, failed saves, and actionable filing issues visible");
@@ -317,6 +317,11 @@ describe("Simplified template-oriented review", () => {
     expect(designSystem).toContain("label the AI and human note columns once above the open fields");
     expect(designSystem).toContain("The comparison header is one line");
     expect(designSystem).toContain("Human values are read-only text without a field border");
+    expect(designSystem).toContain("one Grey 200 divider separates the AI and human columns");
+    expect(designSystem).toContain("AI CY, AI PY, Human CY, Human PY");
+    expect(designSystem).toContain("Never type a symbol as a comparison marker");
+    expect(designSystem).toContain("A finished run shows no status under the document title");
+    expect(designSystem).toContain("One shape for every two-option switch");
     expect(designSystem).toContain("A select is the same flat white field with one thin chevron");
     expect(designSystem).toContain("align each pane title with its own content edge");
     expect(designSystem).toContain("Keep the worksheet rails visible at standard desktop widths");
