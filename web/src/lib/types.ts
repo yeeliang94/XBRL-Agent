@@ -161,6 +161,8 @@ export interface StatusData {
   message: string;
   /** Durable audit id emitted by the coordinator's starting event. */
   run_id?: number;
+  /** Preparation identity retained in the worker's durable starting event. */
+  attempt_id?: string;
 }
 
 export interface ThinkingDeltaData {

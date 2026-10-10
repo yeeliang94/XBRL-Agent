@@ -6,7 +6,7 @@ import { PdfSourcePane } from "./PdfSourcePane";
 import { parseEvidencePages } from "../lib/evidencePages";
 import { ConceptsPage } from "../pages/ConceptsPage";
 import type { ConceptRow } from "../pages/ConceptsPage";
-import { runStatusDisplay, agentStatusDisplay, STATUS_SYMBOLS } from "../lib/runStatus";
+import { agentStatusDisplay, STATUS_SYMBOLS } from "../lib/runStatus";
 import { errorGuidance } from "../lib/errorGuidance";
 import { StatusIcon } from "./StatusIcon";
 import { ArrowForward } from "./iconGlyphs";
@@ -459,6 +459,43 @@ function savedAgentStatus(status: string): AgentTabStatus {
   return "pending";
 }
 
+function savedPreparationEvents(detail: RunDetailJson, agent: RunAgentJson): RunAgentJson["events"] {
+  if (!["SOURCE_PREPARATION", "SCOUT"].includes(agent.statement_type)) return [];
+  // Audit dates without a timezone are UTC, just like run-event timestamps.
+  const auditTime = (value: string | null) => value
+    ? Date.parse(/(?:Z|[+-]\d{2}:\d{2})$/i.test(value) ? value : `${value}Z`)
+    : NaN;
+  const start = auditTime(agent.started_at);
+  const end = auditTime(agent.ended_at);
+  const started = [...agent.events].reverse().find((event) => event.event === "status" && event.data.phase === "started");
+  const attempt = started?.event === "status" ? started.data.attempt_id : undefined;
+  // A new remap may deliberately have no preparation attempt. Only historical
+  // rows without a starting event can use timestamp attribution.
+  if (started && !attempt) return [];
+  // Older timestamps cannot distinguish workers that started in one second.
+  if (!attempt && detail.agents.some((other) => other.statement_type === agent.statement_type
+    && other.id !== agent.id && auditTime(other.started_at) === start)) return [];
+  const nextStart = Math.min(...detail.agents
+    .filter((other) => other.statement_type === agent.statement_type && other.id !== agent.id)
+    .map((other) => ({ id: other.id, time: auditTime(other.started_at) }))
+    .filter((other) => other.time > start)
+    .map((other) => other.time));
+  const events: RunAgentJson["events"] = [];
+  for (const event of detail.run_events ?? []) {
+    if (event.event !== "preparation_progress" || typeof event.data.message !== "string") continue;
+    const time = event.timestamp * 1000;
+    // Audit rows record whole seconds; progress events retain fractions.
+    // Include the final second while the next attempt still bounds the feed.
+    if (attempt ? event.data.attempt_id !== attempt
+      : !(time >= start && time < nextStart) || (Number.isFinite(end) && time >= end + 1000)) continue;
+    const mapping = ["scouting", "reconciling", "ready"].includes(String(event.data.stage));
+    if (mapping !== (agent.statement_type === "SCOUT")) continue;
+    events.push({ event: "status", timestamp: event.timestamp,
+      data: { phase: "started", message: event.data.message } });
+  }
+  return events;
+}
+
 function observedStageAgents(detail: RunDetailJson): RunAgentJson[] {
   // Only observed stages become workstreams; a terminal parent alone never
   // invents success. Normalize the durable envelope at this boundary.
@@ -490,7 +527,7 @@ function observedStageAgents(detail: RunDetailJson): RunAgentJson[] {
     [-2, "NOTES_CLEANUP", "cleaning_notes", notesCleanupActivity(state)],
     [-3, "NOTES_INTEGRITY", "checking_notes", notesIntegrityActivity(state)],
   ] as const) {
-    if (!outcome || (type !== "NOTES_FORMATTING" && detail.agents.some((agent) => agent.statement_type === type))) continue;
+    if (!outcome) continue;
     result.push({ id: index, statement_type: type, variant: null, model: null,
       status: outcome.status === "complete" ? "completed" : outcome.status,
       started_at: null, ended_at: null, workbook_path: null, total_tokens: null, total_cost: null,
@@ -553,6 +590,8 @@ function SavedAgentWorkspace({ detail, filingStandard, onRetry, retryPending }: 
         formatting.error_message = failedCall?.error_message ?? null;
         formatting.events = [...formatting.events, currentEvent];
       }
+      if (formatting) formatting.events = [...formatting.events, ...calls.flatMap((call) => call.events)]
+        .sort((left, right) => left.timestamp - right.timestamp);
       if (calls.length && !formatting) {
         observed.push({ ...calls[0], id: -1, variant: null, status: currentStatus,
           error_type: failedCall?.error_type ?? null, error_message: failedCall?.error_message ?? null,
@@ -561,9 +600,14 @@ function SavedAgentWorkspace({ detail, filingStandard, onRetry, retryPending }: 
       return [...detail.agents.filter((agent) => agent.statement_type !== "NOTES_FORMATTING").map((agent) => {
         const status = recordedAgentStatus(agent);
         const legacyReview = status === "completed_with_errors" && agent.status === "failed";
-        return { ...agent, status, error_type: legacyReview ? null : agent.error_type,
+        const stage = observed.find((item) => item.statement_type === agent.statement_type);
+        return { ...agent, status, events: stage
+          ? [...agent.events, ...stage.events].sort((left, right) => left.timestamp - right.timestamp)
+          : [...agent.events, ...savedPreparationEvents(detail, agent)].sort((left, right) => left.timestamp - right.timestamp),
+          error_type: legacyReview ? null : agent.error_type,
           error_message: legacyReview ? "AI review completed; a source question needs your review." : agent.error_message };
-      }), ...observed]
+      }), ...observed.filter((agent) => agent.statement_type === "NOTES_FORMATTING"
+        || !detail.agents.some((item) => item.statement_type === agent.statement_type))]
       .sort((a, b) => agentActivityOrder(a) - agentActivityOrder(b));
     },
     [detail],
@@ -778,7 +822,7 @@ export function RunDetailView({
   const advisoryCheckSummaries = crossChecks
     .filter((check) => String(check.status) === "warning")
     .map((check) =>
-      `${crossCheckFailureLabel(check.name)}${check.message ? ` — ${check.message}` : ""}`,
+      `${crossCheckFailureLabel(check.name)} needs review.`,
     );
   const issueTab: RunTabKey =
     failingChecks.length > 0 || advisoryCheckSummaries.length > 0
@@ -989,16 +1033,11 @@ export function RunDetailView({
           <h1 style={styles.filename}>
             {detail.pdf_filename}
           </h1>
-          {/* A finished run's outcome lives on Overview; the title shows a
-              status only while that status is the news (working, failed, stopped). */}
-          {(!finishedRun || (!reviewWorkspaceActive && isLegacy)) && <div style={styles.metaRow}>
-            {!finishedRun && <span style={ui.status}><StatusIcon symbol={runStatusDisplay(detail.status).symbol} />{runStatusDisplay(detail.status).label}</span>}
-            {!reviewWorkspaceActive && isLegacy && (
-              <span style={styles.legacyBadge}
-                title="Some configuration and performance details were not recorded for this older run.">
-                Limited historical details
-              </span>
-            )}
+          {!reviewWorkspaceActive && isLegacy && <div style={styles.metaRow}>
+            <span style={styles.legacyBadge}
+              title="Some configuration and performance details were not recorded for this older run.">
+              Limited historical details
+            </span>
           </div>}
         </div>
         <div style={styles.actions}>
@@ -1077,10 +1116,7 @@ export function RunDetailView({
               {incompleteStatements
                 .map((a) => STATEMENT_LABELS[a.statement_type as keyof typeof STATEMENT_LABELS] ?? a.statement_type)
                 .join(", ")}
-              . The figures each one got as far as writing are still in this run
-              and will be identified as incomplete in the template preparation report.
-              Re-run the statement before relying on it. This run cannot
-              be filed until it is resolved.
+              . This run cannot be filed. Retry incomplete statements.
             </span>
           </div>
           <button
@@ -1098,10 +1134,14 @@ export function RunDetailView({
         <div style={styles.errorBanner} role="alert" data-testid="failed-check-warning">
           <div style={styles.errorBannerBody}>
             <strong style={styles.errorBannerTitle}>
-              This run finished, but a consistency check didn’t pass.
+              A consistency check needs review.
             </strong>
             <span style={styles.errorBannerText}>
-              {failingCheckSummaries.join("; ")}. Resolve the failed check before filing.
+              {failingChecks.length === 1
+                ? failingChecks[0].status === "blocked"
+                  ? `${crossCheckFailureLabel(failingChecks[0].name)} — waiting for required statement data.`
+                  : `${crossCheckFailureLabel(failingChecks[0].name)} needs review.`
+                : `${failingChecks.length} checks need review.`}
             </span>
           </div>
           <button
@@ -1119,11 +1159,10 @@ export function RunDetailView({
         <div style={styles.errorBanner} role="alert">
           <div style={styles.errorBannerBody}>
             <strong style={styles.errorBannerTitle}>
-              {isFailed ? "This extraction did not finish." : "This extraction was stopped."}
+              {isFailed ? "This run needs review before filing." : "This run was stopped."}
             </strong>
             <span style={styles.errorBannerText}>
-              Saved figures may be incomplete. Review Activity before using them to prepare
-              an investigation draft with your mTool template.
+              Saved figures may be incomplete. Review Activity before preparing a draft.
             </span>
           </div>
           <button
@@ -1159,7 +1198,7 @@ export function RunDetailView({
       {reviewWorkspaceActive && (isFailed || isAborted) && (
         <div style={styles.reviewWarningStrip} role="alert" data-testid="review-stopped-warning">
           <span>
-            {isFailed ? "This extraction did not finish." : "This extraction was stopped."}
+            {isFailed ? "This run needs review before filing." : "This run was stopped."}
             {" "}Treat any preserved figures as an investigation draft.
           </span>
           <button
@@ -1402,9 +1441,9 @@ export function RunDetailView({
               did, not token/latency internals. */}
           <details style={styles.perfDetails} data-testid="run-detail-telemetry">
             <summary style={styles.perfSummary}>Performance details</summary>
-            <div style={{ marginTop: pwc.space.md }}>
+            <div style={{ marginTop: pwc.space.md, display: "flex", flexDirection: "column", gap: pwc.space.lg, minWidth: 0 }}>
               {rollup && (
-                <div style={styles.metricStrip}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: pwc.space.md }}>
                   <MetricTile label="Total tokens" value={rollup.total_tokens.toLocaleString()} />
                   <MetricTile
                     label="Reasoning tokens"
@@ -1652,6 +1691,7 @@ const styles = {
   } as React.CSSProperties,
   headerText: {
     minWidth: 0,
+    flex: "1 1 360px",
   } as React.CSSProperties,
   kicker: {
     fontFamily: pwc.fontHeading,
@@ -1663,6 +1703,7 @@ const styles = {
   filename: {
     ...ui.pageTitle,
     margin: 0,
+    overflowWrap: "anywhere",
   } as React.CSSProperties,
   reviewContextProfile: {
     display: "inline",
@@ -1716,7 +1757,7 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     gap: 2,
-    minWidth: 240,
+    minWidth: 0,
     flex: "1 1 320px",
   } as React.CSSProperties,
   errorBannerTitle: {
@@ -1728,11 +1769,14 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontSize: 14,
     color: pwc.grey700,
+    lineHeight: 1.5,
+    overflowWrap: "anywhere",
   } as React.CSSProperties,
   reviewWarningStrip: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
+    flexWrap: "wrap",
     gap: pwc.space.md,
     padding: `${pwc.space.sm}px 0`,
     borderTop: `1px solid ${pwc.grey200}`,
@@ -1789,14 +1833,18 @@ const styles = {
     justifyContent: "space-between",
     gap: pwc.space.md,
     minHeight: 48,
+    flexWrap: "wrap",
+    paddingBlock: pwc.space.sm,
     borderTop: `1px solid ${pwc.grey100}`,
   } as React.CSSProperties,
   nextText: {
     ...ui.bodyText,
     display: "inline-flex",
-    alignItems: "center",
     gap: pwc.space.sm,
     minWidth: 0,
+    flex: "1 1 280px",
+    alignItems: "flex-start",
+    overflowWrap: "anywhere",
   } as React.CSSProperties,
   nextIcon: {
     display: "inline-flex",

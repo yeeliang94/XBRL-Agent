@@ -1,5 +1,6 @@
 """Category identities must survive writes, review and filing snapshots."""
 import sqlite3
+from dataclasses import replace
 
 import pytest
 
@@ -9,10 +10,12 @@ from concept_model.versioning import snapshot_facts, compute_review_diff, revert
 from test_facts_api_inprocess import db_and_run
 
 
-def test_numeric_note_payloads_reach_distinct_native_categories(tmp_path):
+@pytest.mark.parametrize('separate_calls', [False, True])
+def test_numeric_note_payloads_reach_distinct_native_categories(tmp_path, separate_calls):
     from openpyxl import Workbook, load_workbook
     from notes.payload import NotesPayload
-    from notes.writer import write_notes_workbook
+    from notes.agent import NotesDeps, _write_payloads_through_writer_impl
+    from token_tracker import TokenReport
     from notes_types import NotesTemplateType, notes_template_path
     from concept_model.cell_resolver import project_writes
     from db.schema import init_db
@@ -34,8 +37,20 @@ def test_numeric_note_payloads_reach_distinct_native_categories(tmp_path):
         parent_note={'number': '4', 'title': 'Share capital'},
         numeric_values={'cy': value, 'py': value - 5}, dimensions={axis: member},
     ) for member, value in zip(members, [100, 20])]
-    result = write_notes_workbook(str(template), payloads, str(tmp_path / 'diagnostic.xlsx'), 'company', 'Notes-Issuedcapital')
-    projected = project_writes(db, run, tid, result.numeric_cells)
+    deps = NotesDeps(
+        pdf_path=str(tmp_path / 'source.pdf'), template_path=str(template),
+        model=None, output_dir=str(tmp_path), token_report=TokenReport(model='test'),
+        template_type=NotesTemplateType.ISSUED_CAPITAL, sheet_name='Notes-Issuedcapital',
+        filing_level='company', filled_filename='diagnostic.xlsx',
+    )
+    # Separate calls also replace an earlier reading of the same class without
+    # replacing the other class at the same worksheet coordinates.
+    batches = [[replace(payloads[0], numeric_values={'cy': 99, 'py': 94})],
+               [payloads[1]], [payloads[0]]] if separate_calls else [payloads]
+    for batch in batches:
+        result = _write_payloads_through_writer_impl(deps, batch)
+        assert result.success, result.errors
+    projected = project_writes(db, run, tid, deps.numeric_cells)
     assert projected.projected == 4
     from api.notes import _numeric_sheet_rows
     with sqlite3.connect(db) as conn:
