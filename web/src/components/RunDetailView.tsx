@@ -467,10 +467,18 @@ function savedPreparationEvents(detail: RunDetailJson, agent: RunAgentJson): Run
     : NaN;
   const start = auditTime(agent.started_at);
   const end = auditTime(agent.ended_at);
+  const started = [...agent.events].reverse().find((event) => event.event === "status" && event.data.phase === "started");
+  const attempt = started?.event === "status" ? started.data.attempt_id : undefined;
+  // A new remap may deliberately have no preparation attempt. Only historical
+  // rows without a starting event can use timestamp attribution.
+  if (started && !attempt) return [];
+  // Older timestamps cannot distinguish workers that started in one second.
+  if (!attempt && detail.agents.some((other) => other.statement_type === agent.statement_type
+    && other.id !== agent.id && auditTime(other.started_at) === start)) return [];
   const nextStart = Math.min(...detail.agents
     .filter((other) => other.statement_type === agent.statement_type && other.id !== agent.id)
     .map((other) => ({ id: other.id, time: auditTime(other.started_at) }))
-    .filter((other) => other.time > start || (other.time === start && other.id > agent.id))
+    .filter((other) => other.time > start)
     .map((other) => other.time));
   const events: RunAgentJson["events"] = [];
   for (const event of detail.run_events ?? []) {
@@ -478,7 +486,8 @@ function savedPreparationEvents(detail: RunDetailJson, agent: RunAgentJson): Run
     const time = event.timestamp * 1000;
     // Audit rows record whole seconds; progress events retain fractions.
     // Include the final second while the next attempt still bounds the feed.
-    if (!(time >= start && time < nextStart) || (Number.isFinite(end) && time >= end + 1000)) continue;
+    if (attempt ? event.data.attempt_id !== attempt
+      : !(time >= start && time < nextStart) || (Number.isFinite(end) && time >= end + 1000)) continue;
     const mapping = ["scouting", "reconciling", "ready"].includes(String(event.data.stage));
     if (mapping !== (agent.statement_type === "SCOUT")) continue;
     events.push({ event: "status", timestamp: event.timestamp,

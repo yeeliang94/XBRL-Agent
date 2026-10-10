@@ -265,7 +265,7 @@ def _usage_totals(directory: Path) -> dict[str, dict[str, int]]:
     return totals
 
 
-def _start_scout_audit(conn, run_id: int, model_name: str) -> tuple[int, dict]:
+def _start_scout_audit(conn, run_id: int, model_name: str, attempt_id: str | None = None) -> tuple[int, dict]:
     """Keep one visible Scout row without losing earlier paid attempt totals."""
     from db import repository as repo
     row = conn.execute(
@@ -279,6 +279,10 @@ def _start_scout_audit(conn, run_id: int, model_name: str) -> tuple[int, dict]:
     if previous:
         conn.execute("UPDATE run_agents SET total_tokens=?, total_cost=? WHERE id=?",
                      (previous.get("total_tokens", 0), previous.get("total_cost", 0), row_id))
+    repo.log_event(conn, row_id, "status", phase="started", payload={
+        "phase": "started", "message": "Building document map.",
+        **({"attempt_id": attempt_id} if attempt_id else {}),
+    })
     conn.commit()
     return row_id, previous
 
@@ -386,6 +390,9 @@ async def _prepare(directory: Path, db_path: Path, run_id: int, attempt: str) ->
         model_name = os.environ.get("TEST_MODEL", DEFAULT_MODEL_ID)
         agent_id = repo.create_run_agent(conn, run_id, statement_type="SOURCE_PREPARATION",
                                          variant=None, model=model_name)
+        repo.log_event(conn, agent_id, "status", phase="started", payload={
+            "phase": "started", "message": "Preparing source document.", "attempt_id": attempt,
+        })
         conn.commit()
         if _read(directory).get("cancel_requested"):
             raise asyncio.CancelledError(task_registry.USER_ABORT_REASON)
@@ -420,7 +427,7 @@ async def _prepare(directory: Path, db_path: Path, run_id: int, attempt: str) ->
         _update(directory, attempt, prepared=True, stage="scouting", phase="building_map",
                 action_required="none",
                 scout_status="working", message="Building document map and notes inventory")
-        scout_id, prior_scout_usage = _start_scout_audit(conn, run_id, scout_name)
+        scout_id, prior_scout_usage = _start_scout_audit(conn, run_id, scout_name, attempt_id=attempt)
         scout_model = server._create_proxy_model(scout_name, os.environ.get("LLM_PROXY_URL", ""), api_key)
 
         pack, assignments = await build_prepared_document_map(

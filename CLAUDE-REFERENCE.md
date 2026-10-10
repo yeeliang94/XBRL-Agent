@@ -1794,6 +1794,11 @@ and records `preparation_progress` events. Queued/working/retrying/succeeded/fai
 cancelled are explicit outcomes; inactivity and missing reasoning summaries never
 imply success. Source capture, completed assessment and exact verification have
 separate counts; the UI shows pages checked, including accepted best readings.
+Preparation workers persist their attempt ID in the agent-owned starting event;
+saved Activity matches progress by that identity, including the latest attempt
+when the Scout row is reused. Timestamp fallback is only for historical workers
+without a starting event and must not attribute progress across same-second
+retries. An untagged remap start must not reuse an earlier attempt's progress.
 The document-map stage starts after source preparation and preserves the page
 counters while reporting its own status. The durable snapshot exposes a
 monotonic operator phase (`pending`, `preparing_pages`, `building_map`,

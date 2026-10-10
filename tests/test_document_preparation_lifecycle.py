@@ -172,6 +172,7 @@ async def test_worker_prepares_before_scout_and_reconciles_before_ready(upload, 
     monkeypatch.setattr(prep.server, "_resolve_api_key", lambda: "test-key")
     monkeypatch.setattr(prep.server, "_create_proxy_model", lambda *a: object())
     monkeypatch.setattr(prep.server, "_configured_default_models", lambda: {})
+    monkeypatch.setattr(repo, "_now", lambda: "2026-04-10T09:30:00Z")
     prep._write(directory, {"attempt_id": "a", "status": "queued", "run_id": run_id})
     await prep._prepare(directory, db, run_id, "a")
     assert calls == ["capture", "map", "reconcile", "validate"]
@@ -185,6 +186,18 @@ async def test_worker_prepares_before_scout_and_reconciles_before_ready(upload, 
     conn = sqlite3.connect(db)
     assert conn.execute("SELECT status FROM run_agents WHERE run_id=?", (run_id,)).fetchall() == [("succeeded",), ("succeeded",)]
     conn.close()
+    prep._write(directory, {"attempt_id": "b", "status": "queued", "run_id": run_id})
+    await prep._prepare(directory, db, run_id, "b")
+    from api.runs import get_run_detail_endpoint
+    detail = await get_run_detail_endpoint(run_id)
+    workers = detail["agents"]
+    assert len({worker["started_at"] for worker in workers}) == 1
+    identities = [[event["data"]["attempt_id"] for event in worker["events"]
+                   if event["event"] == "status" and event["data"].get("attempt_id")]
+                  for worker in workers]
+    assert identities == [["a"], ["a", "b"], ["b"]]
+    assert [event["data"]["attempt_id"] for event in detail["run_events"]
+            if event["event"] == "preparation_progress"] == ["a", "b"]
 
 
 @pytest.mark.asyncio
