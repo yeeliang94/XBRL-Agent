@@ -2273,9 +2273,9 @@ function SegmentedControl<T extends string>({
             style={{
               ...styles.segmentedButton,
               borderRight: index < values.length - 1 ? `1px solid ${pwc.grey200}` : "none",
-              fontWeight: active ? 600 : 500,
-              background: active ? pwc.black : pwc.white,
-              color: active ? pwc.white : pwc.grey700,
+              fontWeight: pwc.weight.medium,
+              background: active ? pwc.grey100 : pwc.white,
+              color: active ? pwc.black : pwc.grey700,
             }}
           >
             {value}
