@@ -164,13 +164,13 @@ function numericNoteCategories(cell: NotesCell, humanFigures: Map<string, HumanF
   return categories;
 }
 
-/** Presence is based on current content; zero is a filled numeric value. */
 /** A compact comparison header period, matching Figures: "CY", "Group PY". */
 function comparisonPeriodLabel(key: string): string {
   const column = NUMERIC_VALUE_COLUMNS[key];
   return key === "cy" || key === "py" ? column.period : column.label;
 }
 
+/** Presence is based on current content; zero is a filled numeric value. */
 function noteFieldPresence(cell: NotesCell, human: HumanNotesView | null, humanFigures: Map<string, HumanFigureSlot> | null) {
   if (cell.kind !== "numeric") {
     const aiFilled = !isBlankHtml(cell.html);
