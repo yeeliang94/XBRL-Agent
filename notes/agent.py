@@ -3034,12 +3034,16 @@ def _merge_writer_result(deps: NotesDeps, result) -> None:
             by_key[(cell["sheet"], cell["row"])] = cell
         deps.cells_written = list(by_key.values())
     if result.numeric_cells:
+        from concept_model.dimensions import dimension_key
+
+        # The same template cell can hold several source-supported categories.
+        # Only a later reading of the same category replaces its earlier value.
         by_cell = {
-            (c["sheet"], c["row"], c["col"]): c
+            (c["sheet"], c["row"], c["col"], dimension_key(c.get("dimensions"))): c
             for c in deps.numeric_cells
         }
         for cell in result.numeric_cells:
-            by_cell[(cell["sheet"], cell["row"], cell["col"])] = cell
+            by_cell[(cell["sheet"], cell["row"], cell["col"], dimension_key(cell.get("dimensions")))] = cell
         deps.numeric_cells = list(by_cell.values())
 
 

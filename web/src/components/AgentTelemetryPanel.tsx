@@ -271,8 +271,7 @@ function AgentTelemetry({ runId, agent }: { runId: number; agent: RunAgentJson }
 
       {turns.length === 0 ? (
         <p style={styles.dim}>
-          No per-turn telemetry was captured for this agent (older run, or it
-          failed before any model turn).
+          Per-turn details were not recorded for this workstream.
         </p>
       ) : (
         <div style={styles.tableScroller}>
@@ -350,6 +349,7 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.lg,
+    minWidth: 0,
   } as React.CSSProperties,
   incidentSection: {
     display: "flex",
@@ -465,13 +465,14 @@ const styles = {
   } as React.CSSProperties,
   agentHeader: {
     display: "flex",
-    alignItems: "baseline",
+    alignItems: "flex-start",
+    flexDirection: "column" as const,
     gap: pwc.space.sm,
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
   agentName: {
-    fontFamily: pwc.fontMono,
-    fontWeight: 400,
+    fontFamily: pwc.fontBody,
+    fontWeight: pwc.weight.medium,
     fontSize: 14,
     color: pwc.grey900,
   } as React.CSSProperties,
@@ -483,12 +484,14 @@ const styles = {
     fontFamily: pwc.fontMono,
     fontSize: 12,
     color: pwc.grey700,
+    overflowWrap: "anywhere",
   } as React.CSSProperties,
   agentRollup: {
-    marginLeft: "auto",
-    fontFamily: pwc.fontMono,
+    fontFamily: pwc.fontBody,
     fontSize: 14,
     color: pwc.grey700,
+    lineHeight: 1.5,
+    overflowWrap: "anywhere",
   } as React.CSSProperties,
   // A cost derived from a placeholder rate. Dotted underline rather than a
   // colour: this is "read the caveat", not an error.
@@ -499,6 +502,7 @@ const styles = {
   tableScroller: {
     overflowX: "auto" as const,
     maxWidth: "100%",
+    minWidth: 0,
   } as React.CSSProperties,
   table: {
     borderCollapse: "collapse" as const,

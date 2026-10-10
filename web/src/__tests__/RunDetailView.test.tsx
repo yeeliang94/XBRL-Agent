@@ -19,7 +19,8 @@ function activityRows() {
 test.each(["failed", "succeeded"])("formatter calls share one workstream and retain per-call telemetry after %s", (status) => {
   window.history.replaceState({}, "", "/");
   render(<RunDetailView detail={makeDetail({ agents: [
-    makeAgent({ id: 11, statement_type: "NOTES_FORMATTING", status: "completed", variant: "Notes-Issuedcapital" }),
+    makeAgent({ id: 11, statement_type: "NOTES_FORMATTING", status: "completed", variant: "Notes-Issuedcapital",
+      events: [{ event: "status", data: { phase: "complete", message: "Checked issued capital table." }, timestamp: 2 }] as SSEEvent[] }),
     makeAgent({ id: 12, statement_type: "NOTES_FORMATTING", status: "failed", variant: "Notes-ListOfNotes" }),
   ], run_events: [
     { event: "pipeline_stage", data: { stage: "formatting_notes", status, message: "Formatting pass finished." }, timestamp: 1 },
@@ -30,6 +31,7 @@ test.each(["failed", "succeeded"])("formatter calls share one workstream and ret
   fireEvent.click(within(tabs).getByRole("tab", { name: /Notes formatting/ }));
   expect(within(tabs).getByRole("tab", { name: /Notes formatting/ })).toHaveTextContent("Failed");
   expect(screen.getByText("Formatting calls")).toBeVisible();
+  expect(within(screen.getByRole("list", { name: "Activity updates" })).getByText("Checked issued capital table.")).toBeVisible();
   cleanup();
 });
 
@@ -266,9 +268,9 @@ describe("RunDetailView", () => {
     );
   });
 
-  test("a finished run shows no status under the title; a failed run does", () => {
+  test.each(["completed", "failed", "aborted", "running", "draft"])("%s run shows no status under the document title", (status) => {
     render(
-      <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
+      <RunDetailView detail={makeDetail({ status })} onDelete={() => {}} onDownload={() => {}} />,
     );
     expect(screen.getByText("FINCO-Audited-2021.pdf")).toBeTruthy();
     // The title stands alone; the run's outcome is the Overview's Workbook line.
@@ -276,12 +278,7 @@ describe("RunDetailView", () => {
     expect(screen.getByText("Workbook")).toBeInTheDocument();
     const title = screen.getByRole("heading", { level: 1, name: "FINCO-Audited-2021.pdf" });
     // The finished outcome lives on Overview, not under the document title.
-    expect(title.parentElement).not.toHaveTextContent(/complete/i);
-    cleanup();
-    render(
-      <RunDetailView detail={makeDetail({ status: "failed" })} onDelete={() => {}} onDownload={() => {}} />,
-    );
-    expect(screen.getByRole("heading", { level: 1 }).parentElement).toHaveTextContent("Failed");
+    expect(title.parentElement).toHaveTextContent(/^FINCO-Audited-2021.pdf$/);
   });
 
   test("per-agent duration sums turn compute time, not the shared batch window", () => {
@@ -1008,6 +1005,19 @@ describe("RunDetailView", () => {
     expect(within(workstreams).getByRole("tab", { name: /Notes cleanup/ })).toHaveAttribute("aria-selected", "true");
     expect(within(workstreams).getByRole("tab", { name: /Notes cleanup/ })).toHaveTextContent("Failed");
     expect(screen.getByRole("region", { name: "Recorded activity" })).toBeVisible();
+  });
+
+  test.each([
+    ["NOTES_CLEANUP", "cleaning_notes", "Notes cleanup"],
+    ["NOTES_INTEGRITY", "checking_notes", "Notes completeness"],
+    ["NOTES_FORMATTING", "formatting_notes", "Notes formatting"],
+  ])("saved %s activity includes stage records when a worker row exists", (type, stage, label) => {
+    render(<RunDetailView detail={makeDetail({ agents: [makeAgent({ statement_type: type, events: [] })],
+      run_events: [{ event: "pipeline_stage", data: { stage, status: "succeeded", message: "Checked four note sections." }, timestamp: 1 }],
+    })} onDelete={vi.fn()} />);
+    clickRunTab(/^activity$/i);
+    fireEvent.click(within(screen.getByRole("tablist", { name: "Run workstreams" })).getByRole("tab", { name: new RegExp(label) }));
+    expect(within(screen.getByRole("list", { name: "Activity updates" })).getByText("Checked four note sections.")).toBeVisible();
   });
 
   // Phase 9.3: legacy runs have no config AND (often) no agents. The
@@ -1826,7 +1836,8 @@ describe("RunDetailView", () => {
     const warning = screen.getByRole("alert");
     // The human-readable check name appears, not the raw id.
     expect(warning.textContent).toMatch(/balance/i);
-    expect(warning.textContent).toMatch(/expected 100.*actual 90.*difference 10/i);
+    expect(warning.textContent).toMatch(/needs review/i);
+    expect(warning.textContent).not.toMatch(/expected 100|actual 90|difference 10/i);
     expect(screen.queryByTestId("items-to-check")).toBeNull();
     const download = screen.getByRole("button", { name: /prepare mtool draft/i });
     expect(download.className).toMatch(/secondary/i);
@@ -1865,6 +1876,8 @@ describe("RunDetailView", () => {
     render(<RunDetailView detail={makeDetail({ status })} onDelete={() => {}} />);
     expect(screen.queryByText(/partial workbook was preserved/i)).toBeNull();
     expect(screen.getByText(/Saved figures may be incomplete/i)).toBeInTheDocument();
+    expect(screen.getByText(status === "failed" ? "This run needs review before filing." : "This run was stopped.")).toBeInTheDocument();
+    expect(screen.queryByText("This extraction did not finish.")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Prepare investigation draft" }));
     // One dialog: the explanation sits at the top of the preparation dialog.
     const dialog = screen.getByRole("dialog", { name: "Prepare mTool draft" });
@@ -2005,6 +2018,35 @@ describe("RunDetailView", () => {
     expect(row).not.toHaveTextContent("SOURCE_PREPARATION");
   });
 
+  test("saved preparation activity keeps each attempt and document-map progress separate", () => {
+    const timestamp = (time: string) => Date.parse(`2026-04-10T${time}Z`) / 1000;
+    render(<RunDetailView detail={makeDetail({ agents: [
+      makeAgent({ id: 1, statement_type: "SOURCE_PREPARATION", events: [], status: "failed",
+        started_at: "2026-04-10T09:30:00Z", ended_at: "2026-04-10T09:31:00Z" }),
+      makeAgent({ id: 2, statement_type: "SOURCE_PREPARATION", events: [],
+        started_at: "2026-04-10T09:32:00Z", ended_at: "2026-04-10T09:34:00Z" }),
+      makeAgent({ id: 3, statement_type: "SCOUT", events: [],
+        started_at: "2026-04-10T09:33:00Z", ended_at: "2026-04-10T09:34:00Z" }),
+    ], run_events: [
+      { event: "preparation_progress", data: { stage: "capturing", message: "Reading source pages." }, timestamp: timestamp("09:30:30") },
+      { event: "preparation_progress", data: { stage: "verifying", message: "Checking captured pages." }, timestamp: timestamp("09:32:30") },
+      { event: "preparation_progress", data: { stage: "scouting", message: "Building the document map." }, timestamp: timestamp("09:33:30") },
+      { event: "preparation_progress", data: { stage: "ready", message: "Document map ready." }, timestamp: timestamp("09:34:00.500") },
+    ] })} onDelete={vi.fn()} />);
+    clickRunTab(/^activity$/i);
+    const workstreams = screen.getByRole("tablist", { name: "Run workstreams" });
+    const sourceTabs = within(workstreams).getAllByRole("tab", { name: /Source preparation/ });
+    fireEvent.click(sourceTabs[0]);
+    expect(screen.getByRole("list", { name: "Activity updates" })).toHaveTextContent("Reading source pages.");
+    expect(screen.getByRole("list", { name: "Activity updates" })).not.toHaveTextContent("Checking captured pages.");
+    fireEvent.click(sourceTabs[1]);
+    expect(screen.getByRole("list", { name: "Activity updates" })).toHaveTextContent("Checking captured pages.");
+    expect(screen.getByRole("list", { name: "Activity updates" })).not.toHaveTextContent("Building the document map.");
+    fireEvent.click(within(workstreams).getByRole("tab", { name: /Document preparation/ }));
+    expect(screen.getByRole("list", { name: "Activity updates" })).toHaveTextContent("Building the document map.");
+    expect(screen.getByRole("list", { name: "Activity updates" })).toHaveTextContent("Document map ready.");
+  });
+
   test("advisory checks render as one compact review action", () => {
     const detail = makeDetail({
       // "warning" is a runtime advisory status the outcomes logic compares as a
@@ -2016,7 +2058,8 @@ describe("RunDetailView", () => {
     });
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
     const items = screen.getByTestId("items-to-check");
-    expect(items).toHaveTextContent("advisory");
+    expect(items).toHaveTextContent("Notes consistency discrepancy needs review.");
+    expect(items).not.toHaveTextContent("advisory");
     fireEvent.click(within(items).getByRole("button", { name: "View cross-checks" }));
     expect(screen.getByRole("tab", { name: "Cross-checks" })).toHaveAttribute("aria-selected", "true");
   });
@@ -2034,14 +2077,11 @@ describe("RunDetailView", () => {
     expect(screen.queryByRole("button", { name: /abort run/i })).toBeNull();
   });
 
-  test("run status pairs its icon with a label; active tab uses a quiet surface without an indicator line (CS6)", () => {
+  test("run title stays free of status; active tab uses a quiet surface without an indicator line (CS6)", () => {
     render(
       <RunDetailView detail={makeDetail({ status: "failed" })} onDelete={() => {}} onDownload={() => {}} />,
     );
-    // Status icon is aria-hidden beside the explicit label.
-    const label = within(screen.getByRole("heading", { level: 1 }).parentElement!).getByText("Failed");
-    const symbol = label.parentElement!.querySelector('[aria-hidden="true"]');
-    expect(symbol?.getAttribute("data-status-icon")).toBe("failure");
+    expect(screen.getByRole("heading", { level: 1 }).parentElement).toHaveTextContent(/^FINCO-Audited-2021.pdf$/);
 
     // Shared tab treatment: dark active text and a quiet selected surface.
     const tablist = screen.getByRole("tablist", { name: /run detail sections/i });

@@ -320,7 +320,8 @@ describe("Simplified template-oriented review", () => {
     expect(designSystem).toContain("one Grey 200 divider separates the AI and human columns");
     expect(designSystem).toContain("AI CY, AI PY, Human CY, Human PY");
     expect(designSystem).toContain("Never type a symbol as a comparison marker");
-    expect(designSystem).toContain("A finished run shows no status under the document title");
+    expect(designSystem).toContain("Every run shows no status under the document title");
+    expect(designSystem).toContain("Keep filing warnings to one actionable sentence");
     expect(designSystem).toContain("One shape for every two-option switch");
     expect(designSystem).toContain("A select is the same flat white field with one thin chevron");
     expect(designSystem).toContain("align each pane title with its own content edge");
