@@ -2047,6 +2047,63 @@ describe("RunDetailView", () => {
     expect(screen.getByRole("list", { name: "Activity updates" })).toHaveTextContent("Document map ready.");
   });
 
+  test.each([true, false])("same-second preparation retries use recorded identity (available: %s)", (identified) => {
+    const started = "2026-04-10T09:30:00Z";
+    const timestamp = Date.parse(started) / 1000;
+    const identity = (attempt_id: string): SSEEvent[] => identified
+      ? [{ event: "status", timestamp, data: { phase: "started", message: "", attempt_id } }]
+      : [];
+    render(<RunDetailView detail={makeDetail({ agents: [
+      makeAgent({ id: 1, statement_type: "SOURCE_PREPARATION", events: identity("first"),
+        status: "failed", started_at: started, ended_at: started }),
+      makeAgent({ id: 2, statement_type: "SOURCE_PREPARATION", events: identity("second"),
+        started_at: started, ended_at: started }),
+      makeAgent({ id: 3, statement_type: "SCOUT", events: [...identity("first"), ...identity("second")],
+        started_at: started, ended_at: started }),
+    ], run_events: [
+      { event: "preparation_progress", data: { stage: "capturing", attempt_id: "first", message: "First attempt source progress." }, timestamp },
+      { event: "preparation_progress", data: { stage: "capturing", attempt_id: "second", message: "Second attempt source progress." }, timestamp },
+      { event: "preparation_progress", data: { stage: "scouting", attempt_id: "first", message: "First attempt map progress." }, timestamp },
+      { event: "preparation_progress", data: { stage: "scouting", attempt_id: "second", message: "Second attempt map progress." }, timestamp },
+    ] })} onDelete={vi.fn()} />);
+    clickRunTab(/^activity$/i);
+    const workstreams = screen.getByRole("tablist", { name: "Run workstreams" });
+    const sources = within(workstreams).getAllByRole("tab", { name: /Source preparation/ });
+    for (const [index, label] of ["First", "Second"].entries()) {
+      fireEvent.click(sources[index]);
+      const updates = screen.queryByRole("list", { name: "Activity updates" });
+      if (identified) {
+        expect(updates).toHaveTextContent(`${label} attempt source progress.`);
+        expect(updates).not.toHaveTextContent(`${index ? "First" : "Second"} attempt source progress.`);
+      } else {
+        expect(updates).toHaveTextContent("No activity was recorded for this workstream.");
+        expect(updates).not.toHaveTextContent("attempt source progress.");
+      }
+    }
+    if (identified) {
+      fireEvent.click(within(workstreams).getByRole("tab", { name: /Document preparation/ }));
+      expect(within(screen.getByRole("list", { name: "Activity updates" })).getByText("Second attempt map progress.")).toBeVisible();
+      expect(screen.queryByText("First attempt map progress.")).toBeNull();
+    }
+  });
+
+  test("a new untagged document remap does not reuse an earlier attempt's progress", () => {
+    const started = "2026-04-10T09:30:00Z";
+    const timestamp = Date.parse(started) / 1000;
+    render(<RunDetailView detail={makeDetail({ agents: [
+      makeAgent({ statement_type: "SCOUT", started_at: started, ended_at: started, events: [
+        { event: "status", timestamp, data: { phase: "started", message: "", attempt_id: "first" } },
+        { event: "status", timestamp, data: { phase: "started", message: "Building document map." } },
+      ] }),
+    ], run_events: [
+      { event: "preparation_progress", timestamp, data: { stage: "scouting", attempt_id: "first", message: "Earlier attempt map progress." } },
+    ] })} onDelete={vi.fn()} />);
+    clickRunTab(/^activity$/i);
+    const updates = screen.getByRole("list", { name: "Activity updates" });
+    expect(updates).toHaveTextContent("Building document map.");
+    expect(updates).not.toHaveTextContent("Earlier attempt map progress.");
+  });
+
   test("advisory checks render as one compact review action", () => {
     const detail = makeDetail({
       // "warning" is a runtime advisory status the outcomes logic compares as a
