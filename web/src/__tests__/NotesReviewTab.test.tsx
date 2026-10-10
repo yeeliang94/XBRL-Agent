@@ -321,7 +321,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(getComputedStyle(screen.getByText("Short term benefits.")).marginLeft).toBe("2em");
   });
 
-  test("labels the two note comparison columns once above paired fields", async () => {
+  test.each(["loading", "failed"])("labels paired fields and keeps %s fallback previews unbordered", async (state) => {
     const compared = {
       ...SAMPLE,
       sheets: [{
@@ -330,11 +330,22 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
       }],
     };
     mockFetchOnce(compared);
+    const ordinary = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input, init) => {
+      if (String(input).includes("/notes-output?")) {
+        if (state === "failed") return new Response("{}", { status: 500 });
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+        });
+      }
+      return ordinary(input, init);
+    });
     render(<><style>{notesCss}</style><NotesReviewTab runId={42} human={{
       html: { "note-0": '<p style="font-size:24pt;line-height:3;margin:40px 0">Human legal name</p>', "note-1": "<p>Human office</p>" },
       status: { "note-0": "agree", "note-1": "missed" },
     }} /></>);
     await screen.findByRole("button", { name: "Review Corporate info" });
+    await screen.findByText(state === "loading" ? "Preparing output preview…" : "Output preview unavailable. Showing saved content.");
     expect(screen.queryByTestId("notes-human-pair")).toBeNull();
     // Filled fields open as previews, so the column labels show once at once.
     expect(screen.getAllByText("AI note")).toHaveLength(1);
@@ -345,8 +356,11 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     for (const preview of previews) {
       expect(preview).toHaveClass("notes-human-pair");
       expect(within(preview).getByRole("group", { name: "AI note" })).toHaveClass("notes-human-extracted");
+      const aiFallback = within(preview).getByRole("group", { name: "AI note" }).querySelector(".tiptap");
+      if (aiFallback) expect(aiFallback).toHaveStyle({ borderColor: "transparent", padding: "12px" });
       const humanPreview = within(preview).getByRole("group", { name: "Human note" });
       expect(humanPreview.querySelector(".tiptap")).toHaveClass("notes-human-content");
+      expect(humanPreview.querySelector(".tiptap")).toHaveStyle({ borderColor: "transparent", padding: "12px" });
       expect(humanPreview.querySelector('[data-testid="notes-readonly-content"]')).toHaveStyle({ maxHeight: "none", overflow: "visible" });
     }
     expect(screen.getByText("Human office")).toBeVisible();
@@ -362,7 +376,8 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     const humanCells = screen.getAllByTestId("notes-human-cell");
     expect(within(humanCells[0]).queryByRole("img")).toBeNull();
     expect(humanCells).toHaveLength(1);
-    expect(screen.getByText("Human legal name").parentElement).toHaveStyle({ borderColor: pwc.grey300 });
+    // Read-only human content matches the AI note preview: no editor border.
+    expect(screen.getByText("Human legal name").parentElement).toHaveStyle({ borderColor: "transparent" });
     expect(screen.getByText("Human legal name").parentElement).toHaveClass("notes-human-content");
     // Include the production stylesheet so a CSS height cap or scroll trap
     // cannot pass merely because the inline style omits maxHeight.
@@ -378,6 +393,12 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(screen.queryByText("Human office")).toBeNull();
     // Corporate info is still open as a preview, so the labels remain once.
     expect(screen.getAllByText("AI note")).toHaveLength(1);
+    openField(screen.getByRole("button", { name: "Review Corporate info" }));
+    fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+    const editable = screen.getByTestId("notes-review-editor");
+    expect(editable).toHaveAttribute("data-editable", "true");
+    expect(editable.querySelector(".tiptap")).toHaveStyle({ borderWidth: "1px", borderStyle: "solid" });
+    expect(editable.querySelector(".tiptap")).not.toHaveStyle({ borderColor: "transparent" });
   });
 
   test("quarantined content is explained and can be removed accessibly", async () => {
@@ -2064,6 +2085,14 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     expect(within(rows[2]).getByTestId("numeric-human-6-base-cy")).toHaveTextContent("125");
     expect(within(rows[0]).getByTestId("numeric-human-6-Ordinary-cy")).toHaveTextContent("100");
     expect(within(rows[1]).getByTestId("numeric-human-6-Preference-cy")).toHaveTextContent("25");
+    // The AI/human boundary continues from the header through category and total rows.
+    expect(screen.getByRole("columnheader", { name: "Human CY" })).toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
+    expect(screen.getByRole("columnheader", { name: "Human PY" })).not.toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
+    for (const row of rows) {
+      const cells = within(row).getAllByRole("cell");
+      expect(cells[2]).toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
+      expect(cells[3]).not.toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
+    }
     expect(within(rows[1]).getByRole("img", { name: "Differs from human" })).toBeInTheDocument();
     const input = within(rows[1]).getByTestId("numeric-input-6-cy");
     fireEvent.change(input, { target: { value: "25" } });

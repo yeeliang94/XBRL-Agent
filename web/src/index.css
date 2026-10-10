@@ -1081,9 +1081,26 @@ details[open] > summary::after {
   }
   .review-template-rail > nav { flex-direction: row !important; flex-wrap: wrap; }
 }
+/* Human-file comparison: one divider between the AI and human columns. It
+   spans the row padding so it reads as one continuous line, centred in the gap. */
+.concept-tree-row > .human-divider,
+.concept-tree-header > .human-divider {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  border-left: 1px solid #DFE3E6; /* grey200 */
+  margin: -4px 0 -4px -8px;
+  padding-left: 8px;
+}
+.concept-tree-header > .human-divider { margin-top: -16px; margin-bottom: -16px; }
 @media (max-width: 780px) {
   .concept-tree-row { padding: 4px 8px !important; gap: 8px !important; }
   .concept-tree-header { padding: 8px !important; gap: 8px !important; }
+  .concept-tree-row > .human-divider,
+  .concept-tree-header > .human-divider { margin-left: -4px; padding-left: 4px; }
+  .concept-tree-header > .human-divider { margin-top: -8px; margin-bottom: -8px; }
 }
 @media (max-width: 480px) {
   .concept-tree-header:not([data-human]), .concept-tree-row:not([data-kind="ABSTRACT"]):not([data-human]) {

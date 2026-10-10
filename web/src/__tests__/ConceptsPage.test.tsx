@@ -11,6 +11,8 @@ import {
 import { ConceptsPage, formatGroupedInput, rowLacksSource, resolveInitialWorkspaceTemplate } from "../pages/ConceptsPage";
 import type { ConceptRow } from "../pages/ConceptsPage";
 import type { CrossCheckResult } from "../lib/types";
+import type { HumanFileRecord } from "../lib/humanFile";
+import { pwc } from "../lib/theme";
 
 // UX-QA #6 review fix: the no-source badge must mirror the PDF pane's
 // evidence→source fallback — a page in EITHER column counts. `evidence ||
@@ -763,6 +765,35 @@ describe("ConceptsPage", () => {
     // Year-labelled headers, not bare "CY" / "PY".
     expect(grid.textContent).toContain("CY (FY2021)");
     expect(grid.textContent).toContain("PY (FY2020)");
+    cleanup();
+    const humanFile: HumanFileRecord = {
+      run_id: 7, filename: "human.xlsx", sha256: "abc", unit: "units",
+      uploaded_by: "Reviewer", uploaded_at: "2026-10-10T00:00:00Z",
+      summary: { typed_values: 1, notes: 0 }, unmatched: [], not_compared: [],
+    };
+    mockFetch((url) => {
+      if (url.includes("/human-comparison")) return {
+        file: humanFile,
+        figures: { totals: {}, slots: [], excluded: { calculated: 0, not_addressable: 0, unmatched_rows: 0 } },
+        notes: { totals: { human_filled: 0, both_filled: 0, ai_only: 0 }, fields: [], human_html: {} },
+      };
+      if (url.includes("/concepts")) return withPy;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={7} humanFile={humanFile} />);
+    const comparedGrid = await screen.findByTestId("concept-matrix-grid");
+    await waitFor(() => expect(within(comparedGrid).getAllByText("Human CY")).toHaveLength(2));
+    for (const header of within(comparedGrid).getAllByText("Human CY")) {
+      expect(header).toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
+    }
+    for (const header of within(comparedGrid).getAllByText("Human PY")) {
+      expect(header).not.toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
+    }
+    expect(within(comparedGrid).getByTestId("matrix-human-11-B-CY").parentElement)
+      .toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
+    expect(within(comparedGrid).getByTestId("matrix-human-11-B-PY").parentElement)
+      .not.toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
   });
 
   test("editable matrix cells render an input and PATCH the facts endpoint", async () => {

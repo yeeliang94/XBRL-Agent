@@ -30,11 +30,11 @@ import {
   type ComparisonPane,
   type ComparisonTile,
 } from "../components/HumanComparisonBar";
+import { HumanStatusMarker } from "../components/HumanStatusMarker";
 import {
   getHumanComparison,
   humanSlotKey,
   HUMAN_STATUS_LABEL,
-  HUMAN_STATUS_SYMBOL,
   type HumanComparison,
   type HumanFigureSlot,
   type HumanFileRecord,
@@ -963,7 +963,10 @@ export function ConceptsPage({
         ...(t.ai_only > 0 ? [{ label: "AI-only", value: String(t.ai_only) }] : []),
       ];
       const unmatchedNotes = comparison.file.unmatched.filter((u) => u.kind === "note").length;
-      if (unmatchedNotes > 0) comparisonExcludes = `Not counted: ${plural(unmatchedNotes, "unmatched note")}`;
+      if (unmatchedNotes > 0) {
+        comparisonTiles.push({ label: "not counted", value: String(unmatchedNotes) });
+        comparisonExcludes = `Not counted: ${plural(unmatchedNotes, "unmatched note")}`;
+      }
     } else {
       const t = comparison.figures.totals[activeScope] ?? { human_filled: 0, both_filled: 0, same_value: 0, ai_only: 0, zero_blank_excluded: 0 };
       comparisonTiles = [
@@ -977,7 +980,10 @@ export function ConceptsPage({
         t.zero_blank_excluded > 0 ? plural(t.zero_blank_excluded, "human zero") : null,
         n > 0 ? plural(n, "unmatched row") : null,
       ].filter(Boolean);
-      if (exclusions.length > 0) comparisonExcludes = `Not counted: ${exclusions.join(", ")}`;
+      if (exclusions.length > 0) {
+        comparisonTiles.push({ label: "not counted", value: String(t.zero_blank_excluded + n) });
+        comparisonExcludes = `Not counted: ${exclusions.join(", ")}`;
+      }
     }
   }
   const activeNotCompared = !notesActive && humanActive && activeTemplate
@@ -1275,8 +1281,8 @@ export function ConceptsPage({
         {activeNotCompared && (
           <p style={{ ...ui.metadata, margin: `0 0 ${pwc.space.md}px` }} data-testid="human-not-compared">
             {activeNotCompared.reason === "different_variant"
-              ? `Not compared: the human file uses another layout for this statement${activeNotCompared.human_variant ? ` (${activeNotCompared.human_variant})` : ""}.`
-              : "Not compared: this statement is empty in the human file."}
+              ? `Not compared · human file uses another layout${activeNotCompared.human_variant ? ` (${activeNotCompared.human_variant})` : ""}`
+              : "Not compared · empty in the human file"}
           </p>
         )}
         {notesActive ? (
@@ -1340,7 +1346,7 @@ export function ConceptsPage({
               {unmatchedFigureRows.map((u) => (
                 <li key={`${u.sheet}:${u.row}`} style={styles.unmatchedItem}>
                   <span>{u.label || `Row ${u.row}`}</span>
-                  <span style={styles.panelMuted}>{u.sheet} · row {u.row}</span>
+                  <span style={styles.panelMuted}>Row {u.row}</span>
                   <span style={{ fontVariantNumeric: "tabular-nums" }}>
                     {Object.values(u.values ?? {}).map((v) => formatAccounting(v)).join(" · ")}
                   </span>
@@ -1573,16 +1579,17 @@ function ConceptTree({
         role="row"
         className="concept-tree-header"
         data-human={human ? "true" : undefined}
-        style={{ ...styles.treeHeaderRow, gridTemplateColumns: treeColumns(showPeriods, human != null) }}
+        style={{ ...styles.treeHeaderRow, gridTemplateColumns: treeColumns(showPeriods, human != null), ...(human ? { gap: pwc.space.lg } : null) }}
       >
         {/* "Line item" (accountant vocabulary), not the internal "Concept"
             codename — plain-language rule (CLAUDE.md "talk like a product
             person"). Numeric column headers right-align over their figures. */}
         <div role="columnheader" style={styles.headerCell}>Line item</div>
         {human ? <>
+          {/* AI periods first, then the human's: AI CY, AI PY, Human CY, Human PY. */}
           <div role="columnheader" style={styles.headerCellNumeric} title={showPeriods ? cyLabel : undefined}>{comparisonHeader("AI", showPeriods ? cyLabel : null)}</div>
-          <div role="columnheader" style={styles.headerCellNumeric} title={showPeriods ? cyLabel : undefined}>{comparisonHeader("Human", showPeriods ? cyLabel : null)}</div>
           {showPeriods && <div role="columnheader" style={styles.headerCellNumeric} title={pyLabel}>{comparisonHeader("AI", pyLabel)}</div>}
+          <div role="columnheader" className="human-divider" style={styles.headerCellNumeric} title={showPeriods ? cyLabel : undefined}>{comparisonHeader("Human", showPeriods ? cyLabel : null)}</div>
           {showPeriods && <div role="columnheader" style={styles.headerCellNumeric} title={pyLabel}>{comparisonHeader("Human", pyLabel)}</div>}
         </> : <>
           <div role="columnheader" style={styles.headerCellNumeric}>{showPeriods ? cyLabel : "Value"}</div>
@@ -1739,12 +1746,11 @@ function ConceptMatrixGrid({
 
   // Wider columns so an input fits without clipping accountant figures.
   const visiblePeriods: Period[] = showPeriods ? ["CY", "PY"] : ["CY"];
-  const valueColumns = cols.flatMap((c) =>
-    visiblePeriods.flatMap((period) => [
-      { col: c, period, isHuman: false },
-      ...(human ? [{ col: c, period, isHuman: true }] : []),
-    ])
-  );
+  // Per component: AI periods first, then the human's (AI CY, AI PY, Human CY, Human PY).
+  const valueColumns = cols.flatMap((c) => [
+    ...visiblePeriods.map((period) => ({ col: c, period, isHuman: false })),
+    ...(human ? visiblePeriods.map((period) => ({ col: c, period, isHuman: true })) : []),
+  ]);
   const columnsPerComponent = visiblePeriods.length * (human ? 2 : 1);
   const periodColWidth = 136;
   const gridCols = `minmax(240px, 300px) repeat(${valueColumns.length}, ${periodColWidth}px)`;
@@ -1795,7 +1801,11 @@ function ConceptMatrixGrid({
         {(showPeriods || human) && valueColumns.map(({ col, period, isHuman }) => (
           <div
             key={`${col}-${period}${isHuman ? "-human" : ""}`}
-            style={styles.matrixPeriodHeader}
+            style={{
+              ...styles.matrixPeriodHeader,
+              ...(human ? { borderLeft: "none" } : null),
+              ...(isHuman && period === visiblePeriods[0] ? styles.matrixHumanDivider : null),
+            }}
             title={`${col} ${period}`}
           >
             {human
@@ -1845,7 +1855,12 @@ function ConceptMatrixGrid({
               const cell = g.cells.get(col);
               if (isHuman && human) {
                 return (
-                  <div key={`${col}-${period}-human`} style={{ padding: `${pwc.space.xs}px ${pwc.space.sm}px`, minWidth: 0 }}>
+                  <div key={`${col}-${period}-human`} style={{
+                    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+                    minWidth: 0,
+                    // One divider before each component's human columns.
+                    ...(period === visiblePeriods[0] ? styles.matrixHumanDivider : null),
+                  }}>
                     <HumanValueCell
                       slot={cell ? human.slots.get(humanSlotKey(cell.uuid, period, activeScope)) : undefined}
                       notCompared={human.notComparedTemplates.has(g.templateId)}
@@ -2125,13 +2140,6 @@ function ConceptRowView({
               />
             )}
           </div>
-          {human && (
-            <HumanValueCell
-              slot={human.slots.get(humanSlotKey(row.concept_uuid, "CY", activeScope))}
-              notCompared={human.notComparedTemplates.has(row.template_id)}
-              testId={`human-value-${row.concept_uuid}-CY`}
-            />
-          )}
           {showPeriods && (
             <div style={styles.valueCell}>
               {isComputed ? (
@@ -2156,6 +2164,15 @@ function ConceptRowView({
                   testId={`readonly-value-${row.concept_uuid}-PY`}
                 />
               )}
+            </div>
+          )}
+          {human && (
+            <div className="human-divider">
+              <HumanValueCell
+                slot={human.slots.get(humanSlotKey(row.concept_uuid, "CY", activeScope))}
+                notCompared={human.notComparedTemplates.has(row.template_id)}
+                testId={`human-value-${row.concept_uuid}-CY`}
+              />
             </div>
           )}
           {human && showPeriods && (
@@ -2214,9 +2231,6 @@ function HumanValueCell({
   }
   // Agreement is the normal case and carries no marker; only exceptions do.
   // A zero opposite a blank is not a difference worth a marker.
-  const quiet = slot.status === "agree" || slot.status === "zero_blank";
-  const marker = quiet ? null : HUMAN_STATUS_SYMBOL[slot.status];
-  const attention = slot.status === "different" || slot.status === "missed";
   return (
     <span data-testid={testId} data-human-status={slot.status}
       style={{
@@ -2224,13 +2238,8 @@ function HumanValueCell({
         ...(slot.status === "zero_blank" ? styles.humanQuiet : null),
       }}
       title={HUMAN_STATUS_LABEL[slot.status]}>
-      {marker && (
-        <span aria-label={HUMAN_STATUS_LABEL[slot.status]} role="img"
-          style={{ ...styles.humanMarker, color: attention ? pwc.warning : pwc.grey500 }}>
-          {marker}
-        </span>
-      )}
-      <span style={styles.humanNumber}>{slot.human_value == null ? "" : formatAccounting(slot.human_value)}</span>
+      <HumanStatusMarker status={slot.status} />
+      <span>{slot.human_value == null ? "" : formatAccounting(slot.human_value)}</span>
     </span>
   );
 }
@@ -2249,8 +2258,8 @@ function SegmentedControl<T extends string>({
   buttonTestId: (value: T) => string;
 }) {
   return (
-    <div data-testid={testId} role="tablist" style={styles.segmented}>
-      {values.map((value) => {
+    <div data-testid={testId} role="tablist" className="segmented-control-group" style={styles.segmented}>
+      {values.map((value, index) => {
         const active = value === activeValue;
         return (
           <button
@@ -2259,11 +2268,14 @@ function SegmentedControl<T extends string>({
             role="tab"
             aria-selected={active}
             data-testid={buttonTestId(value)}
+            className="segmented-control-button"
             onClick={() => onChange(value)}
             style={{
               ...styles.segmentedButton,
-              background: active ? pwc.grey900 : pwc.white,
-              color: active ? pwc.white : pwc.grey800,
+              borderRight: index < values.length - 1 ? `1px solid ${pwc.grey200}` : "none",
+              fontWeight: pwc.weight.medium,
+              background: active ? pwc.grey100 : pwc.white,
+              color: active ? pwc.black : pwc.grey700,
             }}
           >
             {value}
@@ -2821,6 +2833,7 @@ const styles = {
   humanCell: {
     display: "flex",
     alignItems: "center",
+    justifyContent: "flex-end",
     gap: pwc.space.xs,
     width: "100%",
     boxSizing: "border-box" as const,
@@ -2842,13 +2855,6 @@ const styles = {
     width: "100%",
     height: 32,
   } as React.CSSProperties,
-  humanMarker: {
-    fontWeight: pwc.weight.medium,
-    flex: "0 0 auto",
-  } as React.CSSProperties,
-  humanNumber: {
-    marginLeft: "auto",
-  } as React.CSSProperties,
   unmatchedSummary: {
     cursor: "pointer",
     fontFamily: pwc.fontHeading,
@@ -2867,23 +2873,22 @@ const styles = {
     textAlign: "left" as const,
     cursor: "pointer",
   } as React.CSSProperties,
+  // Same geometry as the filing-setup toggles (PreRunPanel).
   segmented: {
     display: "inline-flex",
-    border: `1px solid ${pwc.grey300}`,
-    borderRadius: pwc.radius.lg,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.md,
     overflow: "hidden",
     background: pwc.white,
-    minHeight: 44,
   } as React.CSSProperties,
   segmentedButton: {
-    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
+    minHeight: 40,
+    padding: "8px 24px",
     border: "none",
-    borderRight: `1px solid ${pwc.grey200}`,
+    borderRadius: 0,
     cursor: "pointer",
     fontFamily: pwc.fontHeading,
     fontSize: 14,
-    fontWeight: pwc.weight.medium,
-    minWidth: 54,
   } as React.CSSProperties,
   panelMuted: {
     margin: 0,
@@ -3026,6 +3031,13 @@ const styles = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
+  } as React.CSSProperties,
+  matrixHumanDivider: {
+    alignSelf: "stretch",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    borderLeft: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   matrixPeriodHeader: {
     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,

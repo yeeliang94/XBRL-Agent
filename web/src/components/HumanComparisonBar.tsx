@@ -26,7 +26,8 @@ interface Props {
   /** The pane switch, rendered first. */
   paneSwitch: React.ReactNode;
   tiles: ComparisonTile[];
-  /** e.g. "Not counted: 1 unmatched row"; omitted when nothing is excluded. */
+  /** Tooltip naming what the "not counted" figure excludes, e.g.
+   *  "Not counted: 1 unmatched row"; omitted when nothing is excluded. */
   excludesNote?: string | null;
   onReplace?: () => void;
   onRemoved?: () => void;
@@ -46,15 +47,11 @@ export function HumanComparisonBar({
         {showDetails && (
           <p style={styles.summary} data-testid="human-comparison-tiles" title={excludesNote ?? undefined}>
             {tiles.map((tile, index) => (
-              <span key={tile.label}>
+              <span key={tile.label} style={styles.tile}>
                 {index > 0 && <span aria-hidden="true" style={styles.separator}>·</span>}
                 <strong style={styles.summaryValue}>{tile.value}</strong> {tile.label}
               </span>
             ))}
-            {excludesNote && <span style={ui.metadata}>
-              <span aria-hidden="true" style={styles.separator}>·</span>
-              {excludesNote}
-            </span>}
           </p>
         )}
         {showDetails && (
@@ -118,12 +115,16 @@ const styles = {
   } as React.CSSProperties,
   summary: {
     margin: 0,
-    flex: "0 1 auto",
+    flex: "1 1 auto",
     minWidth: 0,
     fontFamily: pwc.fontBody,
     fontSize: 14,
     color: pwc.grey700,
     fontVariantNumeric: "tabular-nums",
+  } as React.CSSProperties,
+  // Each fact stays whole; the summary wraps only between facts.
+  tile: {
+    whiteSpace: "nowrap",
   } as React.CSSProperties,
   summaryValue: {
     color: pwc.grey900,
@@ -145,7 +146,7 @@ const styles = {
     fontSize: 13,
     color: pwc.grey700,
     minWidth: 0,
-    maxWidth: 220,
+    maxWidth: 180,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",

@@ -252,7 +252,17 @@
   }
 }
 
+/* One Grey 200 divider separates the AI note from the human note, as in Figures. */
+.notes-review-tab .notes-human-pair > [role="group"]:not(.notes-human-extracted),
+.notes-review-tab .notes-human-pair-header > span + span {
+  border-left: 1px solid #DFE3E6; /* grey200 */
+}
+
 @container notes-review (max-width: 560px) {
+  .notes-review-tab .notes-human-pair > [role="group"]:not(.notes-human-extracted) {
+    border-left: 0;
+  }
+
   .notes-review-tab .notes-human-pair {
     grid-template-columns: minmax(0, 1fr) !important;
     grid-template-rows: none !important;
@@ -343,4 +353,12 @@
   line-height: 1.5 !important;
   margin: 12px 0 6px !important;
   padding: 0 !important;
+}
+
+/* Read-only fallback and human previews share the prepared preview's inset.
+ * The actual TipTap editor retains its border. */
+.notes-review-tab [data-testid="notes-readonly-content"] > .tiptap,
+.notes-review-tab .notes-human-content {
+  border-color: transparent;
+  padding: 12px;
 }
