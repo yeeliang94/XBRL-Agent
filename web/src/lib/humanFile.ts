@@ -78,14 +78,6 @@ export interface HumanComparison {
   };
 }
 
-export const HUMAN_STATUS_SYMBOL: Record<HumanSlotStatus, string> = {
-  agree: "✓",
-  different: "!",
-  missed: "○",
-  ai_only: "◇",
-  zero_blank: "·",
-};
-
 export const HUMAN_STATUS_LABEL: Record<HumanSlotStatus, string> = {
   agree: "Same as human",
   different: "Differs from human",

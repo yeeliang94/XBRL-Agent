@@ -72,9 +72,16 @@ describe("figures view with a human file", () => {
     expect(within(cashRow).getByRole("img", { name: "AI-only" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "AI CY" })).toBeVisible();
     expect(screen.getByRole("columnheader", { name: "Human CY" })).toBeVisible();
+    // AI periods first, then the human's.
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent))
+      .toEqual(["Line item", "AI CY", "AI PY", "Human CY", "Human PY"]);
     const ppeRow = screen.getByTestId("concept-row-ppe");
     expect(within(ppeRow).getByTestId("human-value-ppe-CY")).toHaveTextContent("250");
-    expect(within(ppeRow).getByRole("img", { name: "Differs from human" })).toHaveTextContent("!");
+    // Markers use the shared status icon family, not typed symbols.
+    expect(within(ppeRow).getByRole("img", { name: "Differs from human" }).querySelector("[data-status-icon]"))
+      .toHaveAttribute("data-status-icon", "attention");
+    expect(within(cashRow).getByRole("img", { name: "AI-only" }).querySelector("[data-status-icon]"))
+      .toHaveAttribute("data-status-icon", "inactive");
     // The comparison denominator must visibly disclose excluded rows.
     const tiles = screen.getByTestId("human-comparison-tiles");
     expect(tiles).toHaveTextContent("1 of 3 match");
@@ -82,7 +89,7 @@ describe("figures view with a human file", () => {
     expect(tiles).toHaveTextContent("1 missed by AI");
     expect(tiles).toHaveTextContent("1 AI-only");
     expect(tiles).toHaveAttribute("title", "Not counted: 1 human zero, 1 unmatched row");
-    expect(within(tiles).getByText("Not counted: 1 human zero, 1 unmatched row")).toBeVisible();
+    expect(tiles).toHaveTextContent("2 not counted");
     // Human values are read-only text, not boxed like editable inputs.
     expect(within(cashRow).getByTestId("human-value-cash-CY")).not.toHaveStyle({ borderStyle: "solid" });
     // A human zero opposite an AI blank is shown without a marker.
