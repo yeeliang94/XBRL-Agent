@@ -6,7 +6,7 @@ import { PdfSourcePane } from "./PdfSourcePane";
 import { parseEvidencePages } from "../lib/evidencePages";
 import { ConceptsPage } from "../pages/ConceptsPage";
 import type { ConceptRow } from "../pages/ConceptsPage";
-import { agentStatusDisplay, STATUS_SYMBOLS } from "../lib/runStatus";
+import { runStatusDisplay, agentStatusDisplay, STATUS_SYMBOLS } from "../lib/runStatus";
 import { errorGuidance } from "../lib/errorGuidance";
 import { StatusIcon } from "./StatusIcon";
 import { ArrowForward } from "./iconGlyphs";
@@ -660,7 +660,8 @@ export function RunDetailView({
   // Human-filled mTool file attached for comparison (one per run).
   const [humanFile, setHumanFile] = useState<HumanFileRecord | null>(null);
   const [humanDialogOpen, setHumanDialogOpen] = useState(false);
-  const canCompareHuman = detail.status === "completed" || detail.status === "completed_with_errors";
+  const finishedRun = detail.status === "completed" || detail.status === "completed_with_errors";
+  const canCompareHuman = finishedRun;
   useEffect(() => {
     setHumanFile(null);
     if (!canCompareHuman) return;
@@ -988,14 +989,17 @@ export function RunDetailView({
           <h1 style={styles.filename}>
             {detail.pdf_filename}
           </h1>
-          <div style={styles.metaRow}>
+          {/* A finished run's outcome lives on Overview; the title shows a
+              status only while that status is the news (working, failed, stopped). */}
+          {(!finishedRun || (!reviewWorkspaceActive && isLegacy)) && <div style={styles.metaRow}>
+            {!finishedRun && <span style={ui.status}><StatusIcon symbol={runStatusDisplay(detail.status).symbol} />{runStatusDisplay(detail.status).label}</span>}
             {!reviewWorkspaceActive && isLegacy && (
               <span style={styles.legacyBadge}
                 title="Some configuration and performance details were not recorded for this older run.">
                 Limited historical details
               </span>
             )}
-          </div>
+          </div>}
         </div>
         <div style={styles.actions}>
           {isDraft && onResumeDraft ? (

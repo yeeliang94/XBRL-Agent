@@ -13,7 +13,6 @@
 // NotesReviewTab.css that carries selectors for structural table/list
 // rules TipTap's rendered DOM needs (prefix `.notes-review-tab`).
 import {
-  Fragment,
   useEffect,
   useRef,
   useState,
@@ -75,7 +74,8 @@ import { useNoteOutput } from "./useNoteOutput";
 import { tagNumericCells } from "../lib/tableAlign";
 import { formatGroupedInput } from "../lib/numberFormat";
 import { notesFormatErrorMessage } from "../lib/vocabulary";
-import { humanSlotKey, HUMAN_STATUS_LABEL, HUMAN_STATUS_SYMBOL, type HumanFigureSlot } from "../lib/humanFile";
+import { humanSlotKey, type HumanFigureSlot } from "../lib/humanFile";
+import { HumanStatusMarker } from "./HumanStatusMarker";
 import {
   resolveTheme,
   themeToCssVars,
@@ -165,6 +165,12 @@ function numericNoteCategories(cell: NotesCell, humanFigures: Map<string, HumanF
 }
 
 /** Presence is based on current content; zero is a filled numeric value. */
+/** A compact comparison header period, matching Figures: "CY", "Group PY". */
+function comparisonPeriodLabel(key: string): string {
+  const column = NUMERIC_VALUE_COLUMNS[key];
+  return key === "cy" || key === "py" ? column.period : column.label;
+}
+
 function noteFieldPresence(cell: NotesCell, human: HumanNotesView | null, humanFigures: Map<string, HumanFigureSlot> | null) {
   if (cell.kind !== "numeric") {
     const aiFilled = !isBlankHtml(cell.html);
@@ -1282,18 +1288,19 @@ function SheetSection({
           {numericColumns.length > 0 && (
             <div role="row" style={{ ...styles.numericTableHeader, gridTemplateColumns: numericGridColumns, minWidth: numericGridMinWidth }}>
               <span role="columnheader">Line item</span>
+              {/* AI periods first, then the human's, as in Figures. */}
               {numericColumns.map((key) => (
-                <Fragment key={key}>
-                  <span role="columnheader" style={styles.numericColumnHeader}>{humanFigures ? `AI ${NUMERIC_VALUE_COLUMNS[key].label.toLowerCase()}` : NUMERIC_VALUE_COLUMNS[key].label}</span>
-                  {humanFigures && <span role="columnheader" style={styles.numericColumnHeader}>Human {NUMERIC_VALUE_COLUMNS[key].label.toLowerCase()}</span>}
-                </Fragment>
+                <span key={key} role="columnheader" style={styles.numericColumnHeader}>{humanFigures ? `AI ${comparisonPeriodLabel(key)}` : NUMERIC_VALUE_COLUMNS[key].label}</span>
+              ))}
+              {humanFigures && numericColumns.map((key, index) => (
+                <span key={`human-${key}`} role="columnheader" style={{ ...styles.numericColumnHeader, ...(index === 0 ? { ...styles.numericHumanDivider, marginTop: -pwc.space.lg, marginBottom: -pwc.space.lg } : null) }}>Human {comparisonPeriodLabel(key)}</span>
               ))}
             </div>
           )}
           {human && visibleRows.some((cell) => cell.kind !== "numeric" && cell.node_uuid && isFieldOpen(cell)) && (
             <div className="notes-human-pair-header" style={styles.humanPairHeader}>
-              <span>AI note</span>
-              <span>Human note</span>
+              <span style={{ paddingLeft: 12 }}>AI note</span>
+              <span style={{ paddingLeft: 12 }}>Human note</span>
             </div>
           )}
           {attentionRows?.length === 0 && <p role="status">No placed field issues in this sheet. Check the source inventory for unplaced or unresolved notes.</p>}
@@ -1383,7 +1390,7 @@ function SheetSection({
                       <span style={styles.cellLabel}>{cell.label}</span>
                       <span style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, marginLeft: "auto", fontWeight: 400 }}>
                         {cell.invalid_target && <span id={`${statusId}-filing`} style={{ color: pwc.warning }}>Not a filing field</span>}
-                        {marker && <span role="img" aria-label={marker} style={{ color: pwc.warning }}>{humanStatus === "missed" ? "○" : "◇"}</span>}
+                        {marker && <HumanStatusMarker status={humanStatus} />}
                       </span>
                     </button>
                   </h3>
@@ -1447,7 +1454,7 @@ function NotePreview({
 }) {
   const prepared = useNoteOutput(runId, sheet, row, html, JSON.stringify(theme));
   const body = (content: string, emptyText: string, human = false) => isBlankHtml(content)
-    ? <p style={{ ...styles.dim, margin: 0, padding: "8px 0" }}>{emptyText}</p>
+    ? <p style={{ ...styles.dim, margin: 0, padding: "8px 12px" }}>{emptyText}</p>
     : <div data-testid="notes-readonly-content" style={styles.editorViewportReadonly}>
         {/* Sanitised server-side with the notes whitelist (gotcha #16). */}
         {!human && prepared.output ? <PreparedNotesHtml output={prepared.output} /> : <>
@@ -1477,7 +1484,7 @@ function NotePreview({
 }
 
 /** Read-only human note for one field. Only exceptions carry a marker:
- *  ○ missed by the AI, ◇ AI-only (the human left it empty). */
+ *  missed by the AI, or AI-only (the human left it empty). */
 function HumanNoteCell({
   html,
   status,
@@ -1489,22 +1496,15 @@ function HumanNoteCell({
   selected: boolean;
   blank: boolean;
 }) {
-  const marker = status === "missed" ? "○" : status === "ai_only" ? "◇" : null;
-  const markerLabel = status === "missed" ? "Missed by AI" : "AI-only";
   return (
     <div role="group" aria-label="Human file" data-testid="notes-human-cell" data-human-status={status ?? "none"} style={{ ...styles.workspaceCellRow, ...styles.comparisonRows }}>
       <div style={{ ...styles.humanNoteStatusRow, minHeight: blank && !selected ? 0 : 34, padding: selected ? "0 12px" : "12px", boxSizing: "content-box" }}>
-        {marker && (
-          <span role="img" aria-label={markerLabel} title={markerLabel}
-            style={{ fontWeight: 500, color: status === "missed" ? pwc.warning : pwc.grey500 }}>
-            {marker}
-          </span>
-        )}
+        <HumanStatusMarker status={status} />
       </div>
-      <div data-comparison-content style={{ padding: "0 12px 16px", gridRow: 3, minWidth: 0 }}>
+      <div data-comparison-content style={{ padding: "0 0 16px", gridRow: 3, minWidth: 0 }}>
         {html ? (
           // Sanitised with the notes whitelist on upload (eval/human_file.py).
-          <div className="tiptap ProseMirror notes-human-content" style={{ ...styles.humanNoteBody, borderColor: pwc.grey300 }}
+          <div className="tiptap ProseMirror notes-human-content" style={styles.humanNoteBody}
             dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
           <p style={{ ...styles.dim, margin: 0 }}>Not in human file</p>
@@ -2320,8 +2320,7 @@ function NumericCategoryRow({
         <SaveStatusBadge status={status} />
       </div>
       {columns.map((key) => (
-        <Fragment key={key}>
-          <div role="cell" style={styles.numericValueCell}>
+          <div key={key} role="cell" style={styles.numericValueCell}>
             {key in values && (
               <input
                 type="text"
@@ -2355,22 +2354,21 @@ function NumericCategoryRow({
               />
             )}
           </div>
-          {humanFigures && <div role="cell" style={styles.numericHumanValue}>
+      ))}
+      {humanFigures && columns.map((key, index) => (
+          <div key={`human-${key}`} role="cell" style={{ ...styles.numericHumanValue, ...(index === 0 ? styles.numericHumanDivider : null) }}>
               {cell.concept_uuid && key in values && (() => {
                 const { period, entity_scope } = NUMERIC_VALUE_COLUMNS[key];
                 const slot = humanFigures.get(humanSlotKey(cell.concept_uuid, period, entity_scope, dimensionKey));
-                // Only a difference carries a marker; a zero opposite a blank is muted.
-                const marker = slot && slot.status !== "agree" && slot.status !== "zero_blank"
-                  ? HUMAN_STATUS_SYMBOL[slot.status] : null;
+                // Only a difference carries a marker; a zero opposite a blank is
+                // muted. Blank when the human file has nothing there, as in Figures.
                 return <span data-testid={`numeric-human-${cell.row}-${dimensionKey || "base"}-${key}`}
                   style={{ ...styles.numericHumanFigure, ...(slot?.status === "zero_blank" ? { color: pwc.grey500 } : null) }}>
-                  {marker && <span role="img" aria-label={HUMAN_STATUS_LABEL[slot!.status]}
-                    title={HUMAN_STATUS_LABEL[slot!.status]}>{marker} </span>}
-                  {slot?.human_value == null ? "—" : formatGroupedInput(String(slot.human_value))}
+                  <HumanStatusMarker status={slot?.status} />
+                  {slot?.human_value == null ? "" : formatGroupedInput(String(slot.human_value))}
                 </span>;
               })()}
-          </div>}
-        </Fragment>
+          </div>
       ))}
       {dimensionKey === "" && cell.category_options?.length && Object.values(cell.resolution_tokens ?? {}).some(Boolean) ? (
         <div role="cell" aria-label="Category resolution" style={styles.numericSaveErrors}>
@@ -2948,11 +2946,13 @@ const styles = {
     gap: 12,
     alignItems: "start",
   } as React.CSSProperties,
+  // Same column geometry as the paired preview, so each label sits on its
+  // column's text edge.
   humanPairHeader: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
     gap: 12,
-    padding: `0 ${pwc.space.sm}px`,
+    padding: `${pwc.space.sm}px 12px 0`,
     ...ui.fieldLabel,
   } as React.CSSProperties,
   humanNoteStatusRow: {
@@ -3104,6 +3104,15 @@ const styles = {
     fontSize: 14,
     textAlign: "right" as const,
     color: pwc.grey900,
+  } as React.CSSProperties,
+  numericHumanDivider: {
+    alignSelf: "stretch",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    borderLeft: `1px solid ${pwc.grey200}`,
+    margin: `-${pwc.space.xs}px 0 -${pwc.space.xs}px -${pwc.space.md / 2}px`,
+    paddingLeft: pwc.space.md / 2,
   } as React.CSSProperties,
   numericHumanFigure: {
     fontVariantNumeric: "tabular-nums",

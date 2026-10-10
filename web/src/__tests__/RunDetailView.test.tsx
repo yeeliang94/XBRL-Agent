@@ -266,7 +266,7 @@ describe("RunDetailView", () => {
     );
   });
 
-  test("renders filename, date, and overall status", () => {
+  test("a finished run shows no status under the title; a failed run does", () => {
     render(
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
     );
@@ -274,6 +274,14 @@ describe("RunDetailView", () => {
     // The title stands alone; the run's outcome is the Overview's Workbook line.
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("FINCO-Audited-2021.pdf");
     expect(screen.getByText("Workbook")).toBeInTheDocument();
+    const title = screen.getByRole("heading", { level: 1, name: "FINCO-Audited-2021.pdf" });
+    // The finished outcome lives on Overview, not under the document title.
+    expect(title.parentElement).not.toHaveTextContent(/complete/i);
+    cleanup();
+    render(
+      <RunDetailView detail={makeDetail({ status: "failed" })} onDelete={() => {}} onDownload={() => {}} />,
+    );
+    expect(screen.getByRole("heading", { level: 1 }).parentElement).toHaveTextContent("Failed");
   });
 
   test("per-agent duration sums turn compute time, not the shared batch window", () => {
@@ -750,7 +758,7 @@ describe("RunDetailView", () => {
     expect(agentsSection.textContent).not.toContain("succeeded");
   });
 
-  test("run with 'completed_with_errors' status renders friendly label", () => {
+  test("run with 'completed_with_errors' status shows no Needs review under the title", () => {
     render(
       <RunDetailView
         detail={makeDetail({ status: "completed_with_errors" })}
@@ -761,6 +769,7 @@ describe("RunDetailView", () => {
     // The raw enum never reaches the page; the outcome is the Workbook line.
     expect(screen.getByText("Workbook")).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("completed_with_errors");
+    expect(screen.getByRole("heading", { level: 1 }).parentElement).not.toHaveTextContent("Needs review");
   });
 
   test("Delete button does NOT fire onDelete when the dialog is cancelled", () => {
@@ -2025,10 +2034,15 @@ describe("RunDetailView", () => {
     expect(screen.queryByRole("button", { name: /abort run/i })).toBeNull();
   });
 
-  test("run status is monochrome; active tab uses a quiet surface without an indicator line (CS6)", () => {
+  test("run status pairs its icon with a label; active tab uses a quiet surface without an indicator line (CS6)", () => {
     render(
-      <RunDetailView detail={makeDetail({ status: "completed" })} onDelete={() => {}} onDownload={() => {}} />,
+      <RunDetailView detail={makeDetail({ status: "failed" })} onDelete={() => {}} onDownload={() => {}} />,
     );
+    // Status icon is aria-hidden beside the explicit label.
+    const label = within(screen.getByRole("heading", { level: 1 }).parentElement!).getByText("Failed");
+    const symbol = label.parentElement!.querySelector('[aria-hidden="true"]');
+    expect(symbol?.getAttribute("data-status-icon")).toBe("failure");
+
     // Shared tab treatment: dark active text and a quiet selected surface.
     const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
     const active = within(tablist)
