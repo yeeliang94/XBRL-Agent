@@ -127,7 +127,8 @@ describe("PreRunPanel", () => {
     );
     // Format overrides stay visible with Advanced collapsed; the repeats
     // control and the "leave blank" hint are gone.
-    expect(screen.getByText("Statement formats")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Statements" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Notes" })).toBeInTheDocument();
     expect(screen.queryByText(/leave a format blank/i)).toBeNull();
     expect(screen.queryByText(/repeats \(consistency\)/i)).toBeNull();
     expect(screen.queryByTestId("repeats-2")).toBeNull();
@@ -146,45 +147,18 @@ describe("PreRunPanel", () => {
     expect(onRun).toHaveBeenLastCalledWith(expect.objectContaining({ first_financial_statements: false }));
   });
 
-  test("collapsed setup disclosures retain their controlled region and use the reveal transition", async () => {
+  test("statements and notes stay open, with each statement's choice and format on one row", async () => {
     render(<PreRunPanel sessionId="abc-123" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={vi.fn()} />);
-    await screen.findByRole("button", { name: /statements to extract/i });
+    const sofp = await screen.findByRole("checkbox", { name: /financial position/i });
 
-    fireEvent.click(screen.getByRole("button", { name: /statements to extract/i }));
-    const region = document.getElementById("statement-selection");
-    expect(region).toBeInTheDocument();
-    expect(region).toHaveAttribute("hidden");
-    expect(region).toHaveClass("pwc-reveal");
-  });
+    // Nothing that decides what is extracted sits behind a disclosure.
+    expect(screen.queryByRole("button", { name: /statements to extract|notes templates|statement formats/i })).toBeNull();
+    const row = sofp.closest(".statement-format-row") as HTMLElement;
+    const format = within(row).getByRole("combobox", { name: /format for SOFP/i });
+    expect(format).toBeEnabled();
 
-  test("statement and note selections use collapsible summaries", async () => {
-    render(
-      <PreRunPanel
-        sessionId="abc-123"
-        getSettings={vi.fn().mockResolvedValue(mockSettings)}
-        onRun={vi.fn()}
-      />,
-    );
-
-    // Open sections show just their title; the summary appears when folded.
-    const statementToggle = await screen.findByRole("button", {
-      name: /^statements to extract$/i,
-    });
-    const notesToggle = screen.getByRole("button", {
-      name: /^notes templates$/i,
-    });
-
-    expect(statementToggle).toHaveAttribute("aria-expanded", "true");
-    expect(notesToggle).toHaveAttribute("aria-expanded", "true");
-
-    fireEvent.click(statementToggle);
-    expect(statementToggle).toHaveAttribute("aria-expanded", "false");
-    expect(statementToggle).toHaveTextContent("5 of 5 selected");
-    expect(screen.queryByRole("region", { name: /statements to extract/i })).not.toBeInTheDocument();
-
-    fireEvent.click(notesToggle);
-    expect(notesToggle).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("region", { name: /notes to include/i })).not.toBeInTheDocument();
+    fireEvent.click(sofp);
+    expect(format).toBeDisabled();
   });
 
   test("Run button is present and enabled without manual format selection", async () => {
@@ -1025,7 +999,7 @@ describe("PreRunPanel", () => {
     fetchSpy.mockRestore();
   });
 
-  test("non-empty inventory shows count but no hint even with notes selected", async () => {
+  test("non-empty inventory lists its notes but no hint even with notes selected", async () => {
     const scoutPayload = {
       success: true,
       infopack: {
@@ -1064,7 +1038,7 @@ describe("PreRunPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /notes in the document/i })).toHaveTextContent("2");
+      expect(within(screen.getByRole("list", { name: /discovered notes/i })).getAllByRole("listitem")).toHaveLength(2);
     });
     expect(screen.queryByText(/no notes found/i)).not.toBeInTheDocument();
 
@@ -1173,7 +1147,7 @@ describe("PreRunPanel", () => {
     await waitFor(() => {
       // Toggle state is reflected through the payload to keep the test
       // independent of style-based active-button detection.
-      expect(screen.getByText("Detected")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "MPERS" })).toHaveAttribute("aria-pressed", "true");
       startExtraction();
       expect(onRun).toHaveBeenCalledWith(
         expect.objectContaining({ filing_standard: "mpers" }),
@@ -1539,12 +1513,10 @@ describe("notes inventory editor", () => {
 
   test("warns about the gap scout left and names the missing number", async () => {
     await renderWithInventory();
-    const toggle = screen.getByRole("button", { name: /notes in the document/i });
-    expect(toggle).toHaveTextContent("2");
+    expect(screen.getByRole("heading", { name: /notes in the document/i })).toBeInTheDocument();
     // Note 2 sits between two discovered notes — exactly the run-74 symptom.
     expect(screen.getByText(/Note 2 not found/)).toBeInTheDocument();
-    // A missing number is the one case that needs a person, so the list opens.
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(within(screen.getByRole("list", { name: /discovered notes/i })).getAllByRole("listitem")).toHaveLength(2);
   });
 
   test("operator can add the missing note without re-running the pre-scan", async () => {
@@ -1640,7 +1612,7 @@ describe("notes inventory editor", () => {
 });
 
 describe("Upload-owned preparation", () => {
-  test("explains that a prepared notes run covers all prose destinations", async () => {
+  test("a prepared notes run shows its templates open, without a summary", async () => {
     render(<PreRunPanel sessionId="abc" getSettings={vi.fn().mockResolvedValue(mockSettings)}
       onRun={vi.fn()} waitForPreparation
       preparation={preparation({ status: "succeeded", stage: "ready", phase: "awaiting_confirmation", action_required: "confirm_setup", infopack: {
@@ -1649,10 +1621,10 @@ describe("Upload-owned preparation", () => {
         ],
       } })} />);
     await screen.findByRole("button", { name: /start extraction/i });
-    // Once prepared, the notes list starts folded behind its summary.
-    expect(screen.getByText("All document notes included")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /notes templates/i }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /corporate information \(note 10\)/i }));
+    expect(screen.queryByText("All document notes included")).toBeNull();
+    const corporate = screen.getByRole("checkbox", { name: /corporate information \(note 10\)/i });
+    fireEvent.click(corporate);
+    expect(corporate).not.toBeChecked();
   });
 
   test("preserves a legacy saved denomination without selection metadata", async () => {
@@ -1662,7 +1634,7 @@ describe("Upload-owned preparation", () => {
       preparation={preparation({ status: "succeeded", stage: "ready", phase: "awaiting_confirmation", action_required: "confirm_setup", infopack: {
         scale_unit: "millions", statements: {}, notes_inventory: [],
       } })} />);
-    await screen.findByTestId("detected-denomination");
+    await screen.findByRole("button", { name: /start extraction/i });
     expect(screen.getByRole("button", { name: "RM" })).toHaveAttribute("aria-pressed", "true");
     startExtraction();
     expect(onRun.mock.lastCall![0].denomination).toBe("units");
@@ -1685,8 +1657,8 @@ describe("Upload-owned preparation", () => {
       preparation={preparation({ status: "succeeded", stage: "ready", phase: "awaiting_confirmation", action_required: "confirm_setup", infopack: {
         scale_unit: "millions", statements: {}, notes_inventory: [],
       } })} />);
-    expect(await screen.findByTestId("detected-denomination")).toHaveTextContent("RM mil");
-    expect(screen.getByRole("button", { name: explicitSelection ? "RM '000" : "RM mil" })).toHaveAttribute("aria-pressed", "true");
+    await screen.findByRole("button", { name: /start extraction/i });
+    await waitFor(() => expect(screen.getByRole("button", { name: explicitSelection ? "RM '000" : "RM mil" })).toHaveAttribute("aria-pressed", "true"));
     startExtraction();
     expect(onRun.mock.lastCall![0].denomination).toBe(explicitSelection ? "thousands" : "millions");
   });
@@ -1718,7 +1690,7 @@ describe("Upload-owned preparation", () => {
       } })} />);
 
     await waitFor(() => expect(screen.getByRole("button", { name: "RM mil" })).toHaveAttribute("aria-pressed", "true"));
-    expect(screen.getByTestId("detected-denomination")).toHaveTextContent("Detected RM mil");
+    expect(screen.queryByText(/^Detected/)).toBeNull();
     const confirm = screen.getByRole("button", { name: "Confirm setup and start extraction" });
     expect(confirm).toBeEnabled();
     startExtraction();
@@ -1738,7 +1710,7 @@ describe("Upload-owned preparation", () => {
         scale_unit: "millions", statements: {}, notes_inventory: [],
       } })} />);
 
-    await waitFor(() => expect(screen.getByTestId("detected-denomination")).toBeInTheDocument());
+    await screen.findByRole("button", { name: /start extraction/i });
     expect(screen.getByRole("button", { name: "RM" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "RM mil" })).toHaveAttribute("aria-pressed", "false");
     startExtraction();
