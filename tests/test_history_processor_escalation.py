@@ -226,6 +226,43 @@ def test_page_transcript_batches_do_not_displace_each_other(monkeypatch):
     assert _page_text_content(out, "p1").startswith("=== Page 16 ===")
 
 
+def test_truncated_later_read_does_not_remove_unreturned_pages(monkeypatch):
+    # read_page_text returns at most ten pages; asking for 1-14 returns 1-10,
+    # so the earlier 5-14 transcript still holds pages 11-14.
+    monkeypatch.setenv("XBRL_SOFT_COMPACT_TOKENS", "60000")
+    later = _page_text_read("p2", list(range(1, 11)))
+    later[0] = ModelResponse(parts=[ToolCallPart(
+        tool_name="read_page_text", args={"pages": list(range(1, 15))}, tool_call_id="p2",
+    )])
+    msgs = (
+        _page_text_read("p1", list(range(5, 15))) + later
+        + [_response(), _response(), _response(70000)]
+    )
+    out = compact_old_text_results_ctx(_Ctx(0), msgs)
+    assert _page_text_content(out, "p1").startswith("=== Page 5 ===")
+
+
+def test_malformed_page_request_does_not_stop_compaction(monkeypatch):
+    # A rejected call (pages=5, not a list) stays in history with retry
+    # feedback instead of a result; compaction must carry on.
+    from pydantic_ai.messages import RetryPromptPart
+
+    monkeypatch.setenv("XBRL_SOFT_COMPACT_TOKENS", "60000")
+    msgs = [
+        ModelResponse(parts=[ToolCallPart(
+            tool_name="read_page_text", args={"pages": 5}, tool_call_id="bad",
+        )]),
+        ModelRequest(parts=[RetryPromptPart(
+            tool_name="read_page_text", content="pages must be a list", tool_call_id="bad",
+        )]),
+        *_page_text_read("p1", [16, 17]),
+        *_page_text_read("p2", [16, 17]),
+        _response(), _response(), _response(70000),
+    ]
+    out = compact_old_text_results_ctx(_Ctx(0), msgs)
+    assert _page_text_content(out, "p1").startswith("[read_page_text result for page(s) 16, 17")
+
+
 def test_page_transcript_compacts_once_same_pages_reread(monkeypatch):
     monkeypatch.setenv("XBRL_SOFT_COMPACT_TOKENS", "60000")
     msgs = (

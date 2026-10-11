@@ -501,26 +501,18 @@ def _summarize_page_text_result(
     )
 
 
-def _call_pages(messages: List[ModelMessage]) -> dict[str, tuple[int, ...]]:
-    """Map tool_call_id → requested page numbers for page-transcript calls."""
-    pages_by_call: dict[str, tuple[int, ...]] = {}
-    for msg in messages:
-        if not isinstance(msg, ModelResponse):
-            continue
-        for part in msg.parts:
-            if not (
-                isinstance(part, ToolCallPart)
-                and part.tool_name in _PAGE_TEXT_TOOL_NAMES
-            ):
-                continue
-            try:
-                raw = part.args_as_dict().get("pages") or []
-            except Exception:  # noqa: BLE001 — malformed args: leave unmapped
-                continue
-            pages = tuple(sorted({p for p in raw if isinstance(p, int)}))
-            if pages:
-                pages_by_call[part.tool_call_id] = pages
-    return pages_by_call
+# read_page_text opens each page it returned with "=== Page N (status) ===".
+_RETURNED_PAGE_RE = re.compile(r"^===\s*Page\s+(\d+)\b", re.MULTILINE)
+
+
+def _returned_pages(part: ToolReturnPart) -> tuple[int, ...]:
+    """Pages a page-transcript result actually contains.
+
+    Read from the result, not the request: the tool returns at most ten
+    pages per call, and a malformed request (rejected and retried) has no
+    result at all.
+    """
+    return tuple(sorted({int(n) for n in _RETURNED_PAGE_RE.findall(_part_text(part))}))
 
 
 def compact_old_text_results(
@@ -544,9 +536,9 @@ def compact_old_text_results(
     - **Not the most recent result of its tool.** The latest result of every
       tool name is kept verbatim — that's the agent's current working state.
     - **Page transcripts only when re-read.** A `read_page_text` result is
-      compacted only when a later read of the same tool covers all of its
-      pages. Different page batches never displace each other; a batch whose
-      page list cannot be recovered is kept.
+      compacted only when a later result of the same tool contains all of its
+      pages (read from the page markers, not the request). Different page
+      batches never displace each other; a result with no page markers is kept.
     - **Old enough.** At least `COMPACT_AFTER_TURNS` model responses have
       happened since the result was produced.
     - **Large enough.** Rendered text is at least `COMPACT_MIN_CHARS`.
@@ -576,7 +568,11 @@ def compact_old_text_results(
     last_idx_per_tool: dict[str, int] = {}
     for mi, _pi, part in tool_returns:
         last_idx_per_tool[part.tool_name] = mi
-    pages_by_call = _call_pages(messages)
+    pages_by_result = {
+        (mi, pi): _returned_pages(part)
+        for mi, pi, part in tool_returns
+        if part.tool_name in _PAGE_TEXT_TOOL_NAMES
+    }
 
     # Two-pass shape (cache-economics, Item 3): collect the edit batch first,
     # then apply it ONLY if the total reclaim clears the min-reclaim floor.
@@ -600,14 +596,13 @@ def compact_old_text_results(
             continue
         page_key: tuple[int, ...] | None = None
         if part.tool_name in _PAGE_TEXT_TOOL_NAMES:
-            # Source evidence: keep unless a later read covers every page.
-            page_key = pages_by_call.get(part.tool_call_id)
+            # Source evidence: keep unless a later result contains every page.
+            page_key = pages_by_result[(mi, pi)]
             if not page_key or not any(
                 later_mi > mi
                 and later.tool_name == part.tool_name
-                and set(page_key)
-                <= set(pages_by_call.get(later.tool_call_id, ()))
-                for later_mi, _lpi, later in tool_returns
+                and set(page_key) <= set(pages_by_result[(later_mi, later_pi)])
+                for later_mi, later_pi, later in tool_returns
             ):
                 continue
         turns_ago = _model_responses_after(messages, mi)
