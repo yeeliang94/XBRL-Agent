@@ -48,7 +48,7 @@ vi.mock("../lib/api", async () => {
   };
 });
 
-describe("preview scan navigation", () => {
+describe("preparation navigation", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/");
     vi.restoreAllMocks();
@@ -58,12 +58,14 @@ describe("preview scan navigation", () => {
     vi.unstubAllGlobals();
   });
 
-  test("continues through Settings and restores the completed preview on return", async () => {
-    let scoutSignal: AbortSignal | undefined;
-    let scoutController: ReadableStreamDefaultController<Uint8Array> | undefined;
-    const encoder = new TextEncoder();
+  test("preparation continues through Settings and setup opens with the detected format on return", async () => {
+    const working = {
+      attempt_id: "a1", status: "working", stage: "capture", phase: "preparing_pages",
+      action_required: "none", message: "Reading pages", total: 4, captured: 1, checked: 0,
+    };
+    let snapshot: Record<string, unknown> = working;
 
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === "/api/config") {
         return new Response(JSON.stringify({ canonical_mode: true }), {
@@ -71,19 +73,11 @@ describe("preview scan navigation", () => {
           headers: { "Content-Type": "application/json" },
         });
       }
-      if (url === "/api/scout/preview-session") {
-        scoutSignal = init?.signal as AbortSignal;
-        return new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              scoutController = controller;
-              controller.enqueue(encoder.encode(
-                `event: status\ndata: ${JSON.stringify({ phase: "scouting", message: "Reading document" })}\n\n`,
-              ));
-            },
-          }),
-          { status: 200, headers: { "Content-Type": "text/event-stream" } },
-        );
+      if (url === "/api/preparation/preview-session") {
+        return new Response(JSON.stringify(snapshot), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
       }
       return new Response("Not found", { status: 404 });
     }));
@@ -101,9 +95,8 @@ describe("preview scan navigation", () => {
       });
     });
 
-    fireEvent.click(await screen.findByTestId("advanced-toggle"));
-    fireEvent.click(await screen.findByRole("button", { name: /preview scan/i }));
-    await waitFor(() => expect(scoutSignal).toBeDefined());
+    expect(await screen.findByRole("list", { name: "Live activity" })).toHaveTextContent("Reading pages");
+    expect(screen.queryByRole("heading", { name: "Filing setup" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /^settings$/i }));
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
@@ -111,39 +104,35 @@ describe("preview scan navigation", () => {
       .getByText("Annual-Report.pdf")
       .closest("[aria-hidden='true']");
     expect(hiddenExtractWorkspace).toHaveStyle({ display: "none" });
-    expect(scoutSignal?.aborted).toBe(false);
 
-    await act(async () => {
-      scoutController?.enqueue(encoder.encode(
-        `event: scout_complete\ndata: ${JSON.stringify({
-          success: true,
-          infopack: {
-            toc_page: 3,
-            page_offset: 0,
-            statements: {
-              SOFP: {
-                variant_suggestion: "CuNonCu",
-                face_page: 10,
-                note_pages: [],
-                confidence: "HIGH",
-              },
-            },
-          },
-        })}\n\n`,
-      ));
-      scoutController?.close();
-    });
+    // Preparation finishes while the operator is in Settings.
+    snapshot = {
+      ...working, status: "succeeded", stage: "ready", phase: "awaiting_confirmation",
+      action_required: "confirm_setup", prepared: true, captured: 4, checked: 4,
+      message: "Document prepared",
+      infopack: {
+        toc_page: 3,
+        page_offset: 0,
+        scale_unit: "thousands",
+        notes_inventory: [],
+        statements: {
+          SOFP: { variant_suggestion: "CuNonCu", face_page: 10, note_pages: [], confidence: "HIGH" },
+        },
+      },
+    };
 
     act(() => {
       window.history.replaceState({}, "", "/run/99");
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
 
+    // Setup opens after the next poll and the brief prepared hold.
     await waitFor(() => {
-      const sofpVariant = screen.getAllByRole("combobox", { hidden: true }).find(
+      expect(screen.getByRole("heading", { name: "Filing setup" })).toBeInTheDocument();
+      const sofpVariant = screen.getAllByRole("combobox").find(
         (element) => element.querySelector("option[value='CuNonCu']"),
       ) as HTMLSelectElement | undefined;
       expect(sofpVariant?.value).toBe("CuNonCu");
-    });
+    }, { timeout: 6000 });
   }, 10_000);
 });

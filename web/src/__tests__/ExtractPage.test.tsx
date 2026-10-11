@@ -4,6 +4,19 @@ import { ExtractPage } from "../pages/ExtractPage";
 import { initialState } from "../lib/appReducer";
 import { createAgentState } from "../lib/types";
 import type { AppState } from "../lib/appReducer";
+import type { ExtendedSettingsResponse, PreparationSnapshot } from "../lib/types";
+import { apiFetch, getExtendedSettings } from "../lib/api";
+
+// Real API by default; the preparation handoff test scripts the two calls
+// the setup flow makes.
+vi.mock("../lib/api", async () => {
+  const actual = await vi.importActual<typeof import("../lib/api")>("../lib/api");
+  return {
+    ...actual,
+    apiFetch: vi.fn(actual.apiFetch),
+    getExtendedSettings: vi.fn(actual.getExtendedSettings),
+  };
+});
 
 // Bare minimum no-op props for the component. Each test overrides `state`
 // and the two abort handlers (rest stay no-op) to focus on the render gate.
@@ -568,5 +581,44 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(screen.queryByText(/while the run continues/i)).not.toBeInTheDocument();
     expect(screen.getAllByLabelText("Workflow progress")).toHaveLength(1);
     expect(screen.queryByRole("region", { name: "Document preparation" })).toBeNull();
+  });
+});
+
+describe("ExtractPage — preparation and filing setup are separate views", () => {
+  test("setup stays hidden while preparation runs, then opens after the prepared outcome", async () => {
+    vi.useFakeTimers();
+    try {
+      const working: PreparationSnapshot = {
+        attempt_id: "a1", status: "working", stage: "capture", phase: "preparing_pages",
+        action_required: "none", message: "Reading pages", total: 4, captured: 2, checked: 1,
+      };
+      vi.mocked(apiFetch).mockResolvedValueOnce(working).mockResolvedValue({
+        ...working, status: "succeeded", stage: "ready", phase: "awaiting_confirmation",
+        action_required: "confirm_setup", prepared: true, captured: 4, checked: 4,
+        message: "Document prepared", infopack: { scale_unit: "thousands", statements: {}, notes_inventory: [] },
+      });
+      vi.mocked(getExtendedSettings).mockResolvedValue({
+        model: "m", proxy_url: "", api_key_set: true, api_key_preview: "",
+        available_models: [], default_models: {}, tolerance_rm: 1, auto_review: true,
+      } as unknown as ExtendedSettingsResponse);
+      render(<ExtractPage {...makeProps({ state: { sessionId: "prep-session", filename: "doc.pdf" } })} />);
+
+      await act(async () => { await Promise.resolve(); });
+      expect(screen.getByRole("list", { name: "Live activity" })).toHaveTextContent("Reading pages");
+      expect(screen.queryByRole("heading", { name: "Filing setup" })).toBeNull();
+
+      // The next poll reports success; the prepared outcome holds briefly.
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+      expect(screen.getByTestId("preparation-status")).toHaveTextContent("Complete");
+      expect(screen.queryByRole("heading", { name: "Filing setup" })).toBeNull();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
+      expect(screen.getByRole("heading", { name: "Filing setup" })).toBeInTheDocument();
+      expect(screen.queryByRole("list", { name: "Live activity" })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+      vi.mocked(apiFetch).mockReset();
+      vi.mocked(getExtendedSettings).mockReset();
+    }
   });
 });

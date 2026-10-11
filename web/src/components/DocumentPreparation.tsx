@@ -8,12 +8,24 @@ import { formatElapsedMs } from "../lib/time";
 import { ElapsedTimer } from "./ElapsedTimer";
 import { PipelineStages } from "./PipelineStages";
 import { DisclosureChevron } from "./icons";
+import { StatusIcon } from "./StatusIcon";
+import { STATUS_SYMBOLS, type StatusSymbol } from "../lib/runStatus";
 
 const activeStatuses = new Set(["queued", "working", "retrying"]);
 const labels = { not_started: "Waiting", queued: "Queued", working: "Working", retrying: "Retrying", succeeded: "Complete", failed: "Failed", cancelled: "Stopped" };
 
 // One term per state, matching the rest of the app.
 const visuallyHidden: React.CSSProperties = { position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap" };
+
+const stateSymbols: Record<string, StatusSymbol> = {
+  Complete: STATUS_SYMBOLS.success,
+  Working: STATUS_SYMBOLS.inProgress,
+  Failed: STATUS_SYMBOLS.failure,
+  Stopped: STATUS_SYMBOLS.inactive,
+  Waiting: STATUS_SYMBOLS.inactive,
+};
+// The page strip is a glance aid; very long documents rely on the counters.
+const PAGE_STRIP_LIMIT = 600;
 
 function detailStatus({ complete, active, stopped, failed = false }: { complete: boolean; active: boolean; stopped: boolean; failed?: boolean }) {
   if (complete) return "Complete";
@@ -33,6 +45,9 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
   const [retriedFailure, setRetriedFailure] = useState<{ message: string; attemptId: string | null } | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [detailsChoice, setDetailsChoice] = useState<boolean | null>(null);
+  // Live activity is the sequence of progress messages seen while this view
+  // is open. It is not persisted, so it appears only during preparation.
+  const [activity, setActivity] = useState<string[]>([]);
   const callback = useRef(onSnapshot);
   callback.current = onSnapshot;
   const operation = useRef(0);
@@ -55,6 +70,9 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
         setSnapshot(next);
         setConnectionError(null);
         callback.current?.(next);
+        if (activeStatuses.has(next.status) && next.message) {
+          setActivity((items) => items[items.length - 1] === next.message ? items : [...items, next.message].slice(-50));
+        }
         if (activeStatuses.has(next.status) || next.status === "not_started") timer = setTimeout(poll, 1500);
       } catch (error) {
         if (disposed || revision !== operation.current) return;
@@ -111,7 +129,46 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
   // Page counts exclude the cross-page continuation checks that can finish later.
   const checkComplete = pagesComplete;
   const missingDocument = snapshot == null && connectionError?.startsWith("Document not found.");
-  const detailsOpen = detailsChoice ?? snapshot?.status !== "succeeded";
+  const succeeded = snapshot?.status === "succeeded";
+  const detailsOpen = detailsChoice ?? !succeeded;
+  // While work is live the activity stream carries the current message, so
+  // the status line only speaks for connection problems and stopped states.
+  const statusText = connectionError
+    ?? (snapshot == null ? "Connecting to document preparation…" : active ? null : snapshot.message);
+  const steps = [
+    {
+      label: "Read source pages",
+      detail: total > 0 ? `Pages captured: ${captured} of ${total}` : "",
+      state: detailStatus({ complete: readComplete, active: active && phase === "preparing_pages" && !readComplete, stopped: stopped && !readComplete, failed }),
+    },
+    {
+      label: "Check page readings and continuations",
+      detail: total > 0 ? `Pages checked: ${checked} of ${total}` : "",
+      state: detailStatus({ complete: checkComplete, active: active && phase === "preparing_pages" && checked > 0 && !checkComplete, stopped: stopped && !checkComplete, failed }),
+    },
+    {
+      label: "Build document map",
+      detail: phase === "reconciling_map" ? "Reconciling statement and note ownership" : "",
+      state: detailStatus({ complete: mapComplete, active: active && mapActive, stopped: stopped && pagesComplete, failed }),
+    },
+  ];
+  const stepList = (
+    <ol id="preparation-steps" hidden={!detailsOpen} aria-label="Document preparation steps" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+      {steps.map((step) => (
+        <li key={step.label} className="preparation-step-row" style={{ display: "grid", gridTemplateColumns: "16px minmax(0, 1fr) auto", gap: pwc.space.md, alignItems: "center", minHeight: 48, padding: `${pwc.space.sm}px 0`, borderTop: `1px solid ${pwc.grey100}` }}>
+          <StatusIcon symbol={stateSymbols[step.state]} />
+          <span style={{ minWidth: 0 }}>
+            <span style={{ ...ui.bodyText, display: "block" }}>{step.label}</span>
+            {step.detail && <span style={{ ...ui.metadata, display: "block" }}>{step.detail}</span>}
+          </span>
+          <span style={{ ...ui.metadata, color: step.state === "Failed" ? pwc.orange700 : pwc.grey700, fontWeight: step.state === "Working" ? pwc.weight.medium : pwc.weight.regular }}>
+            {step.state}
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+  const showPages = !succeeded && total > 0 && total <= PAGE_STRIP_LIMIT;
   // Same rhythm as Filing setup: a 40px header row, 8 to its content, 16
   // between blocks; the page puts 32 before the next section.
   return <section aria-label="Document preparation" style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
@@ -137,68 +194,69 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
         isComplete={false}
       />
     </div>}
-    <p role="status" aria-live="polite" style={snapshot?.status === "succeeded" && !connectionError ? visuallyHidden : { margin: 0 }}>{connectionError ?? snapshot?.message ?? "Connecting to document preparation…"}</p>
-    {snapshot?.prepared && snapshot.status !== "succeeded" && (
+    {statusText != null && (
+      <p role="status" aria-live="polite" style={succeeded && !connectionError ? visuallyHidden : { margin: 0 }}>{statusText}</p>
+    )}
+    {snapshot?.prepared && !succeeded && (
       <p style={{ margin: 0 }}>Document prepared. {active && mapActive ? "Document map and notes inventory are being built." : "Notes inventory is not ready."}</p>
     )}
-    {actionRequired !== "none" || snapshot?.status === "not_started" ? (
+    {actionRequired === "retry" || snapshot?.status === "not_started" ? (
       <p style={{ margin: 0, color: pwc.grey700 }}>
-        {actionRequired === "confirm_setup"
-          ? "Review the detected filing details, then confirm setup."
-          : actionRequired === "retry"
-            ? repeatedFailure
-              ? "The same step failed after retry. Upload a revised source document to continue."
-              : "Retry resumes saved progress. If the same step fails again, upload a revised source document."
-            : "Start document preparation."}
+        {actionRequired === "retry"
+          ? repeatedFailure
+            ? "The same step failed after retry. Upload a revised source document to continue."
+            : "Retry resumes saved progress. If the same step fails again, upload a revised source document."
+          : "Start document preparation."}
       </p>
     ) : null}
-    {!missingDocument && <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
-    {/* Title first, chevron after, count only while folded: the same
-        disclosure pattern as the setup sections below. */}
-    <button
-      type="button"
-      aria-expanded={detailsOpen}
-      aria-controls="preparation-steps"
-      onClick={() => setDetailsChoice(!detailsOpen)}
-      style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, minHeight: 40, padding: 0, background: "transparent", border: "none", cursor: "pointer", alignSelf: "flex-start", ...ui.bodyText, fontWeight: pwc.weight.medium }}
-    >
-      {snapshot?.status === "succeeded" ? "Preparation details" : "Preparation steps"}
-      <DisclosureChevron open={detailsOpen} />
-      {!detailsOpen && total > 0 && <span style={ui.metadata}>{total} pages</span>}
-    </button>
-    <ol id="preparation-steps" hidden={!detailsOpen} aria-label="Document preparation steps" style={{ listStyle: "none", margin: 0, padding: 0 }}>
-      {[
-        {
-          label: "Read source pages",
-          detail: total > 0 ? `Pages captured: ${captured} of ${total}` : "Waiting for page count",
-          state: detailStatus({ complete: readComplete, active: active && phase === "preparing_pages" && !readComplete, stopped: stopped && !readComplete, failed }),
-        },
-        {
-          label: "Check page readings and continuations",
-          detail: total > 0 ? `Pages checked: ${checked} of ${total}` : "Waiting for page count",
-          state: detailStatus({ complete: checkComplete, active: active && phase === "preparing_pages" && checked > 0 && !checkComplete, stopped: stopped && !checkComplete, failed }),
-        },
-        {
-          label: "Build document map",
-          detail: phase === "reconciling_map" ? "Reconciling statement and note ownership" : "Identify statements, formats, notes and denomination",
-          state: detailStatus({ complete: mapComplete, active: active && mapActive, stopped: stopped && pagesComplete, failed }),
-        },
-        {
-          label: "Confirm detected setup",
-          detail: "Review denomination, filing details and statement formats",
-          state: actionRequired === "confirm_setup" ? "Action required" : "Waiting",
-        },
-      ].map((step) => (
-        <li key={step.label} className="preparation-step-row" style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) minmax(220px, 2fr) 120px", gap: pwc.space.md, alignItems: "center", minHeight: 40, padding: `${pwc.space.sm}px 0`, borderTop: `1px solid ${pwc.grey100}`, fontSize: 14 }}>
-          <span style={{ fontFamily: pwc.fontHeading }}>{step.label}</span>
-          <span style={{ color: pwc.grey700 }}>{step.detail}</span>
-          <span style={{ textAlign: "right", color: step.state === "Action required" || step.state === "Failed" ? pwc.orange700 : pwc.grey700, fontWeight: step.state === "Working" || step.state === "Action required" ? pwc.weight.medium : pwc.weight.regular }}>
-            {step.state}
-          </span>
-        </li>
-      ))}
-    </ol>
-    </div>}
+    {!missingDocument && (succeeded ? (
+      <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
+        {/* Once setup opens, the preparation record folds behind one control. */}
+        <button
+          type="button"
+          aria-expanded={detailsOpen}
+          aria-controls="preparation-steps"
+          onClick={() => setDetailsChoice(!detailsOpen)}
+          style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, minHeight: 40, padding: 0, background: "transparent", border: "none", cursor: "pointer", alignSelf: "flex-start", ...ui.bodyText, fontWeight: pwc.weight.medium }}
+        >
+          Preparation details
+          <DisclosureChevron open={detailsOpen} />
+        </button>
+        {stepList}
+      </div>
+    ) : (
+      <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.lg }}>
+        {stepList}
+        {showPages && (
+          <div aria-hidden="true" data-testid="preparation-page-strip" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(9px, 1fr))", gap: 3 }}>
+            {Array.from({ length: total }, (_, i) => (
+              <span key={i} style={{
+                aspectRatio: "3 / 4",
+                borderRadius: 2,
+                // Pages are read in parallel, so the strip shows proportions only.
+                background: i < checked ? pwc.black : i < captured ? pwc.grey300 : pwc.grey100,
+              }} />
+            ))}
+          </div>
+        )}
+        {activity.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
+            <h3 style={{ ...ui.subsectionTitle, margin: 0, minHeight: 40, display: "flex", alignItems: "center" }}>Live activity</h3>
+            <ol aria-label="Live activity" aria-live="polite" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+              {/* Newest first, matching the run Activity stream. */}
+              {activity.map((text, i) => ({ text, i })).reverse().map(({ text, i }) => (
+                <li key={`${i}-${text}`} className="activity-sentence-enter" style={{ display: "grid", gridTemplateColumns: "10px minmax(0, 1fr)", gap: pwc.space.sm, minHeight: 40, padding: `${pwc.space.xs}px 0 ${pwc.space.sm}px` }}>
+                  <span aria-hidden="true" style={{ position: "relative", width: 10, marginLeft: 3, borderLeft: `1px solid ${pwc.grey200}` }}>
+                    <span style={{ position: "absolute", top: 6, left: -4, width: 7, height: 7, borderRadius: "50%", background: active && i === activity.length - 1 ? pwc.orange500 : pwc.grey300 }} />
+                  </span>
+                  <span style={ui.bodyText}>{text}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+      </div>
+    ))}
     </div>
   </section>;
 }

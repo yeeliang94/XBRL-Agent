@@ -94,6 +94,12 @@ const styles = {
     flexDirection: "column" as const,
     gap: pwc.space.sm,
   } as React.CSSProperties,
+  sectionHead: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.md,
+    minHeight: 40,
+  } as React.CSSProperties,
   sectionBody: {
     display: "flex",
     flexDirection: "column" as const,
@@ -103,18 +109,6 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.sm,
-  } as React.CSSProperties,
-  subsectionButton: {
-    display: "flex",
-    alignItems: "center",
-    gap: pwc.space.sm,
-    minHeight: 40,
-    padding: 0,
-    background: "transparent",
-    border: "none",
-    cursor: "pointer",
-    textAlign: "left" as const,
-    alignSelf: "flex-start",
   } as React.CSSProperties,
   subsectionTitle: {
     ...ui.bodyText,
@@ -130,6 +124,9 @@ const styles = {
     listStyle: "none",
     margin: 0,
     padding: 0,
+    display: "grid",
+    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+    columnGap: pwc.space.xl,
   } as React.CSSProperties,
   noteRow: {
     display: "grid",
@@ -177,45 +174,6 @@ const styles = {
     gap: `${pwc.space.lg}px ${pwc.space.xl}px`,
     alignItems: "flex-start",
   } as React.CSSProperties,
-  disclosure: {
-    display: "flex",
-    flexDirection: "column" as const,
-  } as React.CSSProperties,
-  disclosureButton: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "flex-start",
-    gap: pwc.space.sm,
-    width: "100%",
-    minHeight: 40,
-    padding: 0,
-    background: "transparent",
-    border: "none",
-    cursor: "pointer",
-    textAlign: "left" as const,
-  } as React.CSSProperties,
-  disclosureTitle: {
-    ...ui.sectionTitle,
-  } as React.CSSProperties,
-  disclosureSummary: {
-    ...ui.metadata,
-  } as React.CSSProperties,
-  disclosureContent: {
-    paddingTop: pwc.space.sm,
-  } as React.CSSProperties,
-  detectedBadge: {
-    display: "inline-flex",
-    alignItems: "center",
-    padding: `2px ${pwc.space.xs}px`,
-    borderRadius: pwc.radius.sm,
-    background: pwc.grey50,
-    color: pwc.grey700,
-    fontFamily: pwc.fontBody,
-    fontSize: 12,
-    fontWeight: pwc.weight.medium,
-    letterSpacing: 0,
-    textTransform: "none" as const,
-  } as React.CSSProperties,
   runButton: {
     ...ui.buttonPrimary,
     alignSelf: "flex-end" as const,
@@ -262,48 +220,6 @@ const styles = {
     gap: pwc.space.sm,
   } as React.CSSProperties,
 };
-
-function DisclosureSection({
-  id,
-  title,
-  summary,
-  open,
-  onToggle,
-  children,
-}: {
-  id: string;
-  title: string;
-  summary: string;
-  open: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <section style={styles.disclosure}>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        aria-controls={id}
-        style={styles.disclosureButton}
-      >
-        <span style={styles.disclosureTitle}>{title}</span>
-        <DisclosureChevron open={open} />
-        {!open && <span style={styles.disclosureSummary}>{summary}</span>}
-      </button>
-      <div
-        id={id}
-        role="region"
-        aria-label={title}
-        className="pwc-reveal"
-        style={styles.disclosureContent}
-        hidden={!open}
-      >
-        {children}
-      </div>
-    </section>
-  );
-}
 
 const makeEmptySelections = (): Record<StatementType, VariantSelection> =>
   mapStatements(() => ({ variant: "", confidence: null }));
@@ -519,8 +435,7 @@ export function findInventoryGaps(entries: NotesInventoryEntry[]): number[] {
 
 /** The notes the document preparation found, with add and remove. The caller
  *  stores a compact override set so a fresh run-owned scan cannot overwrite
- *  the operator's decisions. Folded by default; it opens itself when a note
- *  number is missing, because that is the one case that needs a person. */
+ *  the operator's decisions. Always open: it decides what is extracted. */
 function NotesInventoryEditor({
   entries,
   gaps,
@@ -530,9 +445,6 @@ function NotesInventoryEditor({
   gaps: number[];
   onChange: (next: NotesInventoryEntry[]) => void;
 }) {
-  // Decided once on mount: closing a gap by adding the note must not fold
-  // the list away under the operator.
-  const [open, setOpen] = useState(() => gaps.length > 0);
   const [adding, setAdding] = useState(false);
   const [num, setNum] = useState("");
   const [title, setTitle] = useState("");
@@ -571,17 +483,19 @@ function NotesInventoryEditor({
 
   return (
     <div style={styles.subsection}>
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        aria-controls="notes-inventory-list"
-        style={styles.subsectionButton}
-      >
-        <span style={styles.subsectionTitle}>Notes in the document</span>
-        <DisclosureChevron open={open} />
-        <span style={styles.disclosureSummary}>{entries.length}</span>
-      </button>
+      <div style={{ ...styles.sectionHead, justifyContent: "space-between" }}>
+        <h3 style={{ ...styles.subsectionTitle, margin: 0 }}>Notes in the document</h3>
+        {!adding && (
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className={uiClass.btnQuiet}
+            style={ui.buttonQuiet}
+          >
+            Add note
+          </button>
+        )}
+      </div>
       {gaps.length > 0 && (
         <span role="status" style={styles.exceptionLine}>
           <StatusIcon symbol={STATUS_SYMBOLS.attention} />
@@ -589,8 +503,8 @@ function NotesInventoryEditor({
           Add {gaps.length === 1 ? "it" : "them"} if {gaps.length === 1 ? "it is" : "they are"} in the document.
         </span>
       )}
-      <div id="notes-inventory-list" hidden={!open} style={open ? styles.subsection : undefined}>
-        <ul aria-label="Discovered notes" style={styles.noteList}>
+      <div id="notes-inventory-list" style={styles.subsection}>
+        <ul aria-label="Discovered notes" className="notes-inventory-columns" style={styles.noteList}>
           {sorted.map((e, i) => (
             <li key={`${e.note_num}-${e.title}-${i}`} style={styles.noteRow}>
               <span style={styles.noteNumber}>{e.note_num}</span>
@@ -608,7 +522,7 @@ function NotesInventoryEditor({
             </li>
           ))}
         </ul>
-        {adding ? (
+        {adding && (
           <div style={styles.subsection}>
             <div style={styles.noteAddRow}>
               <input
@@ -655,15 +569,6 @@ function NotesInventoryEditor({
               </span>
             )}
           </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setAdding(true)}
-            className={uiClass.btnQuiet}
-            style={{ ...ui.buttonQuiet, alignSelf: "flex-start", paddingInline: 0 }}
-          >
-            Add note
-          </button>
         )}
       </div>
     </div>
@@ -677,13 +582,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   // two selection lists once they have checked them, while model overrides
   // remain behind the advanced disclosure.
   const [showAdvanced, setShowAdvanced] = useState(false);
-  // Statement and note lists start folded once preparation has finished:
-  // everything is selected by default and the summary line says so.
-  const [showStatementsChoice, setShowStatements] = useState<boolean | null>(null);
-  // null = follow the default: open until formats are detected, and kept
-  // open while any detected format needs checking.
-  const [showFormatsChoice, setShowFormatsChoice] = useState<boolean | null>(null);
-  const [showNotesChoice, setShowNotes] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [scoutError, setScoutError] = useState<string | null>(null);
@@ -770,18 +668,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   const variantOverridesRef = useRef(new Set<StatementType>(
     STATEMENT_TYPES.filter((stmt) => Boolean(variantSelections[stmt].variant)),
   ));
-  const preparedForConfirmation = preparation?.status === "succeeded";
-  const showStatements = showStatementsChoice ?? !preparedForConfirmation;
-  // Notes stay open when the inventory needs attention (none found, or gaps).
-  const inventoryEntries = infopack && Array.isArray(infopack.notes_inventory)
-    ? applyNotesInventoryOverrides(infopack.notes_inventory as NotesInventoryEntry[], notesInventoryOverrides)
-    : null;
-  const inventoryNeedsAttention = inventoryEntries != null
-    && (inventoryEntries.length === 0 || findInventoryGaps(inventoryEntries).length > 0);
-  const showNotes = showNotesChoice ?? (!preparedForConfirmation || inventoryNeedsAttention);
-  const formatsDetected = STATEMENT_TYPES.filter((stmt) => Boolean(variantSelections[stmt].variant)).length;
-  const formatsToCheck = STATEMENT_TYPES.filter((stmt) => variantSelections[stmt].variant && variantSelections[stmt].confidence === "low").length;
-  const showFormats = showFormatsChoice ?? (!preparedForConfirmation || formatsToCheck > 0);
   const [statementsEnabled, setStatementsEnabled] = useState(
     () => _seedStatementsEnabled(initialConfig),
   );
@@ -1404,9 +1290,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     preparation?.status !== "failed" &&
     preparation?.status !== "cancelled" &&
     (!waitForPreparation || preparation?.status === "succeeded");
-  const standardWasDetected =
-    !filingStandardTouchedRef.current && infopack?.detected_standard === filingStandard;
-  const detectedDenomination = _detectedDenomination(infopack);
 
   const preparationStarted = preparation != null && preparation.status !== "not_started";
 
@@ -1450,10 +1333,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       {/* Filing standard: MFRS (default) or MPERS. Mirrors the Filing Level
           styling below so the two toggles read as a pair. */}
       <div style={styles.section}>
-        <span style={{ ...styles.sectionLabel, display: "inline-flex", alignItems: "center", gap: pwc.space.sm }}>
-          Filing standard
-          {standardWasDetected && <span style={styles.detectedBadge}>Detected</span>}
-        </span>
+        <span style={styles.sectionLabel}>Filing standard</span>
         <div className="segmented-control-group" style={ui.segmentGroup}>
           {(["mfrs", "mpers"] as const).map((standard) => {
             const active = filingStandard === standard;
@@ -1499,12 +1379,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           The agent treats this as authoritative (no guessing) and transcribes
           values verbatim; the scout cross-checks it. Mirrors the toggles above. */}
       <div style={styles.section}>
-        <span style={{ ...styles.sectionLabel, display: "inline-flex", alignItems: "center", gap: pwc.space.sm }}>
-          Denomination
-          {detectedDenomination && infopack?.scale_unit !== "unknown" && (
-            <span data-testid="detected-denomination" style={styles.detectedBadge}>Detected {DENOMINATION_LABELS[detectedDenomination]}</span>
-          )}
-        </span>
+        <span style={styles.sectionLabel}>Denomination</span>
         <div className="segmented-control-group" style={ui.segmentGroup}>
           {(["units", "thousands", "millions"] as const).map((d) => {
             const active = denomination === d;
@@ -1685,35 +1560,21 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
       </>)}
 
-      {/* Statement formats are optional overrides. The automatic scout picks
-          a supported format when a row is left blank. */}
-      <DisclosureSection
-        id="statement-formats"
-        title="Statement formats"
-        summary={formatsToCheck > 0
-          ? `${formatsToCheck} to check`
-          : formatsDetected > 0 ? `${formatsDetected} set` : "Automatic"}
-        open={showFormats}
-        onToggle={() => setShowFormatsChoice(!showFormats)}
-      >
+      {/* Statements: what to extract and in which format, on one open row
+          each. A blank format falls back to the automatic scan. */}
+      <section aria-label="Statements" style={styles.section}>
+        <div style={styles.sectionHead}>
+          <h2 style={styles.heading}>Statements</h2>
+        </div>
         <VariantSelector
           selections={variantSelections}
           enabledStatements={enabledStmts}
           onChange={handleVariantChange}
+          onToggleStatement={handleToggleStatement}
           filingStandard={filingStandard}
         />
-      </DisclosureSection>
-
-      {/* Which statements to extract. The per-statement AI-model picker only
-          shows inside Advanced (Phase 3). */}
-      <DisclosureSection
-        id="statement-selection"
-        title="Statements to extract"
-        summary={`${enabledStmts.length} of ${STATEMENT_TYPES.length} selected`}
-        open={showStatements}
-        onToggle={() => setShowStatements(!showStatements)}
-      >
-        <div style={styles.section}>
+        {/* Per-statement models exist only before preparation starts. */}
+        {showAdvanced && !preparationStarted && (
           <StatementRunConfig
             enabled={statementsEnabled}
             filingStandard={filingStandard}
@@ -1721,24 +1582,17 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             availableModels={availableModels}
             onToggleStatement={handleToggleStatement}
             onModelChange={handleModelChange}
-            showModels={showAdvanced && !preparationStarted}
+            showModels
           />
-        </div>
-      </DisclosureSection>
+        )}
+      </section>
 
       {/* Notes templates — independent of face statements. Selected by default.
-          The per-note model picker also lives behind Advanced. */}
-      <DisclosureSection
-        id="notes-selection"
-        title="Notes templates"
-        summary={enabledNotes.length === 0
-          ? "No notes included"
-          : preparation?.status === "succeeded"
-            ? "All document notes included"
-            : `${enabledNotes.length} of ${NOTES_TEMPLATE_TYPES.length} selected`}
-        open={showNotes}
-        onToggle={() => setShowNotes(!showNotes)}
-      >
+          The per-note model picker lives behind Advanced. */}
+      <section aria-label="Notes" style={styles.section}>
+        <div style={styles.sectionHead}>
+          <h2 style={styles.heading}>Notes</h2>
+        </div>
         <div style={styles.sectionBody}>
           <NotesRunConfig
             enabled={notesEnabled}
@@ -1776,7 +1630,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             );
           })()}
         </div>
-      </DisclosureSection>
+      </section>
 
       {/* Run button — enabled when at least one face or notes template is
           selected. */}
