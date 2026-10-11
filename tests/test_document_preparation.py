@@ -781,6 +781,18 @@ def test_changed_repair_gets_third_round_with_previous_findings(tmp_path):
     ("<table><tr><th></th><th>2024</th><th>2023</th></tr><tr><td>Tax</td><td>1</td><td>2</td></tr><tr><td>13,949</td></tr></table>", True),
     ('<table><tr><th colspan="2">Year<br/>RM</th></tr><tr><td rowspan="2">Wrapped</td><td>10</td></tr><tr><td>20</td></tr></table>', False),
     ("<table><tr><th></th><th>RM</th></tr><tr><th>As at 31 December 2023</th></tr><tr><td>Payable</td><td>1</td></tr></table>", False),
+    # An amount-column caption captured as a lone first-column header.
+    ("<table><tr><th>On demand or<br>within one year<br>RM</th></tr><tr><th>Financial liability</th></tr>"
+     "<tr><td>Other payable</td><td>1,993,877</td></tr></table>", True),
+    ("<table><tr><th></th><th>On demand or within one year RM</th></tr>"
+     "<tr><td>Other payable</td><td>1,993,877</td></tr></table>", False),
+    ('<table><tr><th colspan="2">RM\'000</th></tr><tr><td>Payable</td><td>1</td></tr></table>', False),
+    # A total captured as heading cells below the data (VTech note 71).
+    ("<table><tr><th></th><th>2025</th><th>2024</th></tr><tr><td>Lease</td><td>2,898</td><td>623</td></tr>"
+     "<tr><th></th><th>12,856</th><th>17,679</th></tr></table>", True),
+    # A repeated column heading below the data carries years, not amounts.
+    ("<table><tr><th></th><th>2025</th><th>2024</th></tr><tr><td>Lease</td><td>2,898</td><td>623</td></tr>"
+     "<tr><th></th><th>2025</th><th>2024</th></tr><tr><td>Tax</td><td>1</td><td>2</td></tr></table>", False),
     ("<table><tr><td>A</td><td><table><tr><td>x</td><td>y</td><td>z</td></tr></table></td></tr><tr><td>B</td><td>2</td></tr></table>", False),
     ('<table><tr><td colspan="1000">Heading</td></tr></table>', False),
     ('<table><tr><td rowspan="1000">Label</td></tr></table>', False),
