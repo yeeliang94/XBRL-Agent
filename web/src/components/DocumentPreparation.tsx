@@ -47,7 +47,10 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
   const [detailsChoice, setDetailsChoice] = useState<boolean | null>(null);
   // Live activity is the sequence of progress messages seen while this view
   // is open. It is not persisted, so it appears only during preparation.
-  const [activity, setActivity] = useState<string[]>([]);
+  // Each entry keeps a stable id so trimming the list never re-renders the
+  // surviving rows as new ones.
+  const [activity, setActivity] = useState<{ id: number; text: string }[]>([]);
+  const activityId = useRef(0);
   const callback = useRef(onSnapshot);
   callback.current = onSnapshot;
   const operation = useRef(0);
@@ -71,7 +74,8 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
         setConnectionError(null);
         callback.current?.(next);
         if (activeStatuses.has(next.status) && next.message) {
-          setActivity((items) => items[items.length - 1] === next.message ? items : [...items, next.message].slice(-50));
+          const id = ++activityId.current;
+          setActivity((items) => items[items.length - 1]?.text === next.message ? items : [...items, { id, text: next.message }].slice(-50));
         }
         if (activeStatuses.has(next.status) || next.status === "not_started") timer = setTimeout(poll, 1500);
       } catch (error) {
@@ -131,10 +135,10 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
   const missingDocument = snapshot == null && connectionError?.startsWith("Document not found.");
   const succeeded = snapshot?.status === "succeeded";
   const detailsOpen = detailsChoice ?? !succeeded;
-  // While work is live the activity stream carries the current message, so
-  // the status line only speaks for connection problems and stopped states.
+  // The status line announces only the current message. While work is live
+  // the activity list shows it, so the line stays visually hidden.
   const statusText = connectionError
-    ?? (snapshot == null ? "Connecting to document preparation…" : active ? null : snapshot.message);
+    ?? (snapshot == null ? "Connecting to document preparation…" : snapshot.message);
   const steps = [
     {
       label: "Read source pages",
@@ -195,7 +199,7 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
       />
     </div>}
     {statusText != null && (
-      <p role="status" aria-live="polite" style={succeeded && !connectionError ? visuallyHidden : { margin: 0 }}>{statusText}</p>
+      <p role="status" aria-live="polite" style={(succeeded || active) && !connectionError ? visuallyHidden : { margin: 0 }}>{statusText}</p>
     )}
     {snapshot?.prepared && !succeeded && (
       <p style={{ margin: 0 }}>Document prepared. {active && mapActive ? "Document map and notes inventory are being built." : "Notes inventory is not ready."}</p>
@@ -242,12 +246,12 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
         {activity.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
             <h3 style={{ ...ui.subsectionTitle, margin: 0, minHeight: 40, display: "flex", alignItems: "center" }}>Live activity</h3>
-            <ol aria-label="Live activity" aria-live="polite" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            <ol aria-label="Live activity" style={{ listStyle: "none", margin: 0, padding: 0 }}>
               {/* Newest first, matching the run Activity stream. */}
-              {activity.map((text, i) => ({ text, i })).reverse().map(({ text, i }) => (
-                <li key={`${i}-${text}`} className="activity-sentence-enter" style={{ display: "grid", gridTemplateColumns: "10px minmax(0, 1fr)", gap: pwc.space.sm, minHeight: 40, padding: `${pwc.space.xs}px 0 ${pwc.space.sm}px` }}>
+              {[...activity].reverse().map(({ id, text }, i) => (
+                <li key={id} className="activity-sentence-enter" style={{ display: "grid", gridTemplateColumns: "10px minmax(0, 1fr)", gap: pwc.space.sm, minHeight: 40, padding: `${pwc.space.xs}px 0 ${pwc.space.sm}px` }}>
                   <span aria-hidden="true" style={{ position: "relative", width: 10, marginLeft: 3, borderLeft: `1px solid ${pwc.grey200}` }}>
-                    <span style={{ position: "absolute", top: 6, left: -4, width: 7, height: 7, borderRadius: "50%", background: active && i === activity.length - 1 ? pwc.orange500 : pwc.grey300 }} />
+                    <span style={{ position: "absolute", top: 6, left: -4, width: 7, height: 7, borderRadius: "50%", background: active && i === 0 ? pwc.orange500 : pwc.grey300 }} />
                   </span>
                   <span style={ui.bodyText}>{text}</span>
                 </li>
