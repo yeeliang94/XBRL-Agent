@@ -203,6 +203,53 @@ async def test_ineligible_tables_stay_flagged_and_unchanged(recopy_run, setup, m
 
 
 @pytest.mark.asyncio
+async def test_a_provider_failure_is_reported_on_its_row(recopy_run):
+    from notes.table_recopy import recopy_tables
+
+    db_path, pdf_path, run_id = recopy_run
+
+    async def down(*_args, **_kwargs):
+        raise RuntimeError("provider unavailable")
+
+    result = await recopy_tables(run_id=run_id, db_path=str(db_path), pdf_path=pdf_path, sheet=SHEET,
+                                 findings={71: [(0, "x")]}, model=None, _recapture=down)
+    assert result["rebuilt_rows"] == [] and "provider unavailable" in result["errors"][71]
+
+
+def test_simultaneous_corrections_to_one_document_both_survive(tmp_path, monkeypatch):
+    import threading
+    import time
+    import ingest.document_preparation as dp
+
+    second = BAD.replace("Lease", "Other")
+    html_file = tmp_path / "prepared-x.html"
+    html_file.write_text("old")
+    blocks = [{"block_id": "p1-b0", "page": 1, "canonical_html": BAD, "locator": {"page_block": 0}},
+              {"block_id": "p1-b1", "page": 1, "canonical_html": second, "locator": {"page_block": 1}}]
+    (tmp_path / PREPARATION_NAME).write_text(json.dumps({
+        "html_file": html_file.name, "html_sha256": "", "blocks": blocks,
+        "pages": [{"page": 1, "html": BAD + second, "blocks": json.loads(json.dumps(blocks))}]}))
+    real = dp._page_nodes
+
+    def slow(html):  # widen the read-modify-write window
+        time.sleep(0.05)
+        return real(html)
+
+    monkeypatch.setattr(dp, "_page_nodes", slow)
+    fixed = GOOD.replace("Lease", "Other")
+    threads = [threading.Thread(target=record_table_correction, args=(tmp_path / PREPARATION_NAME,),
+                                kwargs={"block_id": block_id, "table_html": html, "record": {}})
+               for block_id, html in (("p1-b0", GOOD), ("p1-b1", fixed))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    saved = json.loads((tmp_path / PREPARATION_NAME).read_text())
+    assert saved["pages"][0]["html"] == GOOD + fixed
+    assert {c["block_id"] for c in saved["table_corrections"]} == {"p1-b0", "p1-b1"}
+
+
+@pytest.mark.asyncio
 async def test_a_concurrent_edit_cancels_the_whole_correction(recopy_run):
     from db import repository as repo
     from notes.table_recopy import recopy_tables

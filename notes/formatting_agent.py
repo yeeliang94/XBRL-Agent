@@ -483,12 +483,22 @@ async def _recopy_and_reformat(outcome: dict, structural: dict, *, run_id: int, 
                 key = row if row in result["row_errors"] else str(row)
                 result["row_errors"][key] += "; " + reason
         return result
-    final = await _run_notes_formatter_impl(
-        run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet, model=model,
-        output_dir=output_dir, usage=usage, style_sources=None, rows=sorted(rebuilt),
-        pass_started_at=pass_started_at,
-        trace_label=f"{trace_label or 'notes_format_' + sheet}_after_recopy", on_phase=on_phase,
-    )
+    try:
+        final = await _run_notes_formatter_impl(
+            run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet, model=model,
+            output_dir=output_dir, usage=usage, style_sources=None, rows=sorted(rebuilt),
+            pass_started_at=pass_started_at,
+            trace_label=f"{trace_label or 'notes_format_' + sheet}_after_recopy", on_phase=on_phase,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — the first pass and re-copy are already saved
+        # Keep their changed-row counts and receipts; only the rebuilt rows
+        # stay unresolved.
+        logger.warning("Formatting re-copied notes failed run=%s sheet=%s", run_id, sheet,
+                       exc_info=True)
+        final = {"ok": False, "changed_rows": 0,
+                 "error": f"Formatting the re-copied note failed: {type(exc).__name__}: {exc}"}
     errors = {int(row): error for row, error in (outcome.get("row_errors") or {}).items()
               if int(row) not in rebuilt}
     errors.update({int(row): error for row, error in (final.get("row_errors") or {}).items()})
@@ -783,6 +793,13 @@ async def _run_notes_formatter_impl(
         for row, html in sorted(applied.rows.items()):
             live = live_cells.get(row)
             launch = cells_by_row[row]
+            # Re-check ownership under the write lock: a person may have saved
+            # this note (even with identical HTML) after launch, and the HTML
+            # compare-and-swap alone would then strip their ownership.
+            if live is not None and live.style_source == "human":
+                person_edited.append(row)
+                row_errors.pop(row, None)
+                continue
             if (live is None or live.html != rows_for_patch[row]
                 or live.source_pages != launch.source_pages
                 or live.source_generation_id != launch.source_generation_id):
@@ -846,7 +863,7 @@ async def _run_notes_formatter_impl(
            if row_errors else {}),
         "changed_rows": written,
         "skipped_rows": skipped_rows,
-        **({"person_edited_rows": person_edited} if person_edited else {}),
+        **({"person_edited_rows": sorted(person_edited)} if person_edited else {}),
         "patch": patch, "layouts": {str(row): note for row, note in sorted(layouts_by_row.items())},
         "before_text_hash": applied.before_text_hash,
         "after_text_hash": applied.after_text_hash,

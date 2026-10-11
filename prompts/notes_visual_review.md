@@ -60,7 +60,7 @@ single canonical rule or a missing/misplaced canonical double rule does not
 capture source double intent, even if its prepared output looks identical.
 Canonical intent alone cannot excuse a missing, misplaced or degraded prepared
 edge. Match representations by row label and amounts, accounting for merged
-cells expanded to empty continuation cells in prepared output. 
+cells expanded to empty continuation cells in prepared output.
 You report findings only. You cannot rewrite content, table structure, geometry
 or note placement. This check does not certify native Word or mTool rendering.
 
