@@ -752,6 +752,8 @@ _AMOUNT_CELL_RE = re.compile(r"^\(?\s*-?\s*[\d,]+(?:\.\d+)?\s*\)?$|^[-—–]+$"
 # Bound model-authored geometry before allocating occupied columns. The same
 # ceiling applies to spans and cumulative row width, including carried cells.
 _MAX_TABLE_SPAN = 1000
+# A header cell ending in a currency or unit names an amount column.
+_UNIT_CAPTION_RE = re.compile(r"(?:^|\s)(?:RM|USD|SGD|US\$|\$|%|RM\s?million|(?:RM)?['’]000)$")
 
 
 
@@ -858,10 +860,20 @@ def _table_shape_issues(html: str, *, allow_blank_label_rows: bool = False) -> l
                 blank_label_row = (allow_blank_label_rows and bool(texts[0])
                                    and not any(texts[1:]))
                 heading_line = (len(cells) == 1 or blank_label_row) and not _AMOUNT_CELL_RE.match(label)
-                rows.append((heading_line, len(occupied), label[:60]))
-        width = max((columns for _, columns, _ in rows), default=0)
-        for heading_line, columns, label in rows:
-            if width > 1 and not heading_line and columns != width:
+                # A lone header naming a currency/unit is an amount-column
+                # caption, not a section heading; it must sit over its column.
+                caption = (heading_line and all(cell.name == "th" for cell in cells)
+                           and bool(_UNIT_CAPTION_RE.search(" ".join(texts))))
+                rows.append((heading_line, len(occupied), label[:60], caption))
+        width = max((columns for _, columns, _, _ in rows), default=0)
+        for heading_line, columns, label, caption in rows:
+            if width > 1 and caption and columns != width:
+                issues.append(
+                    f"Table {table_number}: column heading '{label}' occupies {columns} of {width} "
+                    "columns and sits over the description. Place it above its amount column with "
+                    "empty leading header cells or a colspan matching the source."
+                )
+            elif width > 1 and not heading_line and columns != width:
                 issues.append(
                     f"Table {table_number}: row '{label}' occupies {columns} columns but the table has "
                     f"{width}; place each amount under its source column heading."

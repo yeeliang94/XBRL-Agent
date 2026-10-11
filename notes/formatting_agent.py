@@ -34,6 +34,7 @@ from notes.format_patch import (
 )
 from notes.format_schema import SheetFormatPatch, patch_to_dict
 from notes.format_verify import table_rows as _direct_table_rows
+from notes.rule_map import rule_map_text
 from notes.table_theme import firm_theme, resolve_run_theme
 from model_settings import build_model_settings, describe_model_runtime
 
@@ -510,9 +511,8 @@ async def _run_notes_formatter_impl(
     # Handoff item 2: hand the agent the deterministic mTool size verdicts
     # (lite / flat / oversize) for this sheet, computed with the run's
     # resolved theme, so its judgement targets the right remedy per flag.
-    size_signals = collect_size_signals(
-        cells, _resolve_notes_table_theme(db_path, run_id),
-    )
+    output_theme = _resolve_notes_table_theme(db_path, run_id)
+    size_signals = collect_size_signals(cells, output_theme)
     agent, deps = create_notes_formatter_agent(
         run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet, model=model,
     )
@@ -528,6 +528,7 @@ async def _run_notes_formatter_impl(
     prompt = _build_user_prompt(
         sheet, cells, page_set, size_signals,
         source_pages_attached=pages_attached,
+        appearance=output_theme,
     )
     initial_prompt: Any = [prompt, *source_content] if pages_attached else prompt
     if deps is not None:
@@ -883,6 +884,7 @@ def _build_user_prompt(
     size_signals: Optional[list[dict[str, Any]]] = None,
     *,
     source_pages_attached: bool = False,
+    appearance: Optional[dict[str, Any]] = None,
 ) -> str:
     compact_rows = []
     for c in cells:
@@ -890,6 +892,8 @@ def _build_user_prompt(
         compact_rows.append({
             "row": c.row, "label": c.label, "html": c.html,
             "evidence": c.evidence, "source_pages": c.source_pages,
+            # One entry per physical line; the raw HTML stores each twice.
+            "current_rules": rule_map_text(c.html),
             # Give the first turn the same closed coordinate catalog a repair
             # would receive. This prevents the common one-cell-row/column-2
             # mistake without duplicating the full derived geometry beside
@@ -907,6 +911,7 @@ def _build_user_prompt(
         f"Format sheet {sheet!r}. {source_instruction} Then return one JSON "
         "patch for this sheet only."
         f"{_size_signals_block(size_signals or [])}\n\n"
+        "RESOLVED OUTPUT APPEARANCE: " + json.dumps(appearance or firm_theme()) + "\n"
         "Use only coordinates present in each row's allowed_targets catalog. "
         f"CURRENT CELLS:\n{json.dumps(compact_rows, ensure_ascii=False)}"
     )

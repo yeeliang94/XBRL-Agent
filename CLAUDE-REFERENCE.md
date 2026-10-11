@@ -1420,6 +1420,13 @@ Key invariants:
     and sides retained. Missing or misplaced intent and degraded output still
     fail; the substitution alone does not. The evidence boundary is pinned by
     `tests/test_notes_visual_review.py::test_review_can_distinguish_double_intent_after_transport_normalization`.
+    Formatter and reviewer read lines from `notes/rule_map.py`: one entry per
+    physical horizontal line, resolved from both cells by the border-collapse
+    winner and named by the row it sits below (runs 347-349 read mirrored edges
+    as two rules). Single-rule thickness is not reproduced or judged; every
+    single rule is 0.75px. Both prompts receive the resolved appearance (house
+    default borderless, no fill). `numeric_cells` skips the description column.
+    Pinned by `tests/test_notes_rule_map.py` and `tests/test_notes_format_patch.py`.
     Partial saves retain
     `ok=false`, `validation_failed` or `visual_review_failed`, `failed_rows`, and per-row errors, alongside
     the actual `changed_rows`. Snapshots include only saved rows. The review
@@ -3170,7 +3177,9 @@ row whose occupied column count differs from its table
 exempt; a label followed only by blank cells is also exempt when the
 complete independent assessment and table relationships confirm source
 agreement without uncertainties. Missing evidence or a demonstrated mismatch
-keeps that row subject to repair. A lone amount or dash is never exempt),
+keeps that row subject to repair. A lone amount or dash is never exempt, nor
+is a lone header cell ending in a currency/unit caption such as RM or RM'000:
+that is an amount-column heading captured over the description column),
 overrides a positive Boolean verdict and triggers focused repair.
 Malformed row nesting, including an empty row wrapping further rows, also
 triggers repair even when all amounts and column counts survive. Unrepaired
