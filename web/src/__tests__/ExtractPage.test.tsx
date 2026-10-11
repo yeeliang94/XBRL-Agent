@@ -515,6 +515,8 @@ describe("ExtractPage — render-gate regression guards", () => {
       formatterEvent("status", 2, { sub_agent_id: "Notes-Issuedcapital", phase: "started", message: "Formatting started" }),
       formatterEvent("status", 3, { sub_agent_id: "notes_format_Notes-Listofnotes_part1", phase: "started", message: "Formatting started" }),
       formatterEvent("status", 4, { sub_agent_id: "notes_format_Notes-Listofnotes_part1", phase: "working", message: "Checking formatted notes against the source PDF…" }),
+      formatterEvent("tool_call", 4.5, { sub_agent_id: "Notes-Issuedcapital", tool_name: "zoom_pdf_region",
+        tool_call_id: "Notes-Issuedcapital:tool1", args: { page: 12, region: "bottom-half" } }),
       formatterEvent("status", 5, { sub_agent_id: "Notes-Issuedcapital", phase: "failed", message: "Visual reviewer did not complete a valid assessment." }),
     ]) state = appReducer(state, action);
     render(<ExtractPage {...makeProps({ state })} />);
@@ -527,6 +529,7 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(updates().getByText("List of Notes · part 1: Checking formatted notes against the source PDF…")).toBeVisible();
     fireEvent.click(subTabs.getByRole("tab", { name: "Issued Capital · Failed" }));
     expect(updates().getByText("Visual reviewer did not complete a valid assessment.")).toBeVisible();
+    expect(updates().getByText("Zooming into source page 12 (bottom half).")).toBeVisible();
     expect(updates().queryByText(/Checking formatted notes/)).toBeNull();
   });
 

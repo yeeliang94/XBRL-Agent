@@ -7862,18 +7862,14 @@ async def run_multi_agent_stream(
                     message="Preparing note formatting.",
                 )
 
-                def _emit_formatter_event(event_type: str, data: dict) -> None:
-                    # One live tab for every formatter sub-agent; each event
-                    # carries its sub_agent_id. The formatter saves these
-                    # events on its own run_agents rows, so persist_event
-                    # (no mapping for this id) does not store them twice.
-                    from agent_runner import build_agent_event
-                    try:
-                        event_queue.put_nowait(build_agent_event(
-                            event_type, "notes-formatting", "NOTES_FORMATTING", data,
-                        ))
-                    except asyncio.QueueFull:
-                        logger.warning("event_queue full; formatter %s dropped", event_type)
+                # One live tab for every formatter sub-agent; each event
+                # carries its sub_agent_id. The formatter saves these events
+                # on its own run_agents rows, so persist_event (no mapping
+                # for this id) does not store them twice.
+                from notes.formatter_activity import queue_event_sink
+                _emit_formatter_event = queue_event_sink(
+                    event_queue, "notes-formatting", "NOTES_FORMATTING",
+                )
                 _format_model_name = _notes_formatter_model_name() or model_name
 
                 async def _auto_format_pdf_notes():
