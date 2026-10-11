@@ -157,7 +157,20 @@ test("distinguishes captured pages from page checks and can start a historical p
   await waitFor(() => expect(request).toHaveBeenCalledWith("/api/preparation/one", { method: "POST" }));
 });
 
-test("moves the workflow to an explicit setup-confirmation checkpoint", async () => {
+test("lists each new progress message in Live activity, newest first, while preparation runs", async () => {
+  vi.useFakeTimers();
+  request.mockResolvedValueOnce({ ...base, message: "Reading pages" })
+    .mockResolvedValueOnce({ ...base, message: "Reading pages" })
+    .mockResolvedValue({ ...base, captured: 20, message: "Checking page 12" });
+  render(<DocumentPreparation sessionId="one" />);
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+  const activity = screen.getByRole("list", { name: "Live activity" });
+  expect(Array.from(activity.querySelectorAll("li"), (item) => item.textContent)).toEqual(["Checking page 12", "Reading pages"]);
+  expect(screen.getByTestId("preparation-page-strip")).toBeInTheDocument();
+});
+
+test("hands off to setup: the track asks for confirmation and the preparation record folds away", async () => {
   request.mockResolvedValue({
     ...base,
     status: "succeeded",
@@ -170,8 +183,13 @@ test("moves the workflow to an explicit setup-confirmation checkpoint", async ()
     message: "Document prepared and notes inventory ready",
   });
   render(<DocumentPreparation sessionId="one" />);
-  expect(await screen.findByText(/Review the detected filing details, then confirm setup/)).toBeInTheDocument();
-  expect(screen.getByText("Confirm detected setup").closest("li")).toHaveTextContent("Action required");
-  expect(screen.getByTestId("step-action")).toBeInTheDocument();
+  expect(await screen.findByTestId("step-action")).toBeInTheDocument();
+  // Setup itself is the next view, so preparation shows no confirm step or prompt.
+  expect(screen.queryByText("Confirm detected setup")).toBeNull();
+  expect(screen.queryByText(/review the detected filing details/i)).toBeNull();
+  expect(screen.getByRole("button", { name: "Preparation details" })).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByLabelText("Document preparation steps")).not.toBeVisible();
+  expect(screen.queryByRole("list", { name: "Live activity" })).toBeNull();
+  expect(screen.queryByTestId("preparation-page-strip")).toBeNull();
   expect(screen.queryByRole("button", { name: "Stop preparation" })).toBeNull();
 });
