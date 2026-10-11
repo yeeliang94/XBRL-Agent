@@ -172,6 +172,13 @@ async def recopy_tables(*, run_id: int, db_path: str, pdf_path: str, sheet: str,
             except (RecopyRefused, PreparationError, ValueError) as exc:
                 message = f"Table {table} could not be re-copied: {exc}"
                 errors[row] = f"{errors[row]}; {message}" if row in errors else message
+            except Exception as exc:  # noqa: BLE001 — a provider failure stays on this row
+                # Earlier tables may already be committed; escaping here would
+                # discard their rebuilt rows and the formatter's saved outcome.
+                logger.warning("Table re-copy failed run=%s sheet=%s row=%s table=%s",
+                               run_id, sheet, row, table, exc_info=True)
+                message = f"Table {table} could not be re-copied: {type(exc).__name__}: {exc}"
+                errors[row] = f"{errors[row]}; {message}" if row in errors else message
     return {"rebuilt_rows": sorted(rebuilt), "errors": errors, "corrected": corrected, "usage": tokens}
 
 

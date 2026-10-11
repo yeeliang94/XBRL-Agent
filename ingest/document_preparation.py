@@ -1771,6 +1771,23 @@ def record_table_correction(metadata_path: str | Path, *, block_id: str, table_h
     correction must live here too, with its hashes kept valid.
     """
     path = Path(metadata_path)
+    # Two sheets can correct tables of one upload at once. Hold the document's
+    # lock across the whole read-modify-write so neither save drops the other.
+    with _correction_lock(path):
+        _record_table_correction(path, block_id=block_id, table_html=table_html, record=record)
+
+
+_CORRECTION_LOCKS: dict[str, threading.Lock] = {}
+_CORRECTION_LOCKS_GUARD = threading.Lock()
+
+
+def _correction_lock(path: Path) -> threading.Lock:
+    key = str(path.resolve())
+    with _CORRECTION_LOCKS_GUARD:
+        return _CORRECTION_LOCKS.setdefault(key, threading.Lock())
+
+
+def _record_table_correction(path: Path, *, block_id: str, table_html: str, record: dict) -> None:
     data = json.loads(path.read_text(encoding="utf-8"))
     block = next((b for b in data["blocks"] if b["block_id"] == block_id), None)
     if block is None:

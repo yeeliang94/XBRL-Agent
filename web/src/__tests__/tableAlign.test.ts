@@ -163,4 +163,3 @@ describe("heading cells below the heading rows", () => {
     );
   });
 });
-

@@ -1202,6 +1202,66 @@ async def test_structure_finding_is_recopied_then_reformatted(monkeypatch, forma
         assert "could not be re-copied" in result["row_errors"][112]
 
 
+@pytest.mark.asyncio
+async def test_failed_reformat_after_recopy_keeps_saved_rows_and_receipts(monkeypatch, formatter_db):
+    """A provider error after the re-copy must not discard the first pass's
+    saved rows; only the re-copied row stays unresolved."""
+    import notes.table_recopy as tr
+    from db import repository as repo
+    db_path, _, run_id = formatter_db
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113, label="Other",
+                               html=_TABLE_HTML, source_pages=[3])
+
+    async def check(**kwargs):
+        return {112: "Total captured as heading cells."}, {"tables": [
+            {"row": 112, "table": 0, "status": "unresolved", "issue_kind": "structure",
+             "reason": "Total captured as heading cells."}]}
+
+    async def recopy(**_kwargs):
+        return {"rebuilt_rows": [112], "errors": {}, "corrected": [{"row": 112}],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0}}
+
+    monkeypatch.setattr(tr, "recopy_tables", recopy)
+
+    class _Down(_FakeAgent):
+        async def run(self, prompt, **kwargs):
+            if self.calls:
+                raise RuntimeError("provider unavailable")
+            return await super().run(prompt, **kwargs)
+
+    fake = _Down([_layout(_note(), _note(113))])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
+    assert not result["ok"] and result["changed_rows"] == 1
+    assert list(result["verified_rows"]) == ["113"]
+    assert result["failed_rows"] == [112] and "provider unavailable" in result["row_errors"][112]
+    with repo.db_session(db_path) as conn:
+        rows = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
+    assert rows[113].style_source == "formatter"
+
+
+@pytest.mark.asyncio
+async def test_person_save_during_formatting_keeps_ownership(monkeypatch, formatter_db):
+    """A person saving identical HTML mid-pass still owns the note: the final
+    write re-checks ownership, not only the HTML."""
+    from db import repository as repo
+    db_path, _, run_id = formatter_db
+
+    def person_saves(_call):
+        with repo.db_session(db_path) as conn:
+            repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=112,
+                                   label="Disclosure of other notes", html=_TABLE_HTML,
+                                   source_pages=[3], style_source="human")
+
+    fake = _FakeAgent([_layout(_note())], on_call=person_saves)
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert result["changed_rows"] == 0 and result["person_edited_rows"] == [112]
+    assert "112" not in result["verified_rows"]
+    with repo.db_session(db_path) as conn:
+        cell = repo.list_notes_cells_for_run(conn, run_id)[0]
+    assert cell.style_source == "human" and cell.html == _TABLE_HTML
+
+
 def test_partition_rejects_entire_note_including_duplicate_entries():
     from notes.formatting_agent import _partition_layout
 
