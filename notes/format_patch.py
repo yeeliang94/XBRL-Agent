@@ -456,10 +456,22 @@ def _looks_numeric(text: str) -> bool:
     return bool(re.fullmatch(r"\(?-?\d[\d,]*(?:\.\d+)?\)?", s))
 
 
+# Table-cell properties a layout owns on PDF tables. Preparation emits no
+# presentation styles and person-styled notes never reach the formatter, so
+# these can only be an earlier formatter decision that a new layout replaces.
+LAYOUT_OWNED_PREFIXES = ("border", "text-align", "background", "padding")
+
+
 def _apply_style(el: Tag, style: dict[str, Any]) -> None:
     current = _parse_style(el.get("style") or "")
     for key, value in style.items():
-        if key in STYLE_TO_CSS:
+        if key == "reset_formatting":
+            # Compiler-only (notes/table_layout.py); not in the AI schema.
+            if value is not True or el.name not in ("td", "th"):
+                raise FormatPatchError("reset_formatting applies only to table cells")
+            current = {k: v for k, v in current.items()
+                       if not k.startswith(LAYOUT_OWNED_PREFIXES)}
+        elif key in STYLE_TO_CSS:
             current[STYLE_TO_CSS[key]] = _border_value(value)
         elif key == "clear_border":
             sides = value if isinstance(value, list) else SIDES

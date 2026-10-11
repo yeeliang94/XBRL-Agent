@@ -42,6 +42,10 @@ describe("shouldRightAlignCell", () => {
   test("bare single-cell numeric row still right-aligns", () => {
     expect(shouldRightAlignCell("1,000", 0, 1)).toBe(true);
   });
+
+  test("full-width merged section label stays left", () => {
+    expect(shouldRightAlignCell("2024", 0, 1, 5)).toBe(false);
+  });
 });
 
 describe("tagNumericCells", () => {

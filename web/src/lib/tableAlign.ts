@@ -34,8 +34,9 @@ export function shouldRightAlignCell(
   text: string,
   index: number,
   cellsInRow: number,
+  colspan = 1,
 ): boolean {
-  if (index === 0 && cellsInRow > 1) return false;
+  if (index === 0 && (cellsInRow > 1 || colspan > 1)) return false;
   return isNumericCellText(text);
 }
 
@@ -67,7 +68,8 @@ export function shouldRightAlignTableCell(
   cells: Element[],
   amountCols: Set<number>,
 ): boolean {
-  if (shouldRightAlignCell(cell.textContent ?? "", index, cells.length)) return true;
+  const colspan = Number(cell.getAttribute("colspan")) || 1;
+  if (shouldRightAlignCell(cell.textContent ?? "", index, cells.length, colspan)) return true;
   if (index === 0 || !amountCols.has(index) || cells.some((item) =>
     item.hasAttribute("colspan") || item.hasAttribute("rowspan"))) return false;
   const row = cell.parentElement;

@@ -52,8 +52,11 @@ content, not a guarantee of pixel-exact native widths, borders or pagination.
   unstated edges must not receive a theme grid. Do not add this marker to an
   ordinary newly authored table merely to change its appearance. Prose remains
   style-free on the extraction path.
-- The dedicated formatter may apply validated style-only patches. It must not
-  change text, numbers, table geometry, section boundaries, structure or placement. Use the established
+- The dedicated formatter describes each table's structure (column roles, row
+  roles, lines); code validates that against the live table and compiles it
+  into style-only formatting. It must not change text, numbers, table geometry,
+  section boundaries, structure or placement. Notes a person edited are never
+  reformatted. Use the established
   formatter/editor controls rather than embedding formatting instructions in prose.
 
 Minimal synthetic content example (replace facts and structured identity with

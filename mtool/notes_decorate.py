@@ -34,11 +34,13 @@ def is_numeric_cell_text(text: str) -> bool:
     return bool(_NUMERIC_CELL_RE.match(text.strip()))
 
 
-def should_right_align_cell(text: str, index: int, cells_in_row: int) -> bool:
+def should_right_align_cell(text: str, index: int, cells_in_row: int,
+                            colspan: int = 1) -> bool:
     """Right-align accountant-numeric cells EXCEPT the first cell of a
     multi-column row (the row-label column stays left even if it reads like a
-    number, e.g. a "2024" period label). Mirrors tableAlign.ts."""
-    if index == 0 and cells_in_row > 1:
+    number, e.g. a "2024" period label). A first cell spanning several columns
+    is a section label too (a full-width "2024" row). Mirrors tableAlign.ts."""
+    if index == 0 and (cells_in_row > 1 or colspan > 1):
         return False
     return is_numeric_cell_text(text)
 
@@ -975,7 +977,8 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         totals_row = (style.totals_double_underline and not row_source_styled
                       and _is_totals_row(row))
         for idx, cell in enumerate(cells):
-            numeric = (should_right_align_cell(cell.get_text(), idx, len(cells))
+            numeric = (should_right_align_cell(cell.get_text(), idx, len(cells),
+                                               _span(cell, "colspan"))
                        or (header_row and not has_spans and idx > 0
                            and idx in amount_cols))
             align = " text-align: right;" if numeric else " text-align: left;"

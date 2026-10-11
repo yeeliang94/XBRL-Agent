@@ -57,6 +57,16 @@ def create_visual_review_agent(*, run_id, db_path, pdf_path, sheet, model):
     )
 
 
+def _layout_text(note: dict | None) -> str:
+    from notes.table_layout import TableLayout, describe_layouts
+    if not note:
+        return "none"
+    try:
+        return "\n" + describe_layouts([TableLayout.model_validate(t) for t in note.get("tables") or []])
+    except ValueError:
+        return "unavailable"
+
+
 def _add_error(errors: dict[int, str], row: int, finding: str) -> None:
     previous = errors.get(row)
     errors[row] = f"{previous}; {finding}" if previous else finding
@@ -136,7 +146,8 @@ def retain_other_verification_receipts(previous: dict, current: dict, *, active_
 
 
 async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
-                            sheet, model, usage, limits, output_dir, trace_label):
+                            sheet, model, usage, limits, output_dir, trace_label,
+                            layouts=None):
     """A fresh context on every check; no formatter conversation is evidence."""
     from notes.formatting_agent import _preload_source_pages, _table_geometry
 
@@ -156,6 +167,8 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
                 + f"\nPREPARATION TIER: {identity.get('tier', 'unknown')}"
                 + "\nRULE MAP (one entry per physical line, resolved from both cells):\n"
                 + rule_map_text(rows[row])
+                + "\nFORMATTER LAYOUT (its description of the source; context only, "
+                "judge the actual HTML): " + _layout_text((layouts or {}).get(row))
                 + "\nCANONICAL CANDIDATE HTML:\n" + rows[row]
                 + "\nPREPARED OUTPUT HTML:\n" + prepared
             )
@@ -244,9 +257,19 @@ async def review_and_correct_rows(
     pdf_path: str, sheet: str, model, usage: RunUsage,
     formatter_run: Callable[[Any], Awaitable[Any]], output_dir: str,
     trace_label: str, on_phase: Callable[[str], None] | None = None,
+    originals: dict[int, str] | None = None, layouts: dict[int, dict] | None = None,
+    cell_padding: tuple[int, int] = (3, 3),
 ) -> tuple[dict[int, str], dict, dict[int, str]]:
-    """Keep passed rows when a later correction or check cannot finish."""
-    from notes.formatting_agent import _output_json, _partition_valid_patch, _screen_patch, _table_geometry, _allowed_targets_from_geometry
+    """Keep passed rows when a later correction or check cannot finish.
+
+    ``originals`` is the HTML each row had when the pass started. A correction
+    layout compiles onto it, so it fully replaces the earlier candidate.
+    ``layouts`` (the accepted layout per row) is reviewer context only.
+    """
+    from notes.formatting_agent import _output_json, _partition_layout, _screen_patch
+    from notes.table_layout import layout_manifest
+    originals = originals if originals is not None else rows
+    layouts = layouts if layouts is not None else {}
 
     review_usage = RunUsage()
     review_limits = UsageLimits(request_limit=MAX_VISUAL_REVIEW_REQUESTS)
@@ -263,7 +286,7 @@ async def review_and_correct_rows(
             rows=candidate_rows, cells=cells, style=style,
             run_id=run_id, db_path=db_path, pdf_path=pdf_path,
             sheet=sheet, model=model, usage=review_usage, limits=review_limits,
-            output_dir=output_dir, trace_label=trace_label + suffix,
+            output_dir=output_dir, trace_label=trace_label + suffix, layouts=layouts,
         )
 
     try:
@@ -278,30 +301,37 @@ async def review_and_correct_rows(
         failed_current = {row: rows[row] for row in correctable}
         try:
             correction = await formatter_run(
-                "VISUAL REVIEW FAILED. Return a style-only SheetFormatPatch for only these rows. "
-                "Correct the reported edges against the source PDF; do not change text or geometry. "
-                "Coordinates refer to the current candidate HTML below. Match each edge to its row label "
-                "and both amount cells; do not infer row numbers from the source image. Findings: "
+                "VISUAL REVIEW FAILED. Return a SheetLayout for only these rows. Each row's "
+                "layout REPLACES its previous layout entirely, so describe every table again "
+                "with the findings corrected against the source PDF. Text and geometry cannot "
+                "change. Findings: "
                 + json.dumps({row: errors[row] for row in correctable})
-                + "\nCOORDINATE MANIFEST: " + json.dumps({row: {
-                    "geometry": _table_geometry(html),
-                    "allowed_targets": _allowed_targets_from_geometry(_table_geometry(html)),
-                } for row, html in failed_current.items()})
-                + "\nCURRENT CANDIDATES: " + json.dumps(failed_current),
+                + "\nPREVIOUS LAYOUTS: " + json.dumps({row: layouts.get(row) for row in correctable})
+                + "\nLAYOUT COORDINATES: " + json.dumps({row: layout_manifest(originals[row])
+                                                       for row in correctable}),
             )
             correction_error, screened, _ = _screen_patch(_output_json(correction.output), sheet, revised=True)
             if correction_error is not None:
                 raise FormatPatchError(correction_error["error"])
-            if any(cell.get("row") not in failed_current for cell in screened.patch["cells"]):
+            if any(note.get("row") not in failed_current for note in screened.patch.get("notes") or []
+                   if isinstance(note, dict)):
                 raise FormatPatchError("Visual correction targeted an unreviewed row")
-            safe, _, correction_errors = _partition_valid_patch(failed_current, screened.patch)
+            base = {row: originals[row] for row in correctable}
+            safe, _, correction_errors = _partition_layout(base, screened.patch, cell_padding)
             for row, error in correction_errors.items():
                 logger.warning("Visual correction rejected run=%s sheet=%s row=%s error=%s",
                                run_id, sheet, row, error)
+            corrected_ok = {cell["row"] for cell in safe["cells"]}
+            for note in screened.patch.get("notes") or []:
+                if isinstance(note, dict) and note.get("row") in corrected_ok:
+                    layouts[note["row"]] = note
             review["correction_patch"] = safe
-            corrected = apply_sheet_patch(failed_current, safe)
+            # Rows the correction did not cover keep their reviewed candidate.
+            corrected_rows = apply_sheet_patch(base, safe).rows
+            corrected = {row: corrected_rows[row] if row in corrected_ok else failed_current[row]
+                         for row in correctable}
             phase("Rechecking corrected notes against the source PDF…")
-            remaining, recheck = await check(corrected.rows, "_visual_recheck")
+            remaining, recheck = await check(corrected, "_visual_recheck")
             review["recheck"] = recheck
             # Keep initial findings in review history; current errors describe
             # only the candidate that was actually rechecked.
@@ -314,7 +344,7 @@ async def review_and_correct_rows(
                         _add_error(errors, row, correction_errors[row])
                 else:
                     errors.pop(row, None)
-            return errors, review, {row: html for row, html in corrected.rows.items() if row not in errors}
+            return errors, review, {row: html for row, html in corrected.items() if row not in errors}
         except UsageLimitExceeded:
             logger.warning("Visual correction exhausted formatter budget run=%s sheet=%s", run_id, sheet)
             review["correction_error"] = "Formatting correction reached its request budget."

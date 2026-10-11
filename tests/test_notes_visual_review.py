@@ -50,6 +50,20 @@ async def test_prepared_output_is_given_to_fresh_reviewer(review_harness):
 
 
 @pytest.mark.asyncio
+async def test_formatter_layout_is_context_beside_the_actual_output(review_harness):
+    kwargs, _, harness = review_harness
+    layout = {"row": 112, "tables": [{"table": 0, "columns": ["label", "amount"],
+                                      "lines": [{"after_row": 1, "from_col": 2, "to_col": 2}]}]}
+    await vr.check_visual_rows(**kwargs, layouts={112: layout})
+    content = next(part for part in harness.calls[0][0]
+                   if isinstance(part, str) and "FORMATTED NOTE ROW 112" in part)
+    assert "columns 1=label, 2=amount" in content
+    assert "single line below row 1, columns 2-2" in content
+    # The real candidate and prepared output stay the evidence.
+    assert "CANONICAL CANDIDATE HTML:" in content and "PREPARED OUTPUT HTML:" in content
+
+
+@pytest.mark.asyncio
 async def test_review_can_distinguish_double_intent_after_transport_normalization(review_harness, monkeypatch):
     from bs4 import BeautifulSoup
 
