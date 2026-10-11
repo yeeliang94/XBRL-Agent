@@ -1181,8 +1181,12 @@ def log_event(
     event_type: str,
     payload: dict[str, Any] | None = None,
     phase: str | None = None,
+    ts: str | None = None,
 ) -> int:
-    """Append one SSE-equivalent event with a bounded JSON payload."""
+    """Append one SSE-equivalent event with a bounded JSON payload.
+
+    ``ts`` is when the event happened, for callers that save events after
+    the fact; it defaults to now."""
     serialized = json.dumps(payload or {})
     encoded_len = len(serialized.encode("utf-8"))
     if encoded_len > _MAX_AGENT_EVENT_PAYLOAD_BYTES:
@@ -1194,7 +1198,7 @@ def log_event(
     cur = conn.execute(
         "INSERT INTO agent_events(run_agent_id, ts, event_type, phase, payload_json) "
         "VALUES (?, ?, ?, ?, ?)",
-        (run_agent_id, _now(), event_type, phase, serialized),
+        (run_agent_id, ts or _now(), event_type, phase, serialized),
     )
     return int(cur.lastrowid)
 

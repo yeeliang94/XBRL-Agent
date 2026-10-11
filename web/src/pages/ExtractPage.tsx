@@ -19,6 +19,7 @@ import { AgentWorkspace } from "../components/AgentWorkspace";
 import type { AgentTabState } from "../components/AgentTabs";
 import { ValidatorTab } from "../components/ValidatorTab";
 import { NotesSubTabBar } from "../components/NotesSubTabBar";
+import { FormatterSubAgentActivity } from "../components/FormatterSubAgentActivity";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { buildToolTimeline, filterEventsBySubAgent } from "../lib/buildToolTimeline";
 import { buildReasoningTimeline } from "../lib/buildReasoningTimeline";
@@ -865,6 +866,9 @@ export function ActiveTabPanel({
             </div>
           )}
         </div>
+        {state.activeTab === "notes-formatting" && state.agents["notes-formatting"] && (
+          <FormatterSubAgentActivity events={state.agents["notes-formatting"].events} status={formatting.status} />
+        )}
       </div>
     );
   }

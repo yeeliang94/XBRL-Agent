@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -188,6 +189,21 @@ class NotesFormatterDeps:
     model: Union[str, Model]
     viewed_pages: set[int] = field(default_factory=set)
     pdf_page_count: int = 0
+    # notes.formatter_activity.FormatterActivity for this pass, when reporting.
+    activity: Any = None
+
+
+def _report_tool(deps: NotesFormatterDeps, tool_name: str, args: dict):
+    """Start reporting one tool call; returns the finisher for its result."""
+    activity = deps.activity
+    if activity is None:
+        return lambda content: content
+    call_id = activity.tool_started(tool_name, args)
+
+    def finish(content):
+        activity.tool_finished(call_id, tool_name, content)
+        return content
+    return finish
 
 
 def create_notes_formatter_agent(
@@ -236,6 +252,12 @@ def _create_notes_style_agent(
         ctx: RunContext[NotesFormatterDeps], pages: list[int],
     ) -> list[Union[str, BinaryContent]]:
         """View specific source PDF pages as images."""
+        finish = _report_tool(ctx.deps, "view_pdf_pages", {"pages": pages})
+        return finish(_view_pdf_pages(ctx, pages))
+
+    def _view_pdf_pages(
+        ctx: RunContext[NotesFormatterDeps], pages: list[int],
+    ) -> list[Union[str, BinaryContent]]:
         ctx.deps.pdf_page_count = count_pdf_pages(ctx.deps.pdf_path)
         total = ctx.deps.pdf_page_count
         requested = [p for p in pages if isinstance(p, int)]
@@ -281,6 +303,12 @@ def _create_notes_style_agent(
         Thirds overlap slightly, so a table crossing a boundary is intact in
         at least one of them.
         """
+        finish = _report_tool(ctx.deps, "zoom_pdf_region", {"page": page, "region": region})
+        return finish(await _zoom_pdf_region(ctx, page, region))
+
+    async def _zoom_pdf_region(
+        ctx: RunContext[NotesFormatterDeps], page: int, region: str,
+    ) -> list[Union[str, BinaryContent]]:
         # Same tool the notes extraction agent has. The formatter is the one
         # role whose entire job is judging border extent and alignment, and
         # it was the only one without it (peer review, 2026-08-01).
@@ -388,6 +416,8 @@ async def run_notes_formatter(
     pass_started_at: Optional[str] = None,
     trace_label: Optional[str] = None,
     on_phase: Callable[[str], None] | None = None,
+    on_event: Callable[[str, dict], None] | None = None,
+    deadline: Optional[float] = None,
 ) -> dict[str, Any]:
     """Run the formatter pass and attach cross-pass token telemetry.
 
@@ -400,15 +430,33 @@ async def run_notes_formatter(
     separate usage after correction finishes, so totals include both roles
     without sharing their request allowances. Completed-response usage is saved
     to the shared ledger even when a later request fails or is cancelled.
+
+    Each pass reports its own activity (``notes/formatter_activity.py``):
+    live through ``on_event`` and saved on its ``run_agents`` row, keyed by
+    ``sub_agent_id`` = the row's variant.
+
+    ``deadline`` is the ``time.monotonic()`` at which the caller's
+    ``asyncio.wait_for`` expires. A cancellation at or after it is the time
+    limit, recorded as a failure; an earlier one is a deliberate stop.
     """
     from db import repository as repo
+    from notes.formatter_activity import FormatterActivity
     from usage_metrics import split_usage
     from pricing import estimate_cost
 
     usage = RunUsage()
     model_name = model if isinstance(model, str) else getattr(model, "model_name", "")
+    sub_agent_id = trace_label or sheet
     with repo.db_session(db_path) as conn:
-        agent_id = repo.create_run_agent(conn, run_id, "NOTES_FORMATTING", variant=trace_label or sheet, model=model_name)
+        agent_id = repo.create_run_agent(conn, run_id, "NOTES_FORMATTING", variant=sub_agent_id, model=model_name)
+    activity = FormatterActivity(sub_agent_id=sub_agent_id, sheet=sheet, on_event=on_event)
+    activity.status("started", "Formatting started")
+
+    def _phase(message: str) -> None:
+        activity.status("working", message)
+        if on_phase is not None:
+            on_phase(message)
+
     outcome = None
     status = "failed"
     try:
@@ -416,15 +464,26 @@ async def run_notes_formatter(
             run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
             model=model, output_dir=output_dir, usage=usage,
             style_sources=style_sources, rows=rows,
-            pass_started_at=pass_started_at, trace_label=trace_label, on_phase=on_phase,
+            pass_started_at=pass_started_at, trace_label=trace_label, on_phase=_phase,
+            activity=activity,
         )
         outcome.update(_usage_fields(usage))
         status = "completed" if outcome.get("ok") else "failed"
         return outcome
     except asyncio.CancelledError:
-        status = "cancelled"
+        if deadline is not None and time.monotonic() >= deadline:
+            outcome = {"error_type": "timeout", "error": "Formatting reached its time limit."}
+        else:
+            status = "cancelled"
         raise
     finally:
+        if status == "completed":
+            activity.status("completed", "Formatting finished")
+        elif status == "cancelled":
+            activity.status("cancelled", "Formatting stopped")
+        else:
+            activity.status("failed", (outcome or {}).get("error") or "Formatting did not finish")
+        activity.save(db_path, agent_id)
         # One aggregate ledger entry includes formatter and independent checker
         # requests. Task totals are diagnostic, not additional ledger entries.
         metrics = split_usage(usage)
@@ -462,6 +521,7 @@ async def _run_notes_formatter_impl(
     pass_started_at: Optional[str] = None,
     trace_label: Optional[str] = None,
     on_phase: Callable[[str], None] | None = None,
+    activity: Any = None,
 ) -> dict[str, Any]:
     if not pdf_path or not Path(pdf_path).exists():
         return {
@@ -516,6 +576,8 @@ async def _run_notes_formatter_impl(
     agent, deps = create_notes_formatter_agent(
         run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet, model=model,
     )
+    if deps is not None:
+        deps.activity = activity
     # The old prompt forced a tool-only first model turn before the model could
     # do any work. That re-billed the full CURRENT CELLS payload (and every
     # prior part) on the second request. Attach the known source pages to the
@@ -653,7 +715,7 @@ async def _run_notes_formatter_impl(
         run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
         model=model, usage=usage, formatter_run=_agent_run,
         output_dir=output_dir, trace_label=trace_label or f"notes_format_{sheet}",
-        on_phase=on_phase,
+        on_phase=on_phase, activity=activity,
     )
     for row, html in corrected_rows.items():
         applied.rows[row] = html

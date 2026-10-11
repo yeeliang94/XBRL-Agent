@@ -1,5 +1,6 @@
 import React from "react";
 import { pwc } from "./../lib/theme";
+import type { AgentTabStatus } from "./../lib/types";
 
 // Nested sub-tab bar for the Notes-12 content pane. Sheet 12 fans out to
 // 5 parallel sub-agents; this bar lets operators filter the timeline to
@@ -13,6 +14,9 @@ export interface NotesSubAgentRange {
   subAgentId: string;            // stable id, e.g. "notes:LIST_OF_NOTES:sub0"
   notes: [number, number] | null;       // inclusive note-number range
   pages: [number, number] | null;       // inclusive PDF page range
+  /** Named sub-agents (notes formatter) show this instead of "Sub N". */
+  label?: string;
+  status?: AgentTabStatus;
 }
 
 export interface NotesSubTabBarProps {
@@ -20,12 +24,14 @@ export interface NotesSubTabBarProps {
   /** null == the "All" view (coordinator events + every sub-agent) */
   activeSubId: string | null;
   onSelect: (subId: string | null) => void;
+  ariaLabel?: string;
 }
 
 export function NotesSubTabBar({
   subAgents,
   activeSubId,
   onSelect,
+  ariaLabel = "Sheet-12 sub-agents",
 }: NotesSubTabBarProps) {
   // Don't render an orphan "All" chip when there are no sub-agents yet —
   // the parent relies on `subAgents.length > 0` to gate this component,
@@ -34,7 +40,7 @@ export function NotesSubTabBar({
   if (subAgents.length === 0) return null;
 
   return (
-    <div role="tablist" aria-label="Sheet-12 sub-agents" style={styles.bar}>
+    <div role="tablist" aria-label={ariaLabel} style={styles.bar}>
       <button
         role="tab"
         type="button"
@@ -63,11 +69,13 @@ export function NotesSubTabBar({
             type="button"
             aria-selected={active}
             onClick={() => onSelect(s.subAgentId)}
-            title={`${noteRange}, ${pageRange}`}
+            title={s.label ?? `${noteRange}, ${pageRange}`}
             className="notes-subtab"
             style={chipStyle(active)}
           >
-            Sub {labelNum}{s.notes ? ` · ${noteRange}` : ""}
+            {s.label ?? `Sub ${labelNum}${s.notes ? ` · ${noteRange}` : ""}`}
+            {/* Only the exception is marked; running and finished chips stay plain. */}
+            {s.status === "failed" && <span style={styles.failed}> · Failed</span>}
           </button>
         );
       })}
@@ -103,4 +111,5 @@ const styles = {
     background: pwc.grey50,
     overflowX: "auto" as const,
   } as React.CSSProperties,
+  failed: { color: pwc.error } as React.CSSProperties,
 };
