@@ -83,9 +83,6 @@ def test_source_bold_is_never_removed():
     (TableLayout(table=0, columns=["label", "amount", "amount"],
                  lines=[LineSpec(after_row=3, from_col=1, to_col=3), LineSpec(after_row=3, from_col=3, to_col=3)]),
      "overlaps"),
-    (TableLayout(table=0, columns=["label", "amount", "amount"],
-                 lines=[LineSpec(after_row=1, from_col=2, to_col=3)]),
-     "cuts through a merged cell spanning columns 1-3"),
     (TableLayout(table=0, columns=["label", "amount", "amount"], lines=[LineSpec(after_row=6, from_col=1, to_col=1)]),
      "outside the table"),
 ])
@@ -112,8 +109,24 @@ def test_partial_line_beside_a_colspan_header():
                          lines=[LineSpec(after_row=1, from_col=2, to_col=3)])
     rules = table_rules(compile_layouts(html, [layout]))
     assert [(r["below_row"], r["cells"]) for r in rules] == [(1, [2])]
+    # Half the merged heading: drawn on the whole cell below instead.
     narrow = layout.model_copy(update={"lines": [LineSpec(after_row=1, from_col=2, to_col=2)]})
-    assert any("cuts through" in e for e in validate_layouts(html, [narrow]))
+    assert [r["cells"] for r in table_rules(compile_layouts(html, [narrow]))] == [[2]]
+
+
+def test_amount_underline_above_a_full_width_section_row():
+    # Live run 348 row 71: the subtotal underline sits above a merged "2024" row.
+    out = compile_layouts(ROLL, [TableLayout(table=0, columns=["label", "amount", "amount"],
+                                             lines=[LineSpec(after_row=1, from_col=2, to_col=3)])])
+    assert [(r["below_row"], r["cells"]) for r in table_rules(out)] == [(1, [2, 3])]
+
+
+def test_line_cutting_merged_cells_on_both_sides_is_refused():
+    html = ('<table><tr><td colspan="2">A</td><td>1</td></tr>'
+            '<tr><td>B</td><td colspan="2">2</td></tr></table>')
+    layout = TableLayout(table=0, columns=["label", "amount", "amount"],
+                         lines=[LineSpec(after_row=1, from_col=2, to_col=2)])
+    assert any("both sides" in e for e in validate_layouts(html, [layout]))
 
 
 def test_every_table_needs_one_layout_and_word_tables_need_none():
@@ -123,3 +136,19 @@ def test_every_table_needs_one_layout_and_word_tables_need_none():
     both = [one, one.model_copy(update={"table": 2})]
     assert validate_layouts(html, both) == []
     assert any("[0, 2]" in e for e in validate_layouts(html, [*both, one.model_copy(update={"table": 1})]))
+
+
+def test_lines_land_on_each_cell_even_when_amounts_are_equal():
+    # Live run 348 row 129: four equal amounts all resolved to the first cell.
+    html = ("<table><tr><td>Issued</td><td>2,077,740</td><td>2,077,740</td><td>2,077,740</td></tr>"
+            "<tr><td>Total</td><td>1</td><td>1</td><td>1</td></tr></table>")
+    layout = TableLayout(table=0, columns=["label", "amount", "amount", "amount"],
+                         lines=[LineSpec(after_row=1, from_col=c, to_col=c) for c in (2, 3, 4)])
+    assert table_rules(compile_layouts(html, [layout]))[0]["cells"] == [2, 3, 4]
+
+
+def test_boxed_grid_frame_draws_every_edge():
+    html = "<table><tr><td>Nature</td><td>Services</td></tr><tr><td>Terms</td><td>30 days</td></tr></table>"
+    out = compile_layouts(html, [TableLayout(table=0, columns=["label", "text"], frame="grid")])
+    assert out.count("border-left: 0.75px solid #000000") >= 4
+    assert [r["below_row"] for r in table_rules(out)] == [0, 1, 2]

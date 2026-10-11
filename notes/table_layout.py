@@ -61,6 +61,10 @@ class TableLayout(BaseModel):
     model_config = ConfigDict(extra="forbid")
     table: int = Field(ge=0, description="Zero-based table index in the note")
     columns: list[ColumnRole] = Field(description="One role per grid column, left to right")
+    frame: Literal["none", "grid"] = Field(
+        default="none",
+        description='"grid" only when the source boxes every cell with vertical and horizontal rules.',
+    )
     rows: list[RowSpec] = Field(default_factory=list, description="Only rows that are not plain items")
     lines: list[LineSpec] = Field(default_factory=list, description="Every source-visible horizontal line")
     overrides: list[CellOverride] = Field(default_factory=list)
@@ -100,32 +104,40 @@ def _table_errors(table: Tag, layout: TableLayout) -> list[str]:
                 errors.append(f"{label} overlaps another line on the same edge")
         by_boundary.setdefault(line.after_row, []).append(line)
         span = range(line.from_col - 1, line.to_col)
-        for col in span:
-            upper = grid.get((line.after_row - 1, col)) if line.after_row > 0 else None
-            lower = grid.get((line.after_row, col))
-            if upper is not None and upper is lower:
-                errors.append(f"{label} crosses a cell merged across rows at column {col + 1}")
-                break
-        else:
-            for col in span:
-                for cell in (grid.get((line.after_row - 1, col)) if line.after_row > 0 else None,
-                             grid.get((line.after_row, col))):
-                    if cell is None:
-                        continue
-                    cols = [c for _, c in positions[id(cell)]]
-                    if min(cols) < span.start or max(cols) >= span.stop:
-                        errors.append(f"{label} cuts through a merged cell spanning columns "
-                                      f"{min(cols) + 1}-{max(cols) + 1}; widen or narrow the line to whole cells")
-                        break
-                else:
-                    continue
-                break
+        if any(line.after_row > 0 and grid.get((line.after_row - 1, col)) is not None
+               and grid.get((line.after_row - 1, col)) is grid.get((line.after_row, col))
+               for col in span):
+            errors.append(f"{label} crosses a cell merged across rows")
+        elif _line_side(grid, positions, line) is None:
+            errors.append(f"{label} cuts through merged cells on both sides of the edge; "
+                          "widen or narrow it to whole cells on at least one side")
     for item in layout.overrides:
         cells = (rows[item.row - 1].find_all(["th", "td"], recursive=False)
                  if item.row <= n_rows else [])
         if item.cell > len(cells):
             errors.append(f"{name}: override targets row {item.row} cell {item.cell}, which does not exist")
     return errors
+
+
+def _line_side(grid, positions, line: "LineSpec") -> Optional[str]:
+    """Which side of the edge carries the line: the row above ("bottom") or
+    below ("top"). That side's cells must lie wholly inside the line's columns,
+    so the line is drawn exactly there; the other side may be a wider merged
+    cell (an amount underline above a full-width "2024" row)."""
+    span = range(line.from_col - 1, line.to_col)
+
+    def whole(row):
+        cells = [grid.get((row, col)) for col in span]
+        if any(cell is None for cell in cells):
+            return False
+        return all(min(c for _, c in positions[id(cell)]) >= span.start
+                   and max(c for _, c in positions[id(cell)]) < span.stop for cell in cells)
+
+    if line.after_row > 0 and whole(line.after_row - 1):
+        return "bottom"
+    if whole(line.after_row):
+        return "top"
+    return None
 
 
 def validate_layouts(html: str, layouts: list[TableLayout]) -> list[str]:
@@ -178,22 +190,27 @@ def _operations(table: Tag, layout: TableLayout, cell_padding: tuple[int, int]) 
                 style["padding"] = f"{v}px {h}px {v}px {h + 16 * spec.indent}px"
             if style:
                 cell_op(r, c, style)
+    if layout.frame == "grid":
+        edge = {"width": "0.75px", "style": "solid", "color": "#000000"}
+        ops.append({"target": {"table": layout.table, "range": "all"},
+                    "style": {f"border_{side}": edge for side in ("top", "right", "bottom", "left")}})
     for line in layout.lines:
         border = {"width": "0.75px", "style": "double" if line.kind == "double" else "solid",
                   "color": "#000000"}
+        side = _line_side(grid, positions, line)
+        row_index = line.after_row - 1 if side == "bottom" else line.after_row
         done = set()
         for col in range(line.from_col - 1, line.to_col):
-            # Write on the upper cell's bottom; the patch engine mirrors it to
-            # the cell below. Above row 1, or beside a short upper row, use the
-            # lower cell's top instead.
-            side, cell = "bottom", grid.get((line.after_row - 1, col)) if line.after_row else None
-            if cell is None:
-                side, cell = "top", grid.get((line.after_row, col))
-            if cell is None or id(cell) in done:
+            cell = grid[(row_index, col)]
+            if id(cell) in done:
                 continue
             done.add(id(cell))
             first_row = min(r for r, _ in positions[id(cell)])
-            direct = rows[first_row].find_all(["th", "td"], recursive=False).index(cell) + 1
+            # By identity: Tag equality compares content, and equal amounts
+            # ("2,077,740" in four columns) would all resolve to the first cell.
+            direct = next(i for i, other in enumerate(
+                rows[first_row].find_all(["th", "td"], recursive=False), 1) if other is cell)
+            # The patch engine mirrors the edge onto neighbours it fully covers.
             cell_op(first_row + 1, direct, {f"border_{side}": border})
     for item in layout.overrides:
         cell_op(item.row, item.cell, {"text_align": item.text_align})
@@ -236,7 +253,8 @@ def describe_layouts(layouts: list[TableLayout]) -> str:
     out = []
     for layout in sorted(layouts, key=lambda item: item.table):
         cols = ", ".join(f"{i}={role}" for i, role in enumerate(layout.columns, 1))
-        out.append(f"table {layout.table}: columns {cols}")
+        out.append(f"table {layout.table}: columns {cols}"
+                   + ("; boxed grid" if layout.frame == "grid" else ""))
         for spec in layout.rows:
             flags = [f for f, on in (("bold", spec.bold), ("shaded", spec.shaded)) if on]
             if spec.indent:

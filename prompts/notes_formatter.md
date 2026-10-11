@@ -44,6 +44,8 @@ cell over columns 2 and 3. Describe every listed table exactly once.
   Code right-aligns `amount` and `date` cells and keeps `label` and `text`
   cells left. A merged cell spanning a label column and amount columns stays
   left, so a full-width "2024" section row stays left.
+- `frame`: `grid` only when the source boxes every cell with vertical and
+  horizontal rules (a bordered text table); otherwise leave it `none`.
 - `rows`: list only rows that are not plain items. `role` is `heading`,
   `section`, `item`, `subtotal` or `total`. Set `bold: true` where the source
   shows the row's text in bold. Set `indent` (1–3) where the source indents
@@ -56,8 +58,8 @@ cell over columns 2 and 3. Describe every listed table exactly once.
   each line to its row by that row's label and both year amounts, never by
   its position in the scan. A subtotal line belongs below the last row it
   totals; a closing-balance underline belongs below the closing row.
-  A line must start and end on whole cells on both sides; it cannot cut a
-  merged cell or cross a cell merged across rows.
+  A line must start and end on whole cells on at least one side of the edge,
+  and cannot cross a cell merged across rows.
   Line thickness is not reproduced: a heavier source stroke is still `single`.
   Use `double` only for two separate strokes with a visible gap.
 - `overrides`: rare. Use one only when a single cell must not follow its
