@@ -41,6 +41,29 @@ describe("Documents workspace", () => {
       vi.useRealTimers();
     }
   });
+  test("History updates preparation stages for the same document without reloading unchanged polls", async () => {
+    let current = { ...runs[0] };
+    vi.mocked(fetchRuns).mockImplementation(async () => ({ runs: [current], total: 1, limit: 50, offset: 0 }));
+    const documents = { runs: [current], total: 1, error: null, loading: false, loadMore: vi.fn(), refresh: vi.fn() };
+    const props = { section: "history" as const, onOpen: vi.fn(), onSection: vi.fn(), onAdd: vi.fn() };
+    const view = render(<DocumentsPage documents={documents} {...props} />);
+    await screen.findByText("Mapping document");
+    const initialCalls = vi.mocked(fetchRuns).mock.calls.length;
+    view.rerender(<DocumentsPage documents={{ ...documents, runs: [{ ...current }] }} {...props} />);
+    expect(fetchRuns).toHaveBeenCalledTimes(initialCalls);
+    current = { ...current, preparation: { ...current.preparation!, phase: "reconciling_map" } };
+    view.rerender(<DocumentsPage documents={{ ...documents, runs: [current] }} {...props} />);
+    await screen.findByText("Checking document map");
+    current = { ...current, preparation: { ...current.preparation!, status: "succeeded", phase: "awaiting_confirmation" } };
+    view.rerender(<DocumentsPage documents={{ ...documents, runs: [current] }} {...props} />);
+    await screen.findByText("Confirm setup");
+    current = { ...current, preparation: { ...current.preparation!, status: "failed" } };
+    view.rerender(<DocumentsPage documents={{ ...documents, runs: [current] }} {...props} />);
+    await screen.findByText("Preparation failed");
+    current = { ...current, status: "running" };
+    view.rerender(<DocumentsPage documents={{ ...documents, runs: [current] }} {...props} />);
+    await screen.findByText("Working");
+  });
   test("confirms queue deletion, refreshes after success, and protects active work", async () => {
     vi.mocked(deleteRun).mockResolvedValue({ deleted: 2 });
     const refresh = vi.fn();
