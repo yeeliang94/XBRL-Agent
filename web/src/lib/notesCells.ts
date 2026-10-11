@@ -46,10 +46,11 @@ export interface NotesCell {
   sanitizer_warnings?: string[];
   // How this cell got its table styling (schema v29): "ops" = agent observed
   // it at extraction, "floor" = deterministic house style, "unstyled" = plain,
-  // "formatter" = the automatic or manual notes formatter styled it. null on blank
+  // "formatter" = the automatic or manual notes formatter styled it, "human" =
+  // a person saved it in the editor (the formatter never overwrites it). null on blank
   // rows / reviewer-authored / legacy runs. Read-only signal so the operator
   // can spot cells that want a formatter pass (only unstyled/floor get a chip).
-  style_source?: "ops" | "floor" | "unstyled" | "formatter" | null;
+  style_source?: "ops" | "floor" | "unstyled" | "formatter" | "human" | null;
   // Prose registry identity (full-template projection) — present on rows that
   // came from notes_nodes; null on off-template/legacy filled rows.
   node_uuid?: string | null;

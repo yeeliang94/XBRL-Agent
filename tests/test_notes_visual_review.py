@@ -50,6 +50,31 @@ async def test_prepared_output_is_given_to_fresh_reviewer(review_harness):
 
 
 @pytest.mark.asyncio
+async def test_a_structural_finding_is_never_a_pass(review_harness):
+    kwargs, decision, _ = review_harness
+    decision[0].update(status="pass", issue_kind="structure", reason="Total row is heading cells.")
+    errors, result = await vr.check_visual_rows(**kwargs)
+    assert errors[112] == "Table 0: Total row is heading cells."
+    assert result["tables"][0]["status"] == "unresolved"
+    assert vr.structure_findings({"failed_rows": [112], "visual_review": result}) == {
+        112: [(0, "Total row is heading cells.")]}
+
+
+@pytest.mark.asyncio
+async def test_formatter_layout_is_context_beside_the_actual_output(review_harness):
+    kwargs, _, harness = review_harness
+    layout = {"row": 112, "tables": [{"table": 0, "columns": ["label", "amount"],
+                                      "lines": [{"after_row": 1, "from_col": 2, "to_col": 2}]}]}
+    await vr.check_visual_rows(**kwargs, layouts={112: layout})
+    content = next(part for part in harness.calls[0][0]
+                   if isinstance(part, str) and "FORMATTED NOTE ROW 112" in part)
+    assert "columns 1=label, 2=amount" in content
+    assert "single line below row 1, columns 2-2" in content
+    # The real candidate and prepared output stay the evidence.
+    assert "CANONICAL CANDIDATE HTML:" in content and "PREPARED OUTPUT HTML:" in content
+
+
+@pytest.mark.asyncio
 async def test_review_can_distinguish_double_intent_after_transport_normalization(review_harness, monkeypatch):
     from bs4 import BeautifulSoup
 
