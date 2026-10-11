@@ -25,6 +25,9 @@ interface Props {
    *  appear in each dropdown. SOCIE on MPERS picks up SoRE; everything else
    *  is unchanged. */
   filingStandard?: FilingStandard;
+  /** When given, each row leads with its include checkbox, so choosing a
+   *  statement and its format happen on one row. */
+  onToggleStatement?: (statement: StatementType, enabled: boolean) => void;
 }
 
 
@@ -39,6 +42,14 @@ const styles = {
     alignItems: "center",
     gap: pwc.space.sm,
     minWidth: 0,
+  } as React.CSSProperties,
+  checkboxLabel: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+    width: 300,
+    flexShrink: 0,
+    cursor: "pointer",
   } as React.CSSProperties,
   label: {
     fontFamily: pwc.fontBody,
@@ -89,6 +100,7 @@ export function VariantSelector({
   enabledStatements,
   onChange,
   filingStandard = "mfrs",
+  onToggleStatement,
 }: Props) {
   const enabledSet = new Set(enabledStatements);
   return (
@@ -99,13 +111,27 @@ export function VariantSelector({
         const isEnabled = enabledSet.has(stmt);
         return (
           <div key={stmt} className="statement-format-row" style={styles.row}>
-            <span
-              className="statement-format-label"
-              style={isEnabled ? styles.label : styles.labelDisabled}
-              title={statementLabel(stmt, filingStandard)}
-            >
-              {statementLabel(stmt, filingStandard)}
-            </span>
+            {onToggleStatement ? (
+              <label className="statement-format-label" style={styles.checkboxLabel}>
+                <input
+                  type="checkbox"
+                  style={ui.checkbox}
+                  checked={isEnabled}
+                  onChange={(e) => onToggleStatement(stmt, e.target.checked)}
+                />
+                <span style={{ ...(isEnabled ? styles.label : styles.labelDisabled), width: "auto", flexShrink: 1 }}>
+                  {statementLabel(stmt, filingStandard)}
+                </span>
+              </label>
+            ) : (
+              <span
+                className="statement-format-label"
+                style={isEnabled ? styles.label : styles.labelDisabled}
+                title={statementLabel(stmt, filingStandard)}
+              >
+                {statementLabel(stmt, filingStandard)}
+              </span>
+            )}
             <select
               role="combobox"
               aria-label={`Format for ${stmt} — ${statementLabel(stmt, filingStandard)}`}

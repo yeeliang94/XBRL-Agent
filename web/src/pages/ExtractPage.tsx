@@ -28,6 +28,9 @@ import { runStatusDisplay } from "../lib/runStatus";
 import { StatusIcon } from "../components/StatusIcon";
 import { semanticActivities } from "../lib/semanticActivity";
 import { isCompletedWorkstream, workstreamStatusLabel } from "../lib/workstreamStatus";
+
+/** How long the prepared outcome shows before Filing setup opens. */
+const SETUP_HANDOFF_MS = 1200;
 import { notesFormattingActivity, notesCleanupActivity, notesIntegrityActivity } from "../lib/notesFormattingActivity";
 
 // Re-export so existing callers / tests that imported NOTES_12_AGENT_ID
@@ -125,6 +128,34 @@ export function ExtractPage({
   const acceptPreparation = useCallback((snapshot: PreparationSnapshot) => {
     if (state.sessionId) setPreparationState({ sessionId: state.sessionId, snapshot });
   }, [state.sessionId]);
+  // Filing setup is a separate view that opens only once preparation has
+  // succeeded. When that happens while the operator watches, the prepared
+  // outcome holds briefly before setup appears; a reopened draft opens at once.
+  const preparationSucceeded = preparation?.status === "succeeded";
+  const sawPreparationWork = useRef(false);
+  const [setupHandoff, setSetupHandoff] = useState(false);
+  useEffect(() => {
+    sawPreparationWork.current = false;
+    setSetupHandoff(false);
+  }, [state.sessionId]);
+  useEffect(() => {
+    if (!preparation) return;
+    if (preparation.status !== "succeeded") {
+      if (preparation.status === "queued" || preparation.status === "working" || preparation.status === "retrying") {
+        sawPreparationWork.current = true;
+      }
+      return;
+    }
+    if (!sawPreparationWork.current) return;
+    sawPreparationWork.current = false;
+    setSetupHandoff(true);
+  }, [preparation]);
+  // Owned by the hold itself, so a repeated snapshot cannot cancel the timer.
+  useEffect(() => {
+    if (!setupHandoff) return;
+    const timer = setTimeout(() => setSetupHandoff(false), SETUP_HANDOFF_MS);
+    return () => clearTimeout(timer);
+  }, [setupHandoff]);
   // Starting replaces a long setup form. Reset its scroll position once so
   // the operator sees the new progress heading rather than the old footer.
   const wasRunning = useRef(state.isRunning);
@@ -448,7 +479,8 @@ export function ExtractPage({
           initializers with the freshly-fetched draftConfig. Without this a
           back-then-forward between two drafts would leak the first one's
           state into the second's panel. */}
-      {state.sessionId && !state.isRunning && !state.isComplete && !state.hasError && (
+      {state.sessionId && !state.isRunning && !state.isComplete && !state.hasError && preparationSucceeded && !setupHandoff && (
+        <div className="pwc-view-enter">
         <PreRunPanel
           key={state.currentRunId ?? "fresh"}
           sessionId={state.sessionId}
@@ -460,6 +492,7 @@ export function ExtractPage({
           onConfigChange={handleConfigChange}
           isAdmin={isAdmin}
         />
+        </div>
       )}
 
       {/* One run-level surface replaces the former stack of progress, stage,

@@ -104,9 +104,9 @@ test("a response from an unmounted document cannot replace the new document", as
   const { rerender } = render(<DocumentPreparation key="old" sessionId="old" />);
   request.mockResolvedValue({ ...base, attempt_id: "new", message: "New document" });
   rerender(<DocumentPreparation key="new" sessionId="new" />);
-  expect(await screen.findByText("New document")).toBeInTheDocument();
+  expect(await screen.findByRole("status")).toHaveTextContent("New document");
   resolveOld({ ...base, status: "succeeded", phase: "awaiting_confirmation", action_required: "confirm_setup", message: "Old document" });
-  await waitFor(() => expect(screen.queryByText("Old document")).toBeNull());
+  await waitFor(() => expect(screen.getByRole("status")).not.toHaveTextContent("Old document"));
   expect(screen.queryByTestId("preparation-status")).not.toHaveTextContent("Complete");
 });
 
@@ -139,7 +139,7 @@ test("shows the unified document map in the existing preparation panel", async (
   request.mockResolvedValue({ ...base, prepared: true, stage: "scouting", phase: "building_map", checked: 30,
     message: "Building document map and notes inventory" });
   render(<DocumentPreparation sessionId="one" />);
-  expect(await screen.findByText("Building document map and notes inventory")).toBeInTheDocument();
+  expect(await screen.findByRole("status")).toHaveTextContent("Building document map and notes inventory");
   expect(screen.getByText("Document prepared. Document map and notes inventory are being built.")).toBeInTheDocument();
   expect(screen.getByText("Build document map").closest("li")).toHaveTextContent("Working");
   expect(screen.getAllByRole("region", { name: "Document preparation" })).toHaveLength(1);
@@ -157,7 +157,40 @@ test("distinguishes captured pages from page checks and can start a historical p
   await waitFor(() => expect(request).toHaveBeenCalledWith("/api/preparation/one", { method: "POST" }));
 });
 
-test("moves the workflow to an explicit setup-confirmation checkpoint", async () => {
+test("lists each new progress message in Live activity, newest first, while preparation runs", async () => {
+  vi.useFakeTimers();
+  request.mockResolvedValueOnce({ ...base, message: "Reading pages" })
+    .mockResolvedValueOnce({ ...base, message: "Reading pages" })
+    .mockResolvedValue({ ...base, captured: 20, message: "Checking page 12" });
+  render(<DocumentPreparation sessionId="one" />);
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+  const activity = screen.getByRole("list", { name: "Live activity" });
+  expect(Array.from(activity.querySelectorAll("li"), (item) => item.textContent)).toEqual(["Checking page 12", "Reading pages"]);
+  expect(screen.getByTestId("preparation-page-strip")).toBeInTheDocument();
+  // Only the status line announces, and only the current message.
+  expect(activity).not.toHaveAttribute("aria-live");
+  expect(screen.getByRole("status")).toHaveTextContent("Checking page 12");
+});
+
+test("past the activity limit, rows already shown stay the same rows", async () => {
+  vi.useFakeTimers();
+  let n = 0;
+  request.mockImplementation(async () => ({ ...base, message: `Update ${++n}` }));
+  render(<DocumentPreparation sessionId="one" />);
+  await act(async () => { await Promise.resolve(); });
+  for (let i = 0; i < 49; i++) await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+  const list = screen.getByRole("list", { name: "Live activity" });
+  expect(list.querySelectorAll("li")).toHaveLength(50);
+  const kept = Array.from(list.querySelectorAll("li")).find((item) => item.textContent === "Update 10");
+
+  await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+  expect(list.querySelectorAll("li")).toHaveLength(50);
+  expect(Array.from(list.querySelectorAll("li")).find((item) => item.textContent === "Update 10")).toBe(kept);
+  expect(list).not.toHaveTextContent(/^Update 1$/m);
+});
+
+test("hands off to setup: the track asks for confirmation and the preparation record folds away", async () => {
   request.mockResolvedValue({
     ...base,
     status: "succeeded",
@@ -170,8 +203,13 @@ test("moves the workflow to an explicit setup-confirmation checkpoint", async ()
     message: "Document prepared and notes inventory ready",
   });
   render(<DocumentPreparation sessionId="one" />);
-  expect(await screen.findByText(/Review the detected filing details, then confirm setup/)).toBeInTheDocument();
-  expect(screen.getByText("Confirm detected setup").closest("li")).toHaveTextContent("Action required");
-  expect(screen.getByTestId("step-action")).toBeInTheDocument();
+  expect(await screen.findByTestId("step-action")).toBeInTheDocument();
+  // Setup itself is the next view, so preparation shows no confirm step or prompt.
+  expect(screen.queryByText("Confirm detected setup")).toBeNull();
+  expect(screen.queryByText(/review the detected filing details/i)).toBeNull();
+  expect(screen.getByRole("button", { name: "Preparation details" })).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByLabelText("Document preparation steps")).not.toBeVisible();
+  expect(screen.queryByRole("list", { name: "Live activity" })).toBeNull();
+  expect(screen.queryByTestId("preparation-page-strip")).toBeNull();
   expect(screen.queryByRole("button", { name: "Stop preparation" })).toBeNull();
 });
