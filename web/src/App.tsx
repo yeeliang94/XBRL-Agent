@@ -21,7 +21,6 @@ import { SuccessToast } from "./components/SuccessToast";
 import { Icon, SettingsIcon } from "./components/icons";
 import { ArrowBack, ArrowForward, LeftPanelClose, LeftPanelOpen, Logout } from "./components/iconGlyphs";
 import { StatusIcon } from "./components/StatusIcon";
-import { STATUS_SYMBOLS } from "./lib/runStatus";
 import { DocumentsPage, useDocuments, documentStageLabel, documentStageSymbol } from "./pages/DocumentsPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { ExtractPage } from "./pages/ExtractPage";
@@ -224,10 +223,6 @@ export default function App() {
     catch { return "/"; }
   });
   const streamGeneration = useRef(0);
-  const [documentName, setDocumentName] = useState<{ id: number; pdf_filename: string } | null>(null);
-  const documentLoaded = useCallback((document: { id: number; pdf_filename: string }) => {
-    setDocumentName((current) => current?.id === document.id && current.pdf_filename === document.pdf_filename ? current : document);
-  }, []);
 
   // Hold the SSE controller so we can abort it on reset/unmount.
   // Without this, an in-flight stream would keep dispatching stale events
@@ -721,15 +716,7 @@ export default function App() {
   const reviewFocused = state.selectedRunId != null && (runTab === "notes" || runTab === "values");
   const documentList = (state.view === "extract" && state.currentRunId == null && !state.sessionId && extractMode === "queue")
     || (state.view === "history" && state.selectedRunId == null);
-  const currentFilename = documentName?.id === documentId ? documentName.pdf_filename
-    : state.sessionRunId === documentId ? state.filename
-    : documents.runs.find((run) => run.id === documentId)?.pdf_filename;
-  const selectedDocument = documentId == null ? null
-    : documents.runs.find((run) => run.id === documentId)
-      ?? { id: documentId, pdf_filename: currentFilename || `Document ${documentId}`, status: state.view === "extract" ? "draft" : "running", preparation: undefined };
-  const sidebarDocuments = (selectedDocument
-    ? [selectedDocument, ...documents.runs.filter((run) => run.id !== documentId)]
-    : documents.runs).slice(0, SIDEBAR_DOCUMENT_LIMIT);
+  const sidebarDocuments = documents.recentDocuments.slice(0, SIDEBAR_DOCUMENT_LIMIT);
   // The top bar never repeats the page title. Sub-pages get one back link in
   // one style; the main pages (Work queue, Add documents, History) leave it empty.
   const backLink: { label: string; onClick: () => void } | null =
@@ -754,11 +741,11 @@ export default function App() {
         <TopNav view={state.view} extractMode={extractMode} hasDocument={documentId != null}
           onAdd={addDocuments} onViewChange={(view) => showDocuments(view === "history" ? "history" : "progress")} />
         <nav className="app-document-navigation" aria-label="Recent documents" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0 }}>
-          {(documents.runs.length > 0 || documentId != null) && <span className="app-navigation-label" style={{ ...ui.metadata, fontSize: 12, padding: "0 10px 4px" }}>Recent</span>}
+          {(sidebarDocuments.length > 0) && <span className="app-navigation-label" style={{ ...ui.metadata, fontSize: 12, padding: "0 10px 4px" }}>Recent</span>}
           <div className="app-document-list" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0 }}>
           {sidebarDocuments.map((run) => {
             const active = documentId === run.id && state.view !== "settings";
-            const stage = documents.runs.some((item) => item.id === run.id) ? documentStageLabel(run) : null;
+            const stage = run.status === "draft" || run.status === "running" ? documentStageLabel(run) : null;
             return <button key={run.id} type="button"
               aria-current={active ? "page" : undefined}
               aria-label={`Open ${run.pdf_filename}`} aria-description={stage ?? undefined} title={stage ? `${run.pdf_filename} · ${stage}` : run.pdf_filename} data-tooltip={run.pdf_filename}
@@ -766,9 +753,7 @@ export default function App() {
               className={`${uiClass.btnQuiet} app-navigation-link`}
               style={{ ...ui.navLink, ...(active ? ui.navLinkActive : {}), flexShrink: 0, minWidth: 0 }}>
               <span style={{ display: "inline-flex", width: 20, justifyContent: "center", flexShrink: 0 }}>
-                {/* A placeholder entry (not in the polled list) has no known
-                    stage, so it shows the neutral icon rather than a spinner. */}
-                <StatusIcon symbol={stage ? documentStageSymbol(run) : STATUS_SYMBOLS.inactive} size={18} />
+                <StatusIcon symbol={documentStageSymbol(run)} size={18} />
               </span>
               <span className="app-navigation-label" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{run.pdf_filename}</span>
             </button>;
@@ -822,7 +807,7 @@ export default function App() {
         {state.view === "concepts" && state.selectedRunId == null && <ConceptsPage runId={null} />}
         {state.view !== "settings" && state.view !== "extract" && state.selectedRunId != null &&
           <HistoryPage key={state.selectedRunId} canonicalEnabled={canonicalEnabled} selectedId={state.selectedRunId}
-            initialRunTab={state.view === "concepts" ? "values" : undefined} hideDetailBack onDocumentLoaded={documentLoaded}
+            initialRunTab={state.view === "concepts" ? "values" : undefined} hideDetailBack
             onSelectRun={(id) => { if (id == null) showDocuments("history"); else openDocument({ id, status: "running" }); }}
             onResumeDraft={(id) => openDocument({ id, status: "draft" })} />}
       </main>

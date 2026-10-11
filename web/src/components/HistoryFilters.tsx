@@ -89,7 +89,7 @@ export function HistoryFilters({ value, onChange }: HistoryFiltersProps) {
   }, [qLocal]);
 
   return (
-    <div className="quality-toolbar history-filters" style={styles.row}>
+    <div className="history-filters" style={styles.row}>
       <label style={styles.label}>
         <span style={styles.labelText}>Filename</span>
         <input
@@ -192,7 +192,10 @@ export function HistoryFilters({ value, onChange }: HistoryFiltersProps) {
 
 const styles = {
   row: {
-    ...ui.filterToolbar,
+    display: "grid",
+    gridTemplateColumns: "minmax(180px, 2fr) repeat(4, minmax(130px, 1fr))",
+    gap: 16,
+    alignItems: "end",
     position: "sticky" as const,
     top: 0,
     zIndex: 5,
@@ -205,7 +208,8 @@ const styles = {
     display: "flex",
     alignItems: "center",
     gap: pwc.space.sm,
-    marginLeft: "auto",
+    gridColumn: "1 / -1",
+    justifyContent: "flex-end",
   } as React.CSSProperties,
   activeCount: {
     ...ui.metadata,
@@ -225,10 +229,14 @@ const styles = {
   } as React.CSSProperties,
   input: {
     ...ui.input,
-    minWidth: 180,
+    minWidth: 0,
+    width: "100%",
+    boxSizing: "border-box",
   } as React.CSSProperties,
   select: {
-    ...ui.select,
-    minWidth: 160,
+    ...ui.input,
+    minWidth: 0,
+    width: "100%",
+    boxSizing: "border-box",
   } as React.CSSProperties,
 } as const;

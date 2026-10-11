@@ -147,6 +147,13 @@ The normal workflow does not require any local experiment scripts or browser har
 | Pagination | Do not rely on HTML/CSS page-break controls for exact native pagination. Inspect native output for long notes. |
 | Text underline | The PDF formatter does not author text underline. It uses cell borders for source-visible table rules. Existing source or human text underline is preserved; double text underline was not certified by this guide. |
 
+Automatic visual review receives both the current canonical candidate and the
+prepared output. A source double rule must have double intent at the correct
+canonical edge and the corresponding 0.75px solid prepared edge, retaining its
+colour, sides and physical extent. The approved substitution can pass review;
+missing or misplaced rules and size-tier loss remain unresolved. This check
+does not certify native mTool rendering.
+
 ## 4. Verification status and deferred work
 
 Native checks on 17 September 2026 used disposable MPERS and MFRS workbooks and
