@@ -230,6 +230,7 @@ describe("HistoryList", () => {
     const d = new Date("2026-04-10T09:30:00Z");
     const concise = screen.getAllByTitle(d.toLocaleString())[0];
     expect(concise.textContent).toBe(d.toLocaleString());
+    expect(concise).toHaveStyle({ whiteSpace: "normal", overflowWrap: "anywhere" });
   });
 
   test("does not render models in the list row", () => {

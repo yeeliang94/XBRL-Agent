@@ -143,7 +143,7 @@ export function DocumentsPage({ documents, section, onSection, onAdd, onOpen }: 
       </button>)}
     </div>
     <section role="tabpanel" id={`documents-${section}-panel`} aria-labelledby={`documents-${section}`}>
-      {section === "history" ? <HistoryPage selectedId={null} onResumeDraft={(id) => onOpen({ id, status: "draft" })} refreshKey={documents.runs.map((run) => run.id).join(",")} hideHeader onSelectRun={(id) => {
+      {section === "history" ? <HistoryPage selectedId={null} onResumeDraft={(id) => onOpen({ id, status: "draft" })} refreshKey={documents.runs.map((run) => `${run.id}:${run.status}:${run.preparation?.status || ""}:${run.preparation?.phase || ""}`).join(",")} hideHeader onSelectRun={(id) => {
         if (id != null) onOpen({ id, status: "completed" });
       }} /> : <>
         {deleteError && <p role="alert" style={ui.bodyText}>{deleteError}</p>}

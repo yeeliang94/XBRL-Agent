@@ -195,7 +195,7 @@ export function HistoryList({
                   </div>
                 </td>
                 <td style={{ ...styles.td, whiteSpace: "normal" }}>
-                  <span style={styles.dim} title={date}>
+                  <span style={{ ...styles.dim, whiteSpace: "normal", overflowWrap: "anywhere" }} title={date}>
                     {date}
                   </span>
                 </td>
