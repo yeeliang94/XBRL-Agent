@@ -148,3 +148,19 @@ describe("tagNumericCells", () => {
     expect(cells[2].classList.contains("is-totals-num")).toBe(false);
   });
 });
+
+describe("heading cells below the heading rows", () => {
+  test("are tagged as data cells; the top heading row is not", () => {
+    const root = document.createElement("div");
+    root.innerHTML =
+      "<table><tr><th></th><th>2025</th></tr>" +
+      "<tr><th>Total cash outflows</th><td>1,127</td></tr>" +
+      "<tr><th></th><th>12,856</th></tr></table>";
+    tagNumericCells(root);
+    const ths = Array.from(root.querySelectorAll("th"));
+    expect(ths.map((th) => th.classList.contains("is-body-th"))).toEqual(
+      [false, false, true, true, true],
+    );
+  });
+});
+
