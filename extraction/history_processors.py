@@ -91,6 +91,15 @@ _WRITE_SUCCESS_PATTERNS = (
     re.compile(r"^ok: .+ row \d+ built from (\d+) source part\(s\),", re.IGNORECASE),
 )
 
+# Tools that return page transcripts as text (document preparation). Their
+# results are source evidence, like page images, so text compaction treats
+# them by WHICH PAGES they cover rather than by tool name: a batch is
+# compacted only after a later read of the same tool covers all its pages.
+# Keying them by tool name (run 179, Nielsen SOFP) let a read of pages 25-33
+# erase the pages 16-24 transcript; the agent re-read both batches in a loop
+# (217 page reads over 26 pages) until it ran out of steps.
+_PAGE_TEXT_TOOL_NAMES = frozenset({"read_page_text"})
+
 # read_template returns a summary that opens with this banner on its first
 # sheet block. Used to recognise a template-summary tool return generically,
 # without hard-coding the tool name.
@@ -322,14 +331,19 @@ COMPACT_MIN_CHARS = 1500
 COMPACT_AGGRESSIVE_AFTER_TURNS = 2
 COMPACT_AGGRESSIVE_MIN_CHARS = 500
 
-# Soft watermark default (cumulative tokens). Chosen high enough that only a
-# genuinely runaway agent reaches it — normal runs never escalate. 0 / invalid
-# disables escalation entirely (the processors behave exactly as before).
-_DEFAULT_SOFT_COMPACT_TOKENS = 60000
+# Soft watermark default (tokens in the CURRENT conversation). Measured from
+# the most recent model response's request size, not the running total of
+# every request: each request re-sends the whole history, so the running total
+# passed the old 60,000 default by the third request of every healthy SOFP run
+# and kept aggressive compaction on almost all the time (run 179 diagnosis,
+# 2026-10-11). Healthy SOFP requests peaked at 49k-67k tokens in five local
+# traces, so 100,000 fires only when a conversation is really growing.
+# 0 / invalid disables escalation entirely.
+_DEFAULT_SOFT_COMPACT_TOKENS = 100000
 
 
 def resolve_soft_compact_tokens() -> int:
-    """``XBRL_SOFT_COMPACT_TOKENS``: cumulative-token watermark for escalation.
+    """``XBRL_SOFT_COMPACT_TOKENS``: current-conversation token watermark.
 
     Read at call time so tests/operators can toggle it. Unset → the default;
     explicit ``0`` or a non-numeric value → disabled (returns 0).
@@ -344,26 +358,33 @@ def resolve_soft_compact_tokens() -> int:
     return v if v > 0 else 0
 
 
-def _cumulative_tokens(ctx) -> int:
-    """Cumulative total tokens from a pydantic-ai RunContext, defensively.
+def _current_request_tokens(messages: List[ModelMessage]) -> int:
+    """Size of the conversation as of the most recent model response.
 
-    ``ctx.usage`` is a ``RunUsage`` whose ``total_tokens`` is the running sum
-    across the agent's turns. Any shape surprise (missing usage, None) reads as
-    0 so escalation simply never triggers rather than crashing the request.
+    The latest ``ModelResponse.usage`` holds that request's input tokens (the
+    whole history the model was sent) and its output tokens (what it added).
+    Their sum approximates what the next request re-sends. Responses with no
+    usage recorded read as 0, so escalation never triggers on missing data.
     """
-    usage = getattr(ctx, "usage", None)
-    if usage is None:
-        return 0
-    try:
-        return int(getattr(usage, "total_tokens", 0) or 0)
-    except (TypeError, ValueError):
-        return 0
+    for msg in reversed(messages):
+        if not isinstance(msg, ModelResponse):
+            continue
+        usage = getattr(msg, "usage", None)
+        if usage is None:
+            return 0
+        try:
+            return int(getattr(usage, "input_tokens", 0) or 0) + int(
+                getattr(usage, "output_tokens", 0) or 0
+            )
+        except (TypeError, ValueError):
+            return 0
+    return 0
 
 
-def _over_soft_watermark(ctx) -> bool:
-    """True when cumulative usage has crossed the (enabled) soft watermark."""
+def _over_soft_watermark(messages: List[ModelMessage]) -> bool:
+    """True when the current conversation has crossed the (enabled) watermark."""
     limit = resolve_soft_compact_tokens()
-    return limit > 0 and _cumulative_tokens(ctx) >= limit
+    return limit > 0 and _current_request_tokens(messages) >= limit
 
 
 # Cache-economics additions (Harness-learnings Item 3, docs/PLAN-pydantic-ai-v2.md
@@ -395,9 +416,8 @@ def resolve_min_reclaim_chars() -> int:
 def estimate_outbound_chars(messages: List[ModelMessage]) -> int:
     """Rough size of the outbound history: total TEXT characters.
 
-    Measures what we are about to re-send (unlike the cumulative
-    ``ctx.usage`` watermark, which is monotonic for the whole run and never
-    releases). TEXT ONLY — image/binary payloads contribute nothing, which
+    Measures what we are about to re-send, in characters rather than the
+    token watermark's provider-reported tokens. TEXT ONLY — image/binary payloads contribute nothing, which
     is a documented blind spot: the image path has its own stage-aware
     processor and must never be driven by a size trigger (scanned-PDF
     thrash fix). ~4 chars/token if a token figure is needed.
@@ -417,8 +437,7 @@ def resolve_outbound_escalation_chars() -> int:
     """``XBRL_SOFT_COMPACT_OUTBOUND_CHARS``: outbound-size escalation trigger.
 
     DEFAULT 0 = disabled (opt-in first, like the token budget): the
-    cumulative watermark is incident-tuned and stays the primary trigger;
-    this adds a second, size-of-what-we-send trigger for operators to
+    token watermark stays the primary trigger; this adds a second, size-of-what-we-send trigger for operators to
     enable once Telemetry evidence supports a threshold.
     """
     raw = os.environ.get("XBRL_SOFT_COMPACT_OUTBOUND_CHARS", "")
@@ -465,8 +484,43 @@ def _summarize_text_result(tool_name: str, text: str, turns_ago: int) -> str:
     return (
         f"[{tool_name} result from ~{turns_ago} turns ago, {len(text)} chars "
         f"— compacted to save tokens; a more recent result for this tool "
-        f"appears later in the conversation. First line was: {first_line}]"
+        f"appears later in the conversation. Call it again if you still need "
+        f"this content. First line was: {first_line}]"
     )
+
+
+def _summarize_page_text_result(
+    tool_name: str, pages: tuple[int, ...], text: str, turns_ago: int
+) -> str:
+    """Placeholder for a compacted page transcript: names the pages."""
+    page_list = ", ".join(str(p) for p in pages)
+    return (
+        f"[{tool_name} result for page(s) {page_list} from ~{turns_ago} turns "
+        f"ago, {len(text)} chars — compacted to save tokens because the same "
+        f"page(s) were read again later in the conversation.]"
+    )
+
+
+def _call_pages(messages: List[ModelMessage]) -> dict[str, tuple[int, ...]]:
+    """Map tool_call_id → requested page numbers for page-transcript calls."""
+    pages_by_call: dict[str, tuple[int, ...]] = {}
+    for msg in messages:
+        if not isinstance(msg, ModelResponse):
+            continue
+        for part in msg.parts:
+            if not (
+                isinstance(part, ToolCallPart)
+                and part.tool_name in _PAGE_TEXT_TOOL_NAMES
+            ):
+                continue
+            try:
+                raw = part.args_as_dict().get("pages") or []
+            except Exception:  # noqa: BLE001 — malformed args: leave unmapped
+                continue
+            pages = tuple(sorted({p for p in raw if isinstance(p, int)}))
+            if pages:
+                pages_by_call[part.tool_call_id] = pages
+    return pages_by_call
 
 
 def compact_old_text_results(
@@ -489,6 +543,10 @@ def compact_old_text_results(
 
     - **Not the most recent result of its tool.** The latest result of every
       tool name is kept verbatim — that's the agent's current working state.
+    - **Page transcripts only when re-read.** A `read_page_text` result is
+      compacted only when a later read of the same tool covers all of its
+      pages. Different page batches never displace each other; a batch whose
+      page list cannot be recovered is kept.
     - **Old enough.** At least `COMPACT_AFTER_TURNS` model responses have
       happened since the result was produced.
     - **Large enough.** Rendered text is at least `COMPACT_MIN_CHARS`.
@@ -518,6 +576,7 @@ def compact_old_text_results(
     last_idx_per_tool: dict[str, int] = {}
     for mi, _pi, part in tool_returns:
         last_idx_per_tool[part.tool_name] = mi
+    pages_by_call = _call_pages(messages)
 
     # Two-pass shape (cache-economics, Item 3): collect the edit batch first,
     # then apply it ONLY if the total reclaim clears the min-reclaim floor.
@@ -539,13 +598,30 @@ def compact_old_text_results(
         # Keep the freshest result of each tool verbatim.
         if last_idx_per_tool.get(part.tool_name) == mi:
             continue
+        page_key: tuple[int, ...] | None = None
+        if part.tool_name in _PAGE_TEXT_TOOL_NAMES:
+            # Source evidence: keep unless a later read covers every page.
+            page_key = pages_by_call.get(part.tool_call_id)
+            if not page_key or not any(
+                later_mi > mi
+                and later.tool_name == part.tool_name
+                and set(page_key)
+                <= set(pages_by_call.get(later.tool_call_id, ()))
+                for later_mi, _lpi, later in tool_returns
+            ):
+                continue
         turns_ago = _model_responses_after(messages, mi)
         if turns_ago < after_turns:
             continue
         text = _part_text(part)
         if len(text) < min_chars:
             continue
-        summary = _summarize_text_result(part.tool_name, text, turns_ago)
+        if page_key:
+            summary = _summarize_page_text_result(
+                part.tool_name, page_key, text, turns_ago
+            )
+        else:
+            summary = _summarize_text_result(part.tool_name, text, turns_ago)
         reclaimed += max(len(text) - len(summary), 0)
         edits.append((mi, pi, part, summary))
 
@@ -614,10 +690,10 @@ def strip_duplicate_template(messages: List[ModelMessage]) -> List[ModelMessage]
 # --- Token-aware wrappers (Plan 2) ----------------------------------------
 #
 # pydantic-ai inspects each history processor's signature: a `(ctx, messages)`
-# processor receives the RunContext (and thus cumulative `ctx.usage`), while a
-# bare `(messages)` one does not. These thin wrappers read the running token
-# total and switch the two compacting processors into aggressive mode once the
-# soft watermark is crossed. They are what `extraction/agent.py` registers;
+# processor receives the RunContext, while a bare `(messages)` one does not.
+# The text-compaction wrapper reads the current conversation size from the
+# latest model response and switches into aggressive mode once the soft
+# watermark is crossed. They are what `extraction/agent.py` registers;
 # the pure cores above stay `(messages)`-callable so scout/notes and the unit
 # tests keep using them unchanged.
 #
@@ -651,12 +727,12 @@ def compact_old_text_results_ctx(
 ) -> List[ModelMessage]:
     """Token-aware `compact_old_text_results`: tighter thresholds over budget.
 
-    Escalates on EITHER trigger: the incident-tuned cumulative watermark, or
+    Escalates on EITHER trigger: the current-conversation token watermark, or
     (opt-in, default off) the outbound-size estimate — see
     ``resolve_outbound_escalation_chars``. OR-composition means the addition
     can only escalate more aggressively, never suppress the original trigger.
     """
-    if _over_soft_watermark(ctx) or _over_outbound_watermark(messages):
+    if _over_soft_watermark(messages) or _over_outbound_watermark(messages):
         return compact_old_text_results(
             messages,
             after_turns=COMPACT_AGGRESSIVE_AFTER_TURNS,
