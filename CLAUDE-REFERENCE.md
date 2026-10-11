@@ -1427,6 +1427,26 @@ Key invariants:
     single rule is 0.75px. Both prompts receive the resolved appearance (house
     default borderless, no fill). `numeric_cells` skips the description column.
     Pinned by `tests/test_notes_rule_map.py` and `tests/test_notes_format_patch.py`.
+    **Table layouts (2026-10-11):** the formatter returns a `SheetLayout`
+    (`notes/format_schema.py`): per table, one role per GRID column
+    (label/amount/date/text), optional row roles (bold, indent, shaded) and
+    lines `{after_row, from_col, to_col, kind}`. `notes/table_layout.py`
+    validates each note row against its live tables (table count, grid width,
+    row/column bounds, overlapping lines, override targets; a line must meet
+    whole cell edges on both sides and never cross a rowspan) and compiles it
+    into patch operations, starting with a `reset_formatting` of owned cell
+    properties (border, text-align, background, padding). Code owns alignment:
+    right only when every covered column is amount/date. Invalid rows enter
+    the bounded repair; valid rows proceed. A visual correction compiles onto
+    the pass's ORIGINAL HTML, so it replaces the first layout entirely; bold
+    is additive (source and earlier-pass emphasis are indistinguishable). The
+    reviewer keeps every evidence input and receives the layout as context.
+    Person ownership: the editor PATCH route saves `style_source = "human"`;
+    `content_origin = human_modified` cannot identify a person because the
+    notes reviewer AI also stamps it. The formatter skips `human` rows even on
+    retry (`person_edited_rows`). Earlier person edits carry no marker. Pinned
+    by `tests/test_notes_table_layout.py`, `tests/test_notes_format_patch.py`,
+    `tests/test_notes_visual_review.py` and `tests/test_server_notes_cells_api.py`.
     Partial saves retain
     `ok=false`, `validation_failed` or `visual_review_failed`, `failed_rows`, and per-row errors, alongside
     the actual `changed_rows`. Snapshots include only saved rows. The review

@@ -49,6 +49,8 @@ def test_row_label_column_stays_left_even_if_numeric():
     assert should_right_align_cell("1,500", 1, 3) is True
     # A bare single-cell numeric row still right-aligns.
     assert should_right_align_cell("1,500", 0, 1) is True
+    # A full-width merged "2024" section row is a label (runs 347-349).
+    assert should_right_align_cell("2024", 0, 1, colspan=5) is False
 
 
 # --- prose decoration -------------------------------------------------------
