@@ -209,3 +209,59 @@ async def test_a_concurrent_edit_cancels_the_whole_correction(recopy_run):
     with repo.db_session(db_path) as conn:
         assert conn.execute("SELECT canonical_html FROM notes_source_blocks WHERE block_id='p1-b1'").fetchone()[0] == BAD
         assert conn.execute("SELECT COUNT(*) FROM notes_source_block_revisions").fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_recorded_page_banner_removal_survives_the_rebuild(tmp_path):
+    """Live VTech run: the notes most needing a re-copy had page banners removed."""
+    from db import repository as repo
+    from db.schema import init_db
+    from notes import source_repository as sources, source_write
+    from notes.cleanup_patch import Patch
+    from notes.cleanup_repository import save_cleanup
+    from notes.integrity_runner import build_input
+    from notes.source_models import OwnerKind, SourceBlock, SourceNote
+    from notes.table_recopy import recopy_tables
+
+    db_path = tmp_path / "audit.sqlite"
+    init_db(db_path)
+    pdf_path = _pdf(tmp_path)
+    banner = "<p>VTech Telecommunications (Malaysia) Sdn. Bhd.</p>"
+    blocks = [SourceBlock(block_id=f"p1-b{i}", block_kind=kind, reading_order=i, canonical_html=html, page=1,
+                          source_note_id="n71", owner_kind=OwnerKind.NOTE)
+              for i, (kind, html) in enumerate([("paragraph", banner), ("paragraph", HEAD), ("table", BAD)])]
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(conn, "uploaded.pdf", session_id="s", output_dir=str(tmp_path))
+        generation = sources.begin_generation(conn, run_id, input_kind="prepared_document")
+        sources.write_blocks(conn, generation, blocks)
+        sources.write_notes(conn, generation, [SourceNote(source_note_id="n71", top_note_num="71",
+                                                          title="Deferred tax", block_ids=[b.block_id for b in blocks])])
+        sources.activate_generation(conn, generation)
+        source_write.write_cell_from_blocks(conn, run_id=run_id, generation_id=generation, sheet=SHEET,
+                                            row=71, block_ids=[b.block_id for b in blocks], label="Deferred tax")
+        cell = dict(conn.execute("SELECT * FROM notes_cells WHERE row=71").fetchone())
+        cid = f"{SHEET}:71"
+        save_cleanup(conn, run_id=run_id, cells={cid: cell}, viewed_pages={1}, model="m", patch=Patch(
+            inspected_cells=[cid], removals=[{"cell": cid, "block": 0, "expected_text": "VTech Telecommunications (Malaysia) Sdn. Bhd.",
+                                              "reason": "page_banner", "evidence_page": 1,
+                                              "justification": "Running company banner at the page top."}]))
+    page = banner + PAGE
+    prepared = [{"block_id": b.block_id, "page": 1, "canonical_html": b.canonical_html,
+                 "locator": {"page_block": i}} for i, b in enumerate(blocks)]
+    (tmp_path / "prepared-x.html").write_text(page)
+    (tmp_path / PREPARATION_NAME).write_text(json.dumps({"html_file": "prepared-x.html", "blocks": prepared,
+                                                         "pages": [{"page": 1, "html": page, "blocks": prepared}]}))
+
+    async def recapture(pdf, **kwargs):
+        assert kwargs["block_index"] == 2
+        return {"html": GOOD, "verification": {}, "usage": {}}
+
+    result = await recopy_tables(run_id=run_id, db_path=str(db_path), pdf_path=str(pdf_path), sheet=SHEET,
+                                 findings={71: [(0, "Total captured as heading cells.")]}, model=None,
+                                 _recapture=recapture)
+    assert result["rebuilt_rows"] == [71], result["errors"]
+    with repo.db_session(db_path) as conn:
+        html = conn.execute("SELECT html FROM notes_cells WHERE row=71").fetchone()[0]
+        assert "VTech Telecommunications" not in html and "<td>12,856</td>" in html
+        source_cell = next(c for c in build_input(conn, run_id, generation).cells if c.row == 71)
+        assert source_cell.selection_matches_content is True
