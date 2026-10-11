@@ -420,6 +420,15 @@ async def run_notes_formatter(
             style_sources=style_sources, rows=rows,
             pass_started_at=pass_started_at, trace_label=trace_label, on_phase=on_phase,
         )
+        from notes.visual_review import structure_findings
+        structural = structure_findings(outcome)
+        if structural:
+            outcome = await _recopy_and_reformat(
+                outcome, structural, run_id=run_id, db_path=db_path, pdf_path=pdf_path,
+                sheet=sheet, model=model, model_name=model_name, output_dir=output_dir,
+                usage=usage, pass_started_at=pass_started_at, trace_label=trace_label,
+                on_phase=on_phase,
+            )
         outcome.update(_usage_fields(usage))
         status = "completed" if outcome.get("ok") else "failed"
         return outcome
@@ -448,6 +457,62 @@ async def run_notes_formatter(
         except Exception:
             logger.warning("Could not save formatter usage run=%s sheet=%s", run_id, sheet, exc_info=True)
 
+
+
+async def _recopy_and_reformat(outcome: dict, structural: dict, *, run_id: int, db_path: str,
+                               pdf_path: str, sheet: str, model, model_name: str,
+                               output_dir: str, usage: RunUsage, pass_started_at,
+                               trace_label, on_phase) -> dict:
+    """Re-copy wrongly copied tables from the PDF, then format the rebuilt notes.
+
+    The rebuilt notes get one ordinary formatting pass with its own visual
+    check. A table that cannot be re-copied keeps its original finding.
+    """
+    from notes.table_recopy import recopy_tables
+
+    recopy = await recopy_tables(run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
+                                 findings=structural, model=model, model_name=model_name,
+                                 on_phase=on_phase)
+    usage.incr(RunUsage(input_tokens=recopy["usage"]["prompt_tokens"],
+                        output_tokens=recopy["usage"]["completion_tokens"]))
+    result = {**outcome, "table_recopy": recopy}
+    rebuilt = set(recopy["rebuilt_rows"])
+    if not rebuilt:
+        for row, reason in recopy["errors"].items():
+            if str(row) in (result.get("row_errors") or {}) or row in (result.get("row_errors") or {}):
+                key = row if row in result["row_errors"] else str(row)
+                result["row_errors"][key] += "; " + reason
+        return result
+    final = await _run_notes_formatter_impl(
+        run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet, model=model,
+        output_dir=output_dir, usage=usage, style_sources=None, rows=sorted(rebuilt),
+        pass_started_at=pass_started_at,
+        trace_label=f"{trace_label or 'notes_format_' + sheet}_after_recopy", on_phase=on_phase,
+    )
+    errors = {int(row): error for row, error in (outcome.get("row_errors") or {}).items()
+              if int(row) not in rebuilt}
+    errors.update({int(row): error for row, error in (final.get("row_errors") or {}).items()})
+    if not final.get("ok") and not final.get("row_errors"):
+        errors.update({row: final.get("error") or "Re-copied note formatting is unresolved." for row in rebuilt})
+    for row, reason in recopy["errors"].items():
+        if row in errors:
+            errors[row] += "; " + reason
+    verified = {str(row): identity for row, identity in (outcome.get("verified_rows") or {}).items()
+                if int(row) not in rebuilt}
+    verified.update({str(row): identity for row, identity in (final.get("verified_rows") or {}).items()})
+    result.update(
+        ok=not errors, verified_rows=verified,
+        changed_rows=int(outcome.get("changed_rows") or 0) + int(final.get("changed_rows") or 0),
+        after_recopy=final,
+        summary=(f"Re-copied {len(recopy['corrected'])} table(s) from the source PDF. "
+                 + (final.get("summary") or "")),
+    )
+    for key in ("error", "error_type", "failed_rows", "row_errors"):
+        result.pop(key, None)
+    if errors:
+        result.update(error="; ".join(errors.values()), error_type="visual_review_failed",
+                      failed_rows=sorted(errors), row_errors=errors)
+    return result
 
 
 async def _run_notes_formatter_impl(

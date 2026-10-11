@@ -1149,7 +1149,7 @@ Paragraphs and headings may be interchanged by source capture. A short paragraph
 that is visibly a page banner or repeated continuation heading may be deleted.
 Long or mixed disclosure paragraphs cannot be deleted, including repeated prose.
 Corporate-information identity headings and incorporation details remain intact.</pre></details></section>
-<section id="notes-visual-review"><h2>Notes visual review</h2><p>Fresh formatter-model context checks prepared output against the source PDF before saving. One style correction and recheck; incomplete evidence stays unresolved.</p><details open><summary><span><code>prompts/notes_visual_review.md</code> (verbatim)</span><span class="meta">78 lines</span></summary><pre>You check formatted financial-note tables against the original source PDF.
+<section id="notes-visual-review"><h2>Notes visual review</h2><p>Fresh formatter-model context checks prepared output against the source PDF before saving. One style correction and recheck; incomplete evidence stays unresolved.</p><details open><summary><span><code>prompts/notes_visual_review.md</code> (verbatim)</span><span class="meta">82 lines</span></summary><pre>You check formatted financial-note tables against the original source PDF.
 You receive each note's current canonical candidate HTML, prepared output HTML,
 canonical table geometry, output profile, preparation tier, a RULE MAP and
 source PDF images. The RULE MAP lists every horizontal line once, named by the
@@ -1186,8 +1186,12 @@ double only when two separate strokes with a visible gap occur on that same
 edge. Do not convert a thick single rule into a double rule. If the scan cannot
 resolve that gap, report uncertainty rather than demand a double underline.
 Report exact note row, table, year, row label and offending edge in the reason
-when correction is needed. If the source structure cannot be represented by
-style changes alone, mark unresolved and explain the structural problem.
+when correction is needed. If the copied table itself differs from the PDF —
+a total or data row captured as heading cells, a missing, extra or merged row,
+an amount under the wrong column, or a heading over the wrong column — set
+issue_kind to structure, mark it unresolved and describe the difference. That
+table is re-copied from the source; appearance corrections cannot fix it. Use
+issue_kind style for everything else.
 
 Apply the STANDARDISED MTOOL PROFILE: amount-column names, currency captions,
 period headers and figures are right-aligned, descriptions left-aligned. The

@@ -35,8 +35,12 @@ double only when two separate strokes with a visible gap occur on that same
 edge. Do not convert a thick single rule into a double rule. If the scan cannot
 resolve that gap, report uncertainty rather than demand a double underline.
 Report exact note row, table, year, row label and offending edge in the reason
-when correction is needed. If the source structure cannot be represented by
-style changes alone, mark unresolved and explain the structural problem.
+when correction is needed. If the copied table itself differs from the PDF —
+a total or data row captured as heading cells, a missing, extra or merged row,
+an amount under the wrong column, or a heading over the wrong column — set
+issue_kind to structure, mark it unresolved and describe the difference. That
+table is re-copied from the source; appearance corrections cannot fix it. Use
+issue_kind style for everything else.
 
 Apply the STANDARDISED MTOOL PROFILE: amount-column names, currency captions,
 period headers and figures are right-aligned, descriptions left-aligned. The

@@ -1163,6 +1163,45 @@ async def test_visual_correction_replaces_the_first_layout_entirely(monkeypatch,
     assert result["layouts"]["112"]["tables"][0].get("rows", []) == []
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recopied", [True, False])
+async def test_structure_finding_is_recopied_then_reformatted(monkeypatch, formatter_db, recopied):
+    """A wrongly copied table skips the style correction, goes back to
+    preparation, and the rebuilt note gets one ordinary formatting pass."""
+    import notes.table_recopy as tr
+    checks = []
+
+    async def check(**kwargs):
+        checks.append(set(kwargs["rows"]))
+        if len(checks) == 1:
+            return {112: "Total captured as heading cells."}, {"tables": [
+                {"row": 112, "table": 0, "status": "unresolved", "issue_kind": "structure",
+                 "reason": "Total captured as heading cells."}]}
+        return {}, {"tables": [{"row": 112, "table": 0, "status": "pass"}]}
+
+    calls = []
+
+    async def recopy(**kwargs):
+        calls.append(kwargs["findings"])
+        if not recopied:
+            return {"rebuilt_rows": [], "errors": {112: "Table 0 could not be re-copied: x"},
+                    "corrected": [], "usage": {"prompt_tokens": 0, "completion_tokens": 0}}
+        return {"rebuilt_rows": [112], "errors": {}, "corrected": [{"row": 112}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 1}}
+
+    monkeypatch.setattr(tr, "recopy_tables", recopy)
+    fake = _FakeAgent([_GOOD_PATCH, _GOOD_PATCH])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
+    assert calls == [{112: [(0, "Total captured as heading cells.")]}]
+    if recopied:
+        # No style correction for a structural finding; one fresh formatting pass.
+        assert fake.calls == 2 and checks == [{112}, {112}]
+        assert result["ok"] and "Re-copied 1 table" in result["summary"]
+    else:
+        assert fake.calls == 1 and not result["ok"]
+        assert "could not be re-copied" in result["row_errors"][112]
+
+
 def test_partition_rejects_entire_note_including_duplicate_entries():
     from notes.formatting_agent import _partition_layout
 
