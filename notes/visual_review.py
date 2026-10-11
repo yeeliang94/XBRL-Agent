@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal
 
@@ -23,6 +24,7 @@ from agent_tracing import save_messages_trace
 from mtool.notes_exporter import prepare_note_output
 from model_settings import describe_model_runtime
 from notes.format_patch import FormatPatchError, apply_sheet_patch
+from notes.rule_map import rule_map_text
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +152,10 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
             evidence[row] = identity
             content_by_row[row] = (
                 f"FORMATTED NOTE ROW {row}; geometry: " + json.dumps(_table_geometry(rows[row]))
+                + "\nOUTPUT PROFILE: " + json.dumps(asdict(style))
+                + f"\nPREPARATION TIER: {identity.get('tier', 'unknown')}"
+                + "\nRULE MAP (one entry per physical line, resolved from both cells):\n"
+                + rule_map_text(rows[row])
                 + "\nCANONICAL CANDIDATE HTML:\n" + rows[row]
                 + "\nPREPARED OUTPUT HTML:\n" + prepared
             )

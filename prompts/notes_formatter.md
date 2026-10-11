@@ -20,9 +20,10 @@ Hard rules:
   are not yours to remove.
 - Match the source PDF's visible semantic pattern, then normalise it through
   the STANDARDISED MTOOL PROFILE below. Do not copy unsupported decoration.
-- The shipped theme supplies a single grid for PDF tables. Leave that baseline
-  to the theme; do not add redundant full-grid operations. Use cell borders for
-  source-visible rules that differ from the baseline.
+- Use the RESOLVED OUTPUT APPEARANCE supplied with this task. The default
+  house style is borderless with no header shading; a configured theme may
+  differ. Add every source-visible rule explicitly when the resolved theme
+  does not supply it; never assume an ordinary grid exists.
 - If the source uses summation lines, apply them only to the visible amount
   columns and preserve their single or double intent.
 - Match the source PDF's cell fills. The shipped theme has no shaded fill;
@@ -61,9 +62,9 @@ STANDARDISED MTOOL PROFILE:
 - Do not copy decorative brand colours, gradients, watermarks, logos, or exact
   font treatment. Keep text black/grey. Use `header_fill` only when the source
   uses a meaningful shaded header; otherwise clear the fill to `transparent`.
-- The shared theme supplies the ordinary grid. Apply source-specific header or
-  totals rules only where the PDF shows them; do not repeat the theme's grid in
-  the saved HTML. Source-styled Word tables keep their own border declarations.
+- The resolved theme defines the baseline borders and fills. Apply source-visible
+  rules missing from that baseline without repeating existing rules.
+  Source-styled Word tables keep their own border declarations.
 - Use black or grey rules from the allowed palette. Preserve single versus
   double rules and their exact cell extent. Do not reproduce arbitrary source
   colours merely because they are visible.
@@ -133,7 +134,8 @@ Targets:
 Style keys:
 - border_top, border_right, border_bottom, border_left:
   {"width": "0.75px", "style": "solid", "color": "#000000"}
-  Use 0.75px as the default single-line width.
+  Use 0.75px for every single rule. Line thickness is not reproduced: a
+  heavier source stroke is still a 0.75px single rule.
 - clear_border: ["top", "right", "bottom", "left"]
 - fill: "#f2f2f2" or "header_fill" (a shaded fill) or "transparent" (clear an
   existing fill that the PDF does not have)
@@ -161,14 +163,16 @@ Judge the final prepared output: mTool compatibility preparation converts
 `double` borders to 0.75px solid borders. The visual reviewer checks source
 double-rule intent in the current canonical candidate and accepts that exact
 substitution in prepared output at the same physical edge and extent. Keep
-genuine double source rules as `double` in the patch. For one thick source
-stroke, author one solid border of the observed width; never use `double` to
-simulate thickness.
+genuine double source rules as `double` in the patch. Never use `double` to
+simulate a thick single stroke.
 A short amount-cell rule beside a merged heading remains on that amount cell.
 Do not add a matching full-width rule to the merged heading.
 
 
 Tables use collapsed borders: an amount cell's bottom border and the cell below's
 top border represent the same physical edge. The backend mirrors fully shared
-edges. Before clearing a reported top edge, check whether it is the valid
-subtotal underline of the preceding row; clearing either side clears that edge.
+edges. Each row's `current_rules` lists every physical line once, named by the
+row it sits BELOW; read it instead of counting border declarations in the HTML.
+Write every line as `border_bottom` on the row it sits under. Use `border_top`
+only for a line above a table's first row. Before clearing an edge, check
+`current_rules`: clearing either side clears that one line.

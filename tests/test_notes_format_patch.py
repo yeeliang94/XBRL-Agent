@@ -10,6 +10,15 @@ from notes.format_patch import FormatPatchError, apply_sheet_patch
 from notes.html_sanitize import sanitize_notes_html
 
 
+@pytest.mark.parametrize("style", ["bold", "italic"])
+def test_emphasis_removal_is_explicitly_refused(style):
+    html = "<table><tr><td><strong>Capital</strong></td></tr></table>"
+    with pytest.raises(FormatPatchError, match="removal"):
+        apply_sheet_patch({4: html}, {"cells": [{"row": 4, "operations": [
+            {"target": {"table": 0, "cell": {"r": 1, "c": 1}}, "style": {style: False}},
+        ]}]})
+
+
 def test_prompt_instructs_amount_column_header_and_figure_alignment():
     # Amount headers and figures must share right alignment even when the source
     # differs, without applying that rule to the description column.
@@ -36,7 +45,8 @@ def test_prompt_pins_the_standardized_mtool_profile():
               / "prompts" / "notes_formatter.md").read_text(encoding="utf-8")
     assert "STANDARDISED MTOOL PROFILE" in prompt
     assert "Do not copy decorative brand colours" in prompt
-    assert "shared theme supplies the ordinary grid" in prompt.lower()
+    assert "RESOLVED OUTPUT APPEARANCE" in prompt
+    assert "house style is borderless with no header shading" in prompt
     assert "header_fill" in prompt
 
 
@@ -302,6 +312,23 @@ def test_cols_filter_restricts_row_targets_to_amount_columns():
     assert "border-bottom" not in cells[3]          # Total label — untouched
     assert "border-bottom: 3px double" in cells[4]  # amount col 2
     assert "border-bottom: 3px double" in cells[5]  # amount col 3
+
+
+def test_numeric_cells_leave_description_column_year_labels_left():
+    """Runs 347-349: a standalone "2024" row label was right-aligned."""
+    html = ("<table><tr><td>2024</td><td></td></tr>"
+            "<tr><td>Lease liability</td><td>1,398,300</td></tr>"
+            "<tr><td>2,195</td></tr></table>")
+    patch = {"cells": [{"row": 1, "operations": [{
+        "target": {"table": 0, "range": "numeric_cells"},
+        "style": {"text_align": "right"},
+    }]}]}
+    out = apply_sheet_patch({1: html}, patch).rows[1]
+    cells = re.findall(r"<td[^>]*>[^<]*</td>", out)
+    assert "text-align" not in cells[0]
+    assert "text-align: right" in cells[3]
+    # A lone cell is not a description column; it stays eligible.
+    assert "text-align: right" in cells[4]
 
 
 def test_cols_filter_validates_shape():
