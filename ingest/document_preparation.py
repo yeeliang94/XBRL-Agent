@@ -34,7 +34,7 @@ from ingest.pdf_sidecar import (
 from notes._rate_limit import RATE_LIMIT_MAX_RETRIES, compute_backoff_delay, is_rate_limit_error
 from utils.atomic_io import replace_with_retry
 
-CONTRACT_VERSION = 15
+CONTRACT_VERSION = 16
 # Capture, verify and repair rounds per page. The third round runs only while
 # specific table findings remain and the previous repair changed the page.
 _MAX_PREPARATION_ROUNDS = 3
@@ -178,11 +178,20 @@ class SourceUncertainty(BaseModel):
     reconstructed_text: str = ""
 
 
+class CandidateCellEvidence(BaseModel):
+    table: int = Field(ge=0, strict=True, description="Zero-based candidate table index.")
+    row: int = Field(ge=0, strict=True, description="Zero-based direct row index within that table.")
+    cell: int = Field(ge=0, strict=True, description="Zero-based direct cell index within that row.")
+    text: str = Field(description="Exact candidate cell text from the supplied manifest, including blank cells.")
+
+
 class TableRelationship(BaseModel):
     source_relationship: str = Field(description="Read from the source image: table section, period, column headings and label/amount relationships.")
     candidate_relationship: str = Field(description="Corresponding relationships actually present in the supplied HTML; state missing content explicitly.")
     matches: bool | None = Field(default=None, description="True for agreement, false for a demonstrated mismatch, null for uncertain assessment.")
     repair_instruction: str = Field(default="", description="Specific source-supported correction for a mismatch, preserving unaffected content.")
+    candidate_cells: list[CandidateCellEvidence] = Field(default_factory=list,
+        description="Candidate heading/label/amount cells supporting this section's relationship. Cite exact coordinates and text; never describe absent cells as present.")
 
 
 class PreparationReceipt(BaseModel):
@@ -450,6 +459,10 @@ _PROMPTS = {
         "For each source table section, first inventory its period, exact column "
         "headings (including units), and label/amount relationships from the image. "
         "Then record the corresponding candidate relationships in table_relationships. "
+        "Bind each relationship to candidate_cells from the supplied manifest: exact "
+        "table/row/cell indices and text, including its headings, labels and amounts. "
+        "Cite evidence for every candidate table. If a source section is absent from "
+        "the candidate, report matches false rather than inventing candidate cells. "
         "Use one concise entry per section, covering all rows; create a separate "
         "entry for each mismatch with a specific repair_instruction. Sections with "
         "different years or maturity headings need separate entries even if adjacent. "
@@ -761,19 +774,47 @@ def _is_systemic_preparation_error(error: BaseException) -> bool:
         error, (PreparationError, UnexpectedModelBehavior))
 
 
+def _candidate_table_cells(html: str) -> list[dict]:
+    soup = BeautifulSoup(html, "html.parser")
+    return [
+        {"table": ti, "row": ri, "cell": ci, "text": " ".join(cell.get_text(" ").split())}
+        for ti, table in enumerate(soup.find_all("table"))
+        for ri, row in enumerate(tr for tr in table.find_all("tr") if tr.find_parent("table") is table)
+        for ci, cell in enumerate(row.find_all(["th", "td"], recursive=False))
+    ]
+
+
 def _table_verdict_unverified(*, has_tables: bool, verdict: bool | None,
-                              relationships: list[dict]) -> bool:
+                              relationships: list[dict], candidate_cells: list[dict]) -> bool:
     # A negative verdict may identify a source table missing from the HTML.
     # Neither a routine positive verdict nor an omitted verdict needs table
     # evidence on a prose-only page.
     if not has_tables and not relationships:
         return verdict is False
-    return verdict is not True or not relationships or any(
+    if verdict is not True or not relationships or any(
         relationship.get("matches") is not True
         or not relationship.get("source_relationship", "").strip()
         or not relationship.get("candidate_relationship", "").strip()
         for relationship in relationships
-    )
+    ):
+        return True
+    actual = {(c["table"], c["row"], c["cell"]): c["text"] for c in candidate_cells}
+    covered_tables = set()
+    for relationship in relationships:
+        evidence = relationship.get("candidate_cells") or []
+        if not evidence:
+            return True
+        for raw in evidence:
+            try:
+                cell = CandidateCellEvidence.model_validate(raw)
+            except ValueError:
+                return True
+            key = (cell.table, cell.row, cell.cell)
+            if key not in actual or cell.text != actual[key]:
+                return True
+            if cell.text.strip():
+                covered_tables.add(cell.table)
+    return covered_tables != {c["table"] for c in candidate_cells}
 
 
 def _write_checkpoint_with_evidence(path: Path, checkpoint: dict) -> None:
@@ -1201,8 +1242,10 @@ async def prepare_document(
                            for region in noise_regions) and not focused_images:
                         focused_images = await focused(number, rotation)
                     png = await render(number, rotation)
+                    candidate_cells = _candidate_table_cells(html)
                     check = await request("verifying", [png, *focused_images], {
                         "page": number, "html": html, "scope": "single supplied page only",
+                        "candidate_cells": candidate_cells,
                         "view_rotation": rotation,
                         "best_effort": bool(repair),
                         "previous_findings": previous_findings,
@@ -1220,6 +1263,7 @@ async def prepare_document(
                     table_structure_unverified = _table_verdict_unverified(
                         has_tables=has_tables, verdict=table_structure_verified,
                         relationships=table_relationships,
+                        candidate_cells=candidate_cells,
                     )
                     # Specific, repairable table findings: model-demonstrated
                     # mismatches plus deterministic row/column misalignment.

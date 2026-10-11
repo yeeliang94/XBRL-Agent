@@ -777,6 +777,12 @@ def build_notes_reviewer_packet(context: dict) -> str:
             out.append(_review_source_line(
                 f"{item['sheet']} row {item['row']} {item['label']!r}"
             ))
+            if item.get("extraction_disposition"):
+                out.append(_review_source_line(
+                    "Extraction already reported this missing disclosure: "
+                    + json.dumps(item["extraction_disposition"], ensure_ascii=False)
+                    + ". Assess that evidence; the mandatory requirement remains unresolved."
+                ))
     if policy_placements:
         out.append(
             "\n[POLICY DESTINATION ACCURACY] Check EVERY source-linked accounting "
@@ -1099,33 +1105,32 @@ def _build_context(
         )
         mandatory_fields = []
         if policies_requested:
-            from notes.html_to_text import html_to_excel_text
+            from notes.mandatory_fields import is_required_policy, policy_has_content
             by_row = {c["row"]: c for c in cells if c["sheet"] == POLICIES_SHEET}
             nodes = repo.list_notes_node_rows(
                 conn, sheet=POLICIES_SHEET,
                 template_prefix=f"{filing_standard}-{filing_level}-",
             )
-            overall_labels = {
-                "disclosure of material accounting policy information",
-                "disclosure of significant accounting policies",
-            }
             for node in nodes:
                 label = node["label"] or ""
-                if node["kind"] != "LEAF" or not (
-                    label.startswith("*")
-                    or label.lstrip("*").strip().lower() in overall_labels
-                ):
+                if node["kind"] != "LEAF" or not is_required_policy(label):
                     continue
-                body = re.sub(r"<h[1-6]\b[^>]*>.*?</h[1-6]>", "",
-                              by_row.get(node["row"], {}).get("html", ""),
-                              flags=re.IGNORECASE | re.DOTALL)
-                if not html_to_excel_text(body).strip():
+                if not policy_has_content(by_row.get(node["row"], {}).get("html", "")):
                     mandatory_fields.append({
                         "sheet": POLICIES_SHEET, "row": node["row"], "label": label,
                     })
         source_findings = []
         placement_conflicts = []
+        from notes.mandatory_fields import DISPOSITION_PREFIX
         for flag in repo.fetch_notes_review_flags(conn, run_id):
+            if (flag.get("status") == "open"
+                    and str(flag.get("finding_id") or "").startswith(DISPOSITION_PREFIX)):
+                for item in mandatory_fields:
+                    if item["sheet"] == flag.get("sheet") and item["row"] == flag.get("row"):
+                        item["extraction_disposition"] = {
+                            "reason": flag["reason"], "source_pages": flag.get("source_pages") or [],
+                            "evidence": flag.get("evidence") or "",
+                        }
             if (
                 flag.get("status") != "open"
                 or not str(flag.get("finding_id") or "").startswith(

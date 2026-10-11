@@ -97,8 +97,8 @@ class Style(BaseModel):
         description='#rrggbb, a theme name, or "transparent" to clear a fill.',
     )
     text_align: Optional[TextAlign] = None
-    bold: Optional[bool] = None
-    italic: Optional[bool] = None
+    bold: Optional[bool] = Field(default=None, description="Add emphasis with true. Removing source emphasis is unsupported; report it for human review.")
+    italic: Optional[bool] = Field(default=None, description="Add emphasis with true. Removing source emphasis is unsupported; report it for human review.")
     indent: Optional[str] = Field(default=None, description='e.g. "1em"')
     padding: Optional[str] = Field(
         default=None, description='cell inner spacing, e.g. "4px 8px"',
