@@ -50,11 +50,13 @@ class NoteLayout(BaseModel):
 class SheetLayout(BaseModel):
     """The formatter's whole answer: what each table is, not how to style it."""
     sheet: str = Field(description="Must equal the sheet you were given.")
+    # Before `notes` so a long answer states it early; optional because a
+    # missing one-line summary must not discard every layout (live run 349).
+    format_summary: str = Field(default="", description="Short user-facing description.")
     notes: List[NoteLayout] = Field(
         default_factory=list,
         description="One entry per note row to format; empty when nothing needs formatting.",
     )
-    format_summary: str = Field(description="Short user-facing description.")
 
 
 def layout_to_dict(layout: SheetLayout) -> dict:

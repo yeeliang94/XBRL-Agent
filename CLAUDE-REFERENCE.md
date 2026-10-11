@@ -1433,7 +1433,8 @@ Key invariants:
     lines `{after_row, from_col, to_col, kind}`. `notes/table_layout.py`
     validates each note row against its live tables (table count, grid width,
     row/column bounds, overlapping lines, override targets; a line must meet
-    whole cell edges on both sides and never cross a rowspan) and compiles it
+    whole cell edges on at least one side, which carries it, and never cross a
+    rowspan; `frame: grid` boxes every cell) and compiles it
     into patch operations, starting with a `reset_formatting` of owned cell
     properties (border, text-align, background, padding). Code owns alignment:
     right only when every covered column is amount/date. Invalid rows enter
