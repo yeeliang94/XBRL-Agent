@@ -1,0 +1,637 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Preparation Split Prototype</title>
+<!--
+  PROTOTYPE ONLY: splits document preparation and filing setup into two views
+  and walks every pipeline stage. Visual language copied from the running app
+  (uiStyles.ts segmented control, PipelineStages, activity roster and stream,
+  App sidebar) rather than from the written guide where the two differ.
+-->
+<style>
+  :root {
+    --orange-700:#d64000; --orange-500:#fd5108; --orange-400:#fe7c39; --orange-50:#fff5ed;
+    --black:#000; --white:#fff;
+    --grey-500:#6b7280; --grey-300:#cbd1d6; --grey-200:#dfe3e6; --grey-100:#eeeff1; --grey-50:#f5f7f8;
+    --text:#000; --text-2:rgba(0,0,0,.64);
+    --font:"Inter Variable",Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+    --ease:cubic-bezier(.2,0,0,1);
+  }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  body { margin:0; background:var(--white); color:var(--text); font:14px/1.5 var(--font); -webkit-font-smoothing:antialiased; }
+  button, select, input { font:inherit; color:inherit; }
+  :focus-visible { outline:2px solid var(--black); outline-offset:2px; }
+  svg.i { width:20px; height:20px; fill:currentColor; flex:0 0 auto; }
+  svg.s16 { width:16px; height:16px; }
+
+  /* ---------- Prototype controls (not product UI) ---------- */
+  .proto { position:sticky; top:0; z-index:30; display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:8px 16px; background:#1b1b1b; color:#fff; font-size:12px; }
+  .proto b { margin-right:6px; letter-spacing:.08em; text-transform:uppercase; opacity:.6; font-weight:500; }
+  .proto button { min-height:28px; padding:0 10px; border:1px solid #444; border-radius:6px; background:transparent; color:#fff; cursor:pointer; font-size:12px; }
+  .proto button.on { background:#fff; color:#000; border-color:#fff; }
+  .proto .sp { flex:1; }
+  .proto label { display:flex; align-items:center; gap:6px; opacity:.8; }
+
+  /* ---------- Shell (App.tsx) ---------- */
+  .shell { display:grid; grid-template-columns:220px minmax(0,1fr); min-height:calc(100vh - 44px); }
+  .side { display:flex; flex-direction:column; gap:4px; padding:20px 12px 16px; background:var(--grey-50); }
+  .brand { display:flex; align-items:center; gap:10px; padding:0 8px; min-height:28px; margin-bottom:20px; font-size:16px; font-weight:600; }
+  .brand svg { width:28px; height:28px; color:var(--orange-500); }
+  .nav-a { display:flex; align-items:center; gap:10px; min-height:40px; padding:0 10px; border-radius:8px; color:var(--text); font-weight:500; }
+  .nav-a svg { color:var(--grey-500); }
+  .nav-a.cur { background:var(--grey-200); }
+  .side .label { padding:16px 10px 4px; color:var(--text-2); font-size:12px; }
+  .doc-a { display:flex; align-items:center; gap:10px; min-height:40px; padding:0 10px; border-radius:8px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .doc-a.cur { background:var(--grey-200); }
+  .doc-a svg { color:var(--grey-500); }
+  .foot { margin-top:auto; display:flex; flex-direction:column; gap:4px; }
+  .acct { display:flex; align-items:center; gap:10px; padding:12px 10px 0; margin-top:8px; border-top:1px solid var(--grey-200); font-size:13px; }
+  .acct i { width:28px; height:28px; border-radius:50%; background:var(--grey-100); display:grid; place-items:center; font-style:normal; font-size:11px; font-weight:600; }
+  .acct span { display:block; color:var(--text-2); font-size:12px; }
+
+  .work { min-width:0; }
+  .subhead { position:sticky; top:44px; z-index:5; display:flex; align-items:center; min-height:64px; padding:0 32px; background:var(--white); border-bottom:1px solid var(--grey-200); }
+  .back { display:inline-flex; align-items:center; gap:8px; min-height:40px; padding:0 10px; margin-left:-10px; border:0; border-radius:8px; background:transparent; font-weight:500; cursor:pointer; }
+  main { padding:32px; max-width:1040px; }
+  h1 { margin:0 0 16px; font-size:28px; line-height:1.2; letter-spacing:-.01em; font-weight:600; }
+  h2 { margin:0; font-size:16px; line-height:1.25; font-weight:600; }
+  .meta { color:var(--text-2); font-size:13px; }
+  .hrow { display:flex; align-items:center; gap:16px; flex-wrap:wrap; min-height:40px; }
+  .hrow .grow { flex:1; }
+  .sect { margin-top:32px; }
+  .sect > .hrow { margin-bottom:8px; }
+
+  /* ---------- Buttons / controls (uiStyles.ts) ---------- */
+  .btn { display:inline-flex; align-items:center; gap:8px; min-height:40px; padding:0 16px; border:1px solid var(--grey-300); border-radius:8px; background:var(--white); font-weight:500; cursor:pointer; transition:background .12s var(--ease), opacity .12s; }
+  .btn:hover { background:var(--grey-50); }
+  .btn.primary { background:var(--black); border-color:var(--black); color:var(--white); }
+  .btn.primary:hover { opacity:.86; }
+  .btn.primary:disabled { opacity:.38; cursor:not-allowed; }
+  .btn.quiet { border-color:transparent; background:transparent; }
+  .btn.quiet:hover { background:var(--grey-50); }
+  .btn.icon { width:32px; min-height:32px; padding:0; justify-content:center; border-color:transparent; background:transparent; color:var(--grey-500); }
+  .btn.icon:hover { background:var(--grey-50); }
+
+  .seg { display:inline-flex; align-self:flex-start; gap:2px; min-height:40px; padding:3px; border:1px solid var(--grey-300); border-radius:8px; background:var(--white); }
+  .seg button { min-height:32px; padding:0 16px; border:0; border-radius:6px; background:transparent; color:var(--text-2); font-weight:500; cursor:pointer; white-space:nowrap; transition:background .12s var(--ease), color .12s; }
+  .seg button:hover:not([aria-pressed="true"]) { background:var(--grey-50); color:var(--text); }
+  .seg button[aria-pressed="true"] { background:var(--grey-100); color:var(--text); }
+
+  .cb { appearance:none; width:18px; height:18px; margin:0; border:1px solid var(--grey-300); border-radius:4px; background:var(--white); cursor:pointer; flex:0 0 auto; }
+  .cb:checked { background:var(--black) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960' fill='white'%3E%3Cpath d='M382-240 154-468l57-57 171 171 367-367 57 57-424 424Z'/%3E%3C/svg%3E") center/14px no-repeat; border-color:var(--black); }
+
+  .sel { appearance:none; width:100%; min-height:40px; padding:0 40px 0 16px; border:1px solid var(--grey-300); border-radius:8px; background:var(--white) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23000000' stroke-opacity='0.64' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat calc(100% - 12px) 50%/16px; font-size:14px; cursor:pointer; }
+
+  .disc { display:inline-flex; align-items:center; gap:8px; min-height:40px; padding:0; border:0; background:transparent; cursor:pointer; }
+  .disc svg { color:var(--grey-500); transform:rotate(-90deg); transition:transform .18s var(--ease); }
+  .disc[aria-expanded="true"] svg { transform:none; }
+  .attn { display:inline-flex; color:var(--orange-500); cursor:help; }
+
+  .tabs { display:flex; gap:4px; margin:16px 0 24px; flex-wrap:wrap; }
+  .tab { min-height:40px; padding:0 12px; border:0; border-radius:8px; background:transparent; color:var(--text-2); font-weight:500; }
+  .tab.on { background:var(--grey-100); color:var(--text); }
+
+  /* ---------- Stage track (PipelineStages.tsx) ---------- */
+  .track-wrap { overflow-x:auto; padding-bottom:4px; margin-bottom:24px; }
+  .track { display:grid; grid-template-columns:repeat(6,minmax(108px,1fr)); min-width:680px; }
+  .st { display:flex; align-items:center; }
+  .st .c { width:18px; height:18px; border-radius:50%; flex:0 0 auto; display:grid; place-items:center; border:2px solid var(--grey-300); color:var(--grey-300); font:12px var(--mono); transition:all .18s var(--ease); }
+  .st.done .c { border-color:var(--black); }
+  .st.done .c::after { content:""; width:6px; height:6px; border-radius:50%; background:var(--black); }
+  .st.active .c { border:0; background:var(--orange-400); }
+  .st.action .c { border-color:var(--orange-400); }
+  .st .ln { flex:1; height:2px; margin:0 8px; background:var(--grey-200); transition:background .3s var(--ease); }
+  .st.done.next .ln { background:var(--black); }
+  .st-l { margin-top:8px; font-size:12px; color:var(--text-2); }
+  .st-wrap.active .st-l { color:var(--text); font-weight:500; }
+  .st-wrap.action .st-l { color:var(--orange-700); font-weight:500; }
+
+  /* ---------- Motion ---------- */
+  .view { display:none; }
+  .view.in { display:block; animation:fadeIn .18s var(--ease) both; }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
+  .arrive { animation:fadeIn .18s var(--ease) both; }
+  .spin { animation:spin 1.4s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  /* ---------- Roster rows (Activity tab) ---------- */
+  .grp + .grp { margin-top:16px; }
+  .ag { display:grid; grid-template-columns:16px minmax(0,1fr) auto; gap:10px; align-items:center; min-height:58px; padding:8px 9px; border-radius:8px; color:var(--text-2); font-size:13px; font-weight:500; }
+  .ag.sel-row { background:var(--grey-50); color:var(--text); }
+  .ag .sub { display:block; margin-top:2px; color:var(--grey-500); font-size:12px; font-weight:400; }
+  .ag .sub:empty { display:none; }
+  .ag .stat { font-size:12px; color:var(--text-2); }
+  .ag .ico { color:var(--grey-500); display:inline-flex; }
+  .ag .ico.ok { color:var(--black); }
+  .ag .ico.on, .ag .ico.warn { color:var(--orange-500); }
+  .grp-sum { display:inline-flex; align-items:center; gap:8px; padding:0 8px; min-height:32px; border:0; background:transparent; color:var(--text-2); font-size:12px; font-weight:500; cursor:pointer; }
+  .grp-sum svg { color:var(--grey-500); transform:rotate(-90deg); transition:transform .18s var(--ease); }
+  .grp-sum[aria-expanded="true"] svg { transform:none; }
+
+  /* ---------- Activity stream (timeline, newest at the bottom) ---------- */
+  .stream { list-style:none; margin:0; padding:0; }
+  .stream li { display:grid; grid-template-columns:10px minmax(0,1fr); gap:8px; min-height:40px; padding:4px 0 8px; animation:fadeIn .18s var(--ease) both; }
+  .stream li > span { position:relative; width:10px; margin-left:3px; border-left:1px solid var(--grey-200); }
+  .stream li > span::after { content:""; position:absolute; top:6px; left:-4px; width:7px; height:7px; border-radius:50%; background:var(--grey-300); }
+  .stream li:last-child > span::after { background:var(--orange-500); }
+  .stream.settled li:last-child > span::after { background:var(--grey-300); }
+
+  /* ---------- Upload ---------- */
+  .tile { width:48px; height:48px; border-radius:12px; display:grid; place-items:center; background:var(--orange-50); color:var(--orange-500); margin-bottom:16px; }
+  .file-row { display:flex; justify-content:space-between; gap:16px; max-width:560px; margin-top:24px; padding:12px 0; border-top:1px solid var(--grey-100); }
+  .bar { height:2px; background:var(--grey-100); max-width:560px; }
+  .bar i { display:block; height:100%; width:0; background:var(--black); transition:width .2s linear; }
+
+  /* ---------- View 1: Preparation ---------- */
+  .prep { display:grid; grid-template-columns:minmax(0,1fr) 260px; gap:48px; margin-top:16px; }
+  .pages { display:grid; grid-template-columns:repeat(auto-fill,minmax(9px,1fr)); gap:3px; margin-top:12px; }
+  .pg { aspect-ratio:3/4; border-radius:2px; background:var(--grey-100); transition:background .12s; }
+  .pg.read { background:var(--grey-300); }
+  .pg.checked { background:var(--black); }
+  .pg.now { background:var(--orange-500); }
+  .kv { display:flex; justify-content:space-between; align-items:center; min-height:40px; border-top:1px solid var(--grey-100); }
+  .kv:last-of-type { border-bottom:1px solid var(--grey-100); }
+  .kv span:first-child { color:var(--text-2); }
+  .kv .v.arrive { animation:fadeIn .18s var(--ease) both; }
+
+  /* ---------- View 2: Setup ---------- */
+  .filing { display:flex; flex-wrap:wrap; gap:16px; }
+  .field { display:flex; flex-direction:column; gap:8px; }
+  .flabel { display:flex; align-items:center; gap:8px; font-weight:500; }
+  .stmt { display:grid; grid-template-columns:18px minmax(220px,1fr) minmax(220px,440px) 20px; gap:12px 16px; align-items:center; min-height:56px; border-top:1px solid var(--grey-100); cursor:pointer; }
+  .stmt:last-child { border-bottom:1px solid var(--grey-100); }
+  .stmt.off > span, .stmt.off .sel { opacity:.45; }
+  .chk { display:flex; align-items:center; gap:8px; min-height:40px; border-top:1px solid var(--grey-100); cursor:pointer; }
+  .chk:last-child { border-bottom:1px solid var(--grey-100); }
+  .inv { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); column-gap:32px; }
+  .inv-row { display:grid; grid-template-columns:28px minmax(0,1fr) 32px; gap:8px; align-items:center; min-height:40px; border-top:1px solid var(--grey-100); }
+  .inv-row .n { font:12px var(--mono); color:var(--text-2); text-align:right; padding-right:4px; }
+  .actions { display:flex; justify-content:flex-end; margin-top:32px; }
+
+  /* ---------- Overview ---------- */
+  .before { list-style:none; margin:0; padding:0; }
+  .before li { display:grid; grid-template-columns:20px minmax(0,1fr) auto; gap:12px; align-items:center; min-height:56px; border-top:1px solid var(--grey-100); }
+  .before li:last-child { border-bottom:1px solid var(--grey-100); }
+
+  @media (max-width:900px) {
+    .shell { grid-template-columns:1fr; } .side { display:none; }
+    .subhead { padding:0 16px; } main { padding:24px 16px; }
+    .prep { grid-template-columns:minmax(0,1fr); gap:32px; }
+    .stmt { grid-template-columns:18px minmax(0,1fr) 20px; padding:8px 0; }
+    .stmt .sel { grid-column:2; }
+    .inv { grid-template-columns:1fr; }
+    .seg { max-width:100%; } .seg button { flex:1 1 auto; padding:0 12px; }
+  }
+  @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none !important; transition:none !important; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs id="sprite"></defs></svg>
+
+<div class="proto" role="toolbar" aria-label="Prototype controls">
+  <b>Prototype</b>
+  <button data-go="upload">Upload</button>
+  <button data-go="prep">Prepare</button>
+  <button data-go="setup">Confirm setup</button>
+  <button data-go="extract">Extract</button>
+  <button data-go="check">Check</button>
+  <button data-go="review">Review</button>
+  <button data-go="ready">Ready</button>
+  <span class="sp"></span>
+  <label><input type="checkbox" id="fast"> Fast</label>
+  <button id="play">Play all</button>
+</div>
+
+<div class="shell">
+  <aside class="side">
+    <div class="brand"><svg viewBox="0 0 100 100" fill="none"><path d="M12 78 L40 22 L52 50 L66 30 L88 78" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/></svg>XBRL Agent</div>
+    <a class="nav-a"><svg class="i"><use href="#Description"/></svg>Work queue</a>
+    <a class="nav-a" id="nav-add"><svg class="i"><use href="#UploadFile"/></svg>Add documents</a>
+    <a class="nav-a"><svg class="i"><use href="#RunHistory"/></svg>History</a>
+    <div class="label">Recent</div>
+    <a class="doc-a" id="recent" hidden><span id="recent-ic" style="display:inline-flex"></span>Amgen_FS_2025.pdf</a>
+    <a class="doc-a"><svg class="i s16"><use href="#DoNotDisturbOn"/></svg>test.pdf</a>
+    <a class="doc-a"><svg class="i s16"><use href="#ArrowForward"/></svg>View all</a>
+    <div class="foot">
+      <a class="nav-a"><svg class="i"><use href="#Settings"/></svg>Settings</a>
+      <a class="nav-a"><svg class="i"><use href="#LeftPanelClose"/></svg>Collapse sidebar</a>
+      <div class="acct"><i>DE</i><div>Dev<span>Administrator</span></div></div>
+    </div>
+  </aside>
+
+  <div class="work">
+    <div class="subhead" id="subhead" hidden><button class="back"><svg class="i"><use href="#ArrowBack"/></svg>Back to work queue</button></div>
+    <main>
+      <h1 id="title">Add documents</h1>
+
+      <div class="tabs" id="tabs" hidden></div>
+
+      <div class="track-wrap" id="track-wrap" hidden>
+        <div class="track" id="track" aria-label="Workflow progress"></div>
+      </div>
+
+      <!-- ===== Upload ===== -->
+      <section class="view" id="v-upload">
+        <div class="tile"><svg class="i"><use href="#UploadFile"/></svg></div>
+        <button class="btn primary" id="choose">Choose files</button>
+        <div id="file-wrap" hidden>
+          <div class="file-row"><span>Amgen_FS_2025.pdf</span><span class="meta" id="up-meta">0%</span></div>
+          <div class="bar"><i id="up-bar"></i></div>
+        </div>
+      </section>
+
+      <!-- ===== View 1: Document preparation ===== -->
+      <section class="view" id="v-prep">
+        <div class="hrow">
+          <h2>Document preparation</h2><span id="prep-state">Working</span><span id="prep-time">00:00</span>
+          <button class="btn" id="prep-stop">Stop preparation</button>
+        </div>
+        <div class="prep">
+          <div>
+            <div id="prep-rows"></div>
+            <div class="pages" id="pages" aria-hidden="true"></div>
+            <div class="sect">
+              <div class="hrow"><h2>Live activity</h2></div>
+              <ol class="stream" id="stream" aria-live="polite"></ol>
+            </div>
+          </div>
+          <aside>
+            <div class="hrow" style="margin-bottom:8px"><h2>Detected</h2></div>
+            <div class="kv" data-f="standard"><span>Filing standard</span><span class="v">—</span></div>
+            <div class="kv" data-f="level"><span>Filing level</span><span class="v">—</span></div>
+            <div class="kv" data-f="denom"><span>Denomination</span><span class="v">—</span></div>
+            <div class="kv" data-f="periods"><span>Reporting periods</span><span class="v">—</span></div>
+            <div class="kv" data-f="stmts"><span>Statements</span><span class="v">—</span></div>
+            <div class="kv" data-f="notes"><span>Notes</span><span class="v">—</span></div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ===== View 2: Filing setup ===== -->
+      <section class="view" id="v-setup">
+        <div class="hrow" style="margin-bottom:8px">
+          <h2 class="grow">Filing setup</h2>
+          <button class="disc meta" aria-expanded="false" data-disc="prep-log">Preparation details<svg class="i s16"><use href="#ExpandMore"/></svg></button>
+        </div>
+        <ol class="stream settled arrive" id="prep-log" hidden style="margin-bottom:16px"></ol>
+        <div class="filing">
+          <div class="field"><span class="flabel">Filing standard</span>
+            <div class="seg"><button aria-pressed="true">MFRS</button><button aria-pressed="false">MPERS</button></div></div>
+          <div class="field"><span class="flabel">Filing level</span>
+            <div class="seg"><button aria-pressed="false">Company</button><button aria-pressed="true">Group</button></div></div>
+          <div class="field"><span class="flabel">Denomination</span>
+            <div class="seg"><button aria-pressed="false">RM</button><button aria-pressed="true">RM '000</button><button aria-pressed="false">RM mil</button></div></div>
+          <div class="field"><span class="flabel">Reporting periods
+            <span class="attn" tabindex="0" title="Page 12 mentions 'since incorporation'" aria-label="Check: page 12 mentions since incorporation"><svg class="i s16"><use href="#ErrorCircle"/></svg></span></span>
+            <div class="seg"><button aria-pressed="true">Current and prior</button><button aria-pressed="false" title="First statements after incorporation">Current only</button></div></div>
+        </div>
+
+        <div class="sect">
+          <div class="hrow"><h2>Statements</h2></div>
+          <div id="stmts"></div>
+        </div>
+
+        <div class="sect">
+          <div class="hrow"><h2>Notes</h2></div>
+          <div id="tmpls"></div>
+        </div>
+
+        <div class="sect">
+          <div class="hrow"><h2 class="grow">Notes in the document</h2><button class="btn quiet">Add note</button></div>
+          <div class="inv" id="inv"></div>
+        </div>
+
+        <div class="actions"><button class="btn primary" id="start">Confirm setup and start extraction</button></div>
+      </section>
+
+      <!-- ===== Run: Extract / Check / Review ===== -->
+      <section class="view" id="v-run">
+        <div class="hrow" style="margin-bottom:16px">
+          <h2 id="run-stage">Extracting</h2><span id="run-count"></span><span id="run-time">00:00</span>
+          <button class="btn">Stop all</button>
+        </div>
+        <div id="roster"></div>
+        <div class="sect">
+          <div class="hrow"><h2 class="grow">Live activity</h2></div>
+          <ol class="stream" id="run-stream" aria-live="polite"></ol>
+        </div>
+      </section>
+
+      <!-- ===== Ready / Overview ===== -->
+      <section class="view" id="v-ready">
+        <div class="hrow" id="ready-flash">
+          <svg class="i" style="color:var(--black)"><use href="#CheckCircle"/></svg><h2 class="grow">Extraction complete</h2>
+          <button class="btn" id="open-ov">Open overview</button>
+        </div>
+        <div id="overview" hidden class="arrive">
+          <div class="hrow" style="margin-bottom:8px"><h2>Before filing</h2></div>
+          <ol class="before">
+            <li><svg class="i s16" style="color:var(--orange-500)"><use href="#ErrorCircle"/></svg><span>The AI changed the sign of interest paid. Check it against page 16.</span><button class="btn quiet">Review figures</button></li>
+            <li><span></span><span>Verify AI-extracted figures against the source PDF.</span><button class="btn quiet">Open figures</button></li>
+            <li><span></span><span>Fill the mTool file.</span><button class="btn primary">Prepare mTool draft</button></li>
+          </ol>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script>
+const ICONS = {"RunHistory": "M477-140q-132 0-227.34-87.62-95.35-87.61-108.27-217.61-1-9.69 5-17.15 6-7.47 16.3-7.47 9.31 0 15.7 6.77 6.38 6.77 8 17.08 13.3 111.15 95.38 185.88 82.08 74.73 195.23 74.73 124.31 0 210.58-87.07 86.27-87.08 86.27-211.39 0-122.07-86.89-206.42-86.88-84.34-209.96-84.34-64.54 0-121.73 28.3-57.19 28.31-100.42 75.85h78.07q9.93 0 16.31 6.38 6.39 6.39 6.39 16.31 0 9.92-6.39 16.31-6.38 6.38-16.31 6.38H204.31q-12.62 0-20.73-8.11-8.12-8.12-8.12-20.73v-128.39q0-9.54 6.39-16.11 6.38-6.58 16.31-6.58 9.92 0 16.3 6.58 6.39 6.57 6.39 16.11v81q49.31-55.23 115.8-86.96Q403.15-820 477-820q70.77 0 132.92 26.46 62.16 26.46 108.77 72.46 46.62 46 73.58 107.54 26.96 61.54 26.96 131.92 0 70.77-26.96 133.12-26.96 62.35-73.58 108.46-46.61 46.12-108.77 73.08Q547.77-140 477-140Zm26.69-350.54 121.16 119.16q6.69 7.07 6.88 16.5.19 9.42-6.88 16.5-7.08 6.69-16 6.69-8.93 0-16-6.69L466.92-462.69q-4.61-4.62-6.61-9.93-2-5.3-2-10.92v-176q0-9.92 6.38-16.31 6.39-6.38 16.31-6.38 9.92 0 16.31 6.38 6.38 6.39 6.38 16.31v169Z", "Description": "M352.08-257.31h255.84q9.67 0 16.18-6.56 6.51-6.57 6.51-16.31 0-9.74-6.51-16.13-6.51-6.38-16.18-6.38H352.08q-9.67 0-16.18 6.56-6.51 6.57-6.51 16.31 0 9.74 6.51 16.13 6.51 6.38 16.18 6.38Zm0-167.31h255.84q9.67 0 16.18-6.56 6.51-6.57 6.51-16.31 0-9.74-6.51-16.12-6.51-6.39-16.18-6.39H352.08q-9.67 0-16.18 6.57-6.51 6.56-6.51 16.3 0 9.75 6.51 16.13 6.51 6.38 16.18 6.38ZM237.69-100q-23.53 0-40.61-17.08T180-157.69v-644.62q0-23.53 17.08-40.61T237.69-860h323.7q12.05 0 22.76 4.81 10.7 4.81 18.7 12.42l159.92 159.92q7.61 8 12.42 18.7 4.81 10.71 4.81 22.76v483.7q0 23.53-17.08 40.61T722.31-100H237.69Zm324.85-573.62v-140.99H237.69q-4.61 0-8.46 3.84-3.84 3.85-3.84 8.46v644.62q0 4.61 3.84 8.46 3.85 3.84 8.46 3.84h484.62q4.61 0 8.46-3.84 3.84-3.85 3.84-8.46v-487.08H591.39q-11.99 0-20.42-8.43-8.43-8.44-8.43-20.42ZM225.39-814.61v169.84-169.84 669.22-669.22Z", "Settings": "M426.77-100q-10.92 0-19.62-7.08-8.69-7.08-10.3-18l-14.23-95.15q-20.54-7-44.23-20.35-23.7-13.34-40.85-28.27l-86.77 40q-10.92 4.46-21.85 1.12-10.92-3.35-17-13.66l-53.38-94.38q-6.08-10.31-3.54-21.04 2.54-10.73 12.23-17.8l79.62-59q-2-10.54-2.89-23.01-.88-12.46-.88-23 0-10.15.88-22.61.89-12.46 2.89-24.16l-79.62-59q-9.69-7.07-12.04-17.99-2.34-10.93 3.73-21.23l53-93.23q6.08-9.93 17-13.47 10.93-3.53 21.85.93l86.38 39.23q18.31-14.93 41.24-28.08 22.92-13.15 43.84-19.54l14.62-96.15q1.61-10.92 10.3-18 8.7-7.08 19.62-7.08h106.46q10.92 0 19.62 7.08 8.69 7.08 10.3 18l14.23 95.54q22.08 8.15 44.16 20.23 22.07 12.07 39.77 28l88.3-39.23q10.93-4.46 21.54-.93 10.62 3.54 16.69 13.47l53.62 93.61q6.08 10.31 3.54 21.54-2.54 11.23-12.23 17.3l-81.16 58.54q2.77 11.93 3.47 24 .69 12.08.69 22.85 0 10.38-.89 22.15-.88 11.77-3.27 24.47l80 58.77q9.7 6.07 12.43 17.3 2.73 11.23-3.35 21.54l-52.61 94q-6.47 10.31-17.58 13.65-11.12 3.35-21.65-1.11l-87.54-40q-18.7 15.69-40.35 28.96-21.65 13.27-43.58 19.65l-14.23 95.54q-1.61 10.92-10.3 18-8.7 7.08-19.62 7.08H426.77Zm10.38-45.39h85.31L536.85-257q31.84-8 59.42-23.85 27.58-15.84 52.73-40.23l104.46 45.23 40-70.84L701-414.92q4-17.77 6.31-33.5 2.3-15.73 2.3-31.58 0-16.62-2-31.96-2-15.35-6.61-32.35l93.23-69-40-70.84-105.62 45.23q-21.07-23.69-50.84-41.77Q568-698.77 536.46-703l-13.61-111.61h-85.7l-13.23 111.23q-33.23 6.61-61.19 22.65t-52.11 41.42l-104.85-44.84-40 70.84 92.46 67.85q-4.38 15.84-6.69 32.15-2.31 16.31-2.31 33.69 0 16.62 2.31 32.54 2.31 15.93 6.31 32.16l-92.08 68.23 40 70.84 104.46-44.84q24 24.38 52.15 40.23 28.16 15.84 61.16 23.84l13.61 111.23Zm41.7-221.92q47.07 0 79.88-32.81 32.81-32.8 32.81-79.88t-32.81-79.88q-32.81-32.81-79.88-32.81-46.7 0-79.7 32.81-32.99 32.8-32.99 79.88t32.99 79.88q33 32.81 79.7 32.81ZM480-480Z", "LeftPanelClose": "M644.15-388.85v-182.3q0-9.5-9.31-13.06-9.3-3.56-15.92 3.06L538-500.23q-8.62 8.68-8.62 20.26 0 11.59 8.62 20.2l80.92 80.92q6.62 6.62 15.92 3.06 9.31-3.56 9.31-13.06ZM197.69-140q-23.59 0-40.64-17.05T140-197.69v-564.62q0-23.59 17.05-40.64T197.69-820h564.62q23.59 0 40.64 17.05T820-762.31v564.62q0 23.59-17.05 40.64T762.31-140H197.69Zm127.39-45.39v-589.22H197.69q-4.61 0-8.46 3.84-3.84 3.85-3.84 8.46v564.62q0 4.61 3.84 8.46 3.85 3.84 8.46 3.84h127.39Zm45.38 0h391.85q4.61 0 8.46-3.84 3.84-3.85 3.84-8.46v-564.62q0-4.61-3.84-8.46-3.85-3.84-8.46-3.84H370.46v589.22Zm-45.38 0H185.39h139.69Z", "UploadFile": "M458.92-428.39v179.47q0 9.66 6.57 16.17 6.57 6.52 16.31 6.52 9.74 0 16.12-6.52 6.39-6.51 6.39-16.17v-179.47l71 71.39q2.23 2.23 11.15-1.42 8.92-3.66 16.73-6.5 7.81-2.85 11.04-2.54 3.23.31-6.92 10.46 7.07-7.08 6.57-16t-7.19-16L500.1-493.31q-4.48-4.54-9.62-6.54-5.13-2-10.61-2-5.49 0-10.49 2t-9.48 6.51L354.31-387.39q-6.69 6.7-6.89 15.81-.19 9.12 6.5 16.59 7.08 6.3 16.2 6.3 9.11 0 15.8-6.7l73-73ZM237.69-100q-23.53 0-40.61-17.08T180-157.69v-644.62q0-23.53 17.08-40.61T237.69-860h323.7q12.05 0 22.76 4.81 10.7 4.81 18.7 12.42l159.92 159.92q7.61 8 12.42 18.7 4.81 10.71 4.81 22.76v483.7q0 23.53-17.08 40.61T722.31-100H237.69Zm324.85-573.62v-140.99H237.69q-4.61 0-8.46 3.84-3.84 3.85-3.84 8.46v644.62q0 4.61 3.84 8.46 3.85 3.84 8.46 3.84h484.62q4.61 0 8.46-3.84 3.84-3.85 3.84-8.46v-487.08H591.39q-11.99 0-20.42-8.43-8.43-8.44-8.43-20.42ZM225.39-814.61v169.84-169.84 669.22-669.22Z", "ProgressActivity": "M331.32-129.4q-69.29-29.4-120.9-81.02-51.62-51.61-81.02-120.9-29.4-69.3-29.4-148.73 0-79.43 29.46-148.73 29.46-69.3 80.96-120.8 51.5-51.5 120.93-80.96Q400.78-860 480-860q9.29 0 15.99 6.71 6.7 6.7 6.7 16 0 9.29-6.7 15.98-6.7 6.7-15.99 6.7-138.69 0-236.65 97.96-97.96 97.96-97.96 236.65t97.96 236.65q97.96 97.96 236.65 97.96t236.65-97.96q97.96-97.96 97.96-236.65 0-9.31 6.71-16 6.71-6.69 16-6.69t15.99 6.7Q860-489.29 860-480q0 79.22-29.46 148.65t-80.96 120.93q-51.5 51.5-120.8 80.96Q559.48-100 480.05-100q-79.43 0-148.73-29.4Z", "CheckCircle": "M421-380.15 319.54-482q-7.08-6.69-16.81-6.88-9.73-.2-17.42 7.5-7.08 7.07-7.08 16.8t7.08 16.81l115.46 116.08q8.61 9 20.23 9 11.62 0 20.23-9l232.08-231.7q7.3-7.69 7.5-17.42.19-9.73-7.5-17.42-7.7-7.08-17.73-6.77-10.04.31-17.12 7.39L421-380.15ZM480.07-100q-78.22 0-147.4-29.92t-120.99-81.71q-51.81-51.79-81.75-120.94Q100-401.71 100-479.93q0-78.84 29.92-148.21t81.71-120.68q51.79-51.31 120.94-81.25Q401.71-860 479.93-860q78.84 0 148.21 29.92t120.68 81.21q51.31 51.29 81.25 120.63Q860-558.9 860-480.07q0 78.22-29.92 147.4t-81.21 120.99q-51.29 51.81-120.63 81.75Q558.9-100 480.07-100Zm-.07-45.39q139.69 0 237.15-97.76 97.46-97.77 97.46-236.85 0-139.69-97.46-237.15-97.46-97.46-237.15-97.46-139.08 0-236.85 97.46-97.76 97.46-97.76 237.15 0 139.08 97.76 236.85 97.77 97.76 236.85 97.76ZM480-480Z", "ErrorCircle": "M499.46-298.52q7.77-7.75 7.77-19.46t-7.75-19.48q-7.75-7.77-19.46-7.77t-19.48 7.75q-7.77 7.75-7.77 19.46t7.75 19.48q7.75 7.77 19.46 7.77t19.48-7.75Zm-.92-139.85q6.38-6.51 6.38-16.17v-204.15q0-9.66-6.57-16.18-6.57-6.51-16.31-6.51-9.73 0-16.12 6.51-6.38 6.52-6.38 16.18v204.15q0 9.66 6.57 16.17 6.58 6.52 16.31 6.52 9.73 0 16.12-6.52ZM480.33-100q-78.95 0-147.89-29.92-68.95-29.92-120.76-81.71-51.81-51.79-81.75-120.78Q100-401.39 100-480.43q0-78.66 29.92-147.87 29.92-69.21 81.71-120.52 51.79-51.31 120.78-81.25Q401.39-860 480.43-860q78.66 0 147.87 29.92 69.21 29.92 120.52 81.21 51.31 51.29 81.25 120.63Q860-558.9 860-480.33q0 78.95-29.92 147.89-29.92 68.95-81.21 120.57-51.29 51.63-120.63 81.75Q558.9-100 480.33-100Zm.17-45.39q139.19 0 236.65-97.76 97.46-97.77 97.46-237.35 0-139.19-97.27-236.65-97.27-97.46-237.34-97.46-139.08 0-236.85 97.27-97.76 97.27-97.76 237.34 0 139.08 97.76 236.85 97.77 97.76 237.35 97.76ZM480-480Z", "Cancel": "m480-448 132.46 132.46q6.69 6.69 15.81 6.89 9.11.19 16.19-6.89 7.08-7.08 7.08-16t-7.08-16L512-480l132.46-132.46q6.69-6.69 6.89-15.81.19-9.11-6.89-16.19-7.08-7.08-16-7.08t-16 7.08L480-512 347.54-644.46q-6.69-6.69-15.81-6.89-9.11-.19-16.19 6.89-7.08 7.08-7.08 16t7.08 16L448-480 315.54-347.54q-6.69 6.69-6.89 15.81-.19 9.11 6.89 16.19 7.08 7.08 16 7.08t16-7.08L480-448Zm.07 348q-78.22 0-147.4-29.92t-120.99-81.71q-51.81-51.79-81.75-120.94Q100-401.71 100-479.93q0-78.84 29.92-148.21t81.71-120.68q51.79-51.31 120.94-81.25Q401.71-860 479.93-860q78.84 0 148.21 29.92t120.68 81.21q51.31 51.29 81.25 120.63Q860-558.9 860-480.07q0 78.22-29.92 147.4t-81.21 120.99q-51.29 51.81-120.63 81.75Q558.9-100 480.07-100Zm-.07-45.39q139.69 0 237.15-97.76 97.46-97.77 97.46-236.85 0-139.69-97.46-237.15-97.46-97.46-237.15-97.46-139.08 0-236.85 97.46-97.76 97.46-97.76 237.15 0 139.08 97.76 236.85 97.77 97.76 236.85 97.76ZM480-480Z", "DoNotDisturbOn": "M312.69-459.54h334.62q9.65 0 16.17-6.57 6.52-6.58 6.52-16.31 0-9.73-6.52-16.12-6.52-6.38-16.17-6.38H312.69q-9.65 0-16.17 6.57-6.52 6.57-6.52 16.31 0 9.73 6.52 16.12 6.52 6.38 16.17 6.38ZM480.33-100q-78.95 0-147.89-29.92-68.95-29.92-120.76-81.71-51.81-51.79-81.75-120.78Q100-401.39 100-480.43q0-78.66 29.92-147.87 29.92-69.21 81.71-120.52 51.79-51.31 120.78-81.25Q401.39-860 480.43-860q78.66 0 147.87 29.92 69.21 29.92 120.52 81.21 51.31 51.29 81.25 120.63Q860-558.9 860-480.33q0 78.95-29.92 147.89-29.92 68.95-81.21 120.57-51.29 51.63-120.63 81.75Q558.9-100 480.33-100Zm.17-45.39q139.19 0 236.65-97.76 97.46-97.77 97.46-237.35 0-139.19-97.27-236.65-97.27-97.46-237.34-97.46-139.08 0-236.85 97.27-97.76 97.27-97.76 237.34 0 139.08 97.76 236.85 97.77 97.76 237.35 97.76ZM480-480Z", "ExpandMore": "M480-370.078q-6 0-10.808-2-4.807-2-9.423-6.615L269.847-568.616q-6.692-6.692-6.885-15.807-.192-9.115 6.885-16.192t16.307-7.077q9.231 0 16.307 7.077L480-423.076l177.539-177.539q6.692-6.692 15.807-6.884 9.115-.193 16.192 6.884t7.077 16.307q0 9.231-7.077 16.308L500.231-378.693q-4.616 4.615-9.423 6.615-4.808 2-10.808 2Z", "Close": "M480-448 266.92-234.92q-6.69 6.69-15.8 6.88-9.12.19-16.2-6.88-7.07-7.08-7.07-16 0-8.93 7.07-16L448-480 234.92-693.08q-6.69-6.69-6.88-15.8-.19-9.12 6.88-16.2 7.08-7.07 16-7.07 8.93 0 16 7.07L480-512l213.08-213.08q6.69-6.69 15.8-6.88 9.12-.19 16.2 6.88 7.07 7.08 7.07 16 0 8.93-7.07 16L512-480l213.08 213.08q6.69 6.69 6.88 15.8.19 9.12-6.88 16.2-7.08 7.07-16 7.07-8.93 0-16-7.07L480-448Z", "Delete": "M278.31-140q-23.5 0-40.6-17.1-17.09-17.09-17.09-40.59v-544.23h-17.93q-9.64 0-16.16-6.58-6.53-6.58-6.53-16.31 0-9.73 6.53-16.11 6.52-6.39 16.16-6.39h148.39q0-11.84 8.24-19.96 8.25-8.11 19.83-8.11h201.7q11.58 0 19.83 8.24 8.24 8.25 8.24 19.83h148.39q9.64 0 16.16 6.58 6.53 6.58 6.53 16.31 0 9.73-6.53 16.11-6.52 6.39-16.16 6.39h-17.93v544.23q0 23.5-17.09 40.59-17.1 17.1-40.6 17.1H278.31ZM694-741.92H266v544.23q0 5.38 3.65 8.84 3.66 3.46 8.66 3.46h403.38q5 0 8.66-3.46 3.65-3.46 3.65-8.84v-544.23ZM420.23-276.37q6.39-6.52 6.39-16.17v-343.23q0-9.27-6.58-15.98-6.58-6.71-16.31-6.71-9.73 0-16.11 6.71-6.39 6.71-6.39 15.98v343.23q0 9.65 6.58 16.17 6.58 6.52 16.31 6.52 9.73 0 16.11-6.52Zm152.15 0q6.39-6.52 6.39-16.17v-343.23q0-9.27-6.58-15.98-6.58-6.71-16.31-6.71-9.73 0-16.11 6.71-6.39 6.71-6.39 15.98v343.23q0 9.65 6.58 16.17 6.58 6.52 16.31 6.52 9.73 0 16.11-6.52ZM266-741.92v556.53-556.53Z", "Logout": "M197.69-140q-23.53 0-40.61-17.08T140-197.69v-564.62q0-23.53 17.08-40.61T197.69-820h259.39q9.66 0 16.18 6.57 6.51 6.56 6.51 16.31 0 9.74-6.51 16.12-6.52 6.39-16.18 6.39H197.69q-4.61 0-8.46 3.84-3.84 3.85-3.84 8.46v564.62q0 4.61 3.84 8.46 3.85 3.84 8.46 3.84h259.39q9.66 0 16.18 6.57 6.51 6.57 6.51 16.31 0 9.74-6.51 16.12-6.52 6.39-16.18 6.39H197.69Zm534.62-317.31H386.54q-9.67 0-16.18-6.56-6.51-6.57-6.51-16.31 0-9.74 6.51-16.13 6.51-6.38 16.18-6.38h344.54l-81.39-81.39q-6.69-6.69-6.57-15.8.11-9.12 7.19-16.2 7.08-7.07 16.24-6.88 9.16.19 16.37 6.88l116.46 116.46q8.62 9 8.62 20.45 0 11.44-8.62 20.02L683.54-343.31q-6.11 6.69-15.25 6.55-9.14-.15-16.76-7.16-6.68-7.08-6.68-16.31 0-9.23 7.07-16.31l80.39-80.77Z", "Check": "m379.15-323.15 363-363.39q6.7-6.31 16.12-6.5 9.42-.19 16.5 6.69 7.08 6.89 7.08 16.31 0 9.42-7.08 16.12L399.38-278.54q-8.61 8.62-20.23 8.62-11.61 0-20.23-8.62l-174.3-174.31q-6.7-6.69-6.58-16.11.11-9.42 7.19-16.31 7.08-6.88 16.31-6.88 9.23 0 16.31 6.69l161.3 162.31Z", "ArrowBack": "M266.31-457.31 496-228q6.31 6.76 6.69 15.84.39 9.08-6.69 15.99-7.08 7.25-16 7.25T464-196L200.15-459.85q-4.53-4.53-6.53-9.39t-2-10.81q0-5.95 2-10.76t6.53-9.34L464-764q6.69-6.69 15.73-6.88 9.04-.2 16.27 6.88 7.08 7.23 7.08 16.08 0 8.84-7.08 15.54L266.31-502.69h491q9.91 0 16.3 6.39 6.39 6.39 6.39 16.31 0 9.91-6.39 16.3-6.39 6.38-16.3 6.38h-491Z", "ArrowForward": "M693.69-457.31h-491q-9.91 0-16.3-6.39-6.39-6.39-6.39-16.31 0-9.91 6.39-16.3 6.39-6.38 16.3-6.38h491L464-732q-6.31-6.76-6.69-15.84-.39-9.08 6.69-15.99 7.08-7.25 16-7.25t16 7.08l263.85 263.85q4.53 4.53 6.73 9.39 2.19 4.86 2.19 10.81t-2.19 10.76q-2.2 4.81-6.73 9.34L496-196q-6.69 6.69-15.73 6.88-9.04.2-16.27-6.88-7.08-7.23-7.08-16.08 0-8.84 7.08-15.54l229.69-229.69Z"};
+document.getElementById("sprite").innerHTML = Object.entries(ICONS)
+  .map(([k, d]) => `<symbol id="${k}" viewBox="0 -960 960 960"><path d="${d}"/></symbol>`).join("");
+
+(() => {
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const ic = (n, cls = "s16") => `<svg class="i ${cls}"><use href="#${n}"/></svg>`;
+  const ICO = {
+    Waiting:  `<span class="ico">${ic("DoNotDisturbOn")}</span>`,
+    Working:  `<span class="ico on">${ic("ProgressActivity", "s16 spin")}</span>`,
+    Complete: `<span class="ico ok">${ic("CheckCircle")}</span>`,
+    "Needs review": `<span class="ico warn">${ic("ErrorCircle")}</span>`,
+  };
+  const speed = () => ($("#fast").checked ? 0.3 : 1);
+  let token = 0;
+  const wait = (ms, t) => new Promise((ok, no) => setTimeout(() => (t === token ? ok() : no("x")), ms * speed()));
+  const DOC = "Amgen_FS_2025.pdf";
+
+  /* ---------- frame ---------- */
+  function show(id, nav) {
+    $$(".view").forEach(v => v.classList.remove("in"));
+    const v = $("#v-" + id); void v.offsetWidth; v.classList.add("in");
+    $$(".proto [data-go]").forEach(b => b.classList.toggle("on", b.dataset.go === nav));
+  }
+  const PHASES = ["Prepare document", "Confirm setup", "Extract", "Check", "Review", "Ready"];
+  function track(current, mode = "active", allDone = false) {
+    $("#track-wrap").hidden = current === null && !allDone;
+    $("#track").innerHTML = PHASES.map((p, i) => {
+      const s = allDone || i < current ? "done" : i === current ? mode : "";
+      const nextDone = allDone || i + 1 <= current;
+      return `<div class="st-wrap ${s}"><div class="st ${s} ${nextDone ? "next" : ""}"><span class="c">${s ? "" : i + 1}</span>${i < 5 ? `<span class="ln"></span>` : ""}</div><div class="st-l">${p}</div></div>`;
+    }).join("");
+  }
+  function frame({ title = DOC, sub = true, tabs = null, recentIcon = null } = {}) {
+    $("#title").textContent = title;
+    $("#subhead").hidden = !sub;
+    $("#nav-add").classList.toggle("cur", !recentIcon);
+    $("#recent").hidden = !recentIcon; $("#recent").classList.toggle("cur", !!recentIcon);
+    if (recentIcon) $("#recent-ic").innerHTML = recentIcon;
+    $("#tabs").hidden = !tabs;
+    if (tabs) $("#tabs").innerHTML = tabs.list.map(t => `<button class="tab ${t === tabs.on ? "on" : ""}">${t}</button>`).join("");
+  }
+  const working = `<span style="color:var(--orange-500);display:inline-flex">${ic("ProgressActivity", "s16 spin")}</span>`;
+  function clock(el, t) {
+    const t0 = Date.now();
+    (function tick() { if (t !== token) return; const s = Math.floor((Date.now() - t0) / 1000 / speed()); el.textContent = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; setTimeout(tick, 250); })();
+  }
+  function say(list, text) {
+    const li = document.createElement("li");
+    li.innerHTML = `<span></span><div>${text}</div>`;
+    list.append(li);
+    while (list.children.length > 8) list.firstElementChild.remove();
+  }
+
+  /* ---------- Upload ---------- */
+  async function upload(t) {
+    frame({ title: "Add documents", sub: false }); track(null); show("upload", "upload");
+    $("#file-wrap").hidden = true; $("#up-bar").style.width = "0";
+    await wait(700, t);
+    $("#file-wrap").hidden = false;
+    for (let p = 0; p <= 100; p += 10) { $("#up-bar").style.width = p + "%"; $("#up-meta").textContent = p + "%"; await wait(90, t); }
+    await wait(300, t);
+  }
+
+  /* ---------- Document preparation ---------- */
+  const TOTAL = 84;
+  const PREP = [["read", "Read source pages"], ["check", "Check readings and continuations"], ["map", "Build document map"]];
+  function prow(key, state, sub = "") {
+    const r = $(`[data-r="${key}"]`);
+    r.querySelector("[data-i]").innerHTML = ICO[state];
+    r.querySelector("[data-s]").textContent = state;
+    r.querySelector(".sub").textContent = sub;
+    r.classList.toggle("sel-row", state === "Working");
+  }
+  function found(k, v) { const el = $(`.kv[data-f="${k}"] .v`); el.textContent = v; el.classList.remove("arrive"); void el.offsetWidth; el.classList.add("arrive"); }
+
+  async function prepare(t) {
+    frame({ recentIcon: working }); track(0); show("prep", "prep");
+    $("#prep-state").textContent = "Working"; $("#prep-stop").hidden = false; clock($("#prep-time"), t);
+    $("#prep-rows").innerHTML = PREP.map(([k, n]) => `<div class="ag" data-r="${k}"><span data-i></span><div>${n}<span class="sub"></span></div><span class="stat" data-s></span></div>`).join("");
+    PREP.forEach(([k]) => prow(k, "Waiting"));
+    $("#pages").innerHTML = Array.from({ length: TOTAL }, () => `<i class="pg"></i>`).join("");
+    $("#stream").innerHTML = ""; $$(".kv .v").forEach(v => (v.textContent = "—"));
+    const S = $("#stream");
+    say(S, "Opening the document.");
+    await wait(500, t);
+    prow("read", "Working", `0 of ${TOTAL}`);
+    const pgs = $$("#pages .pg");
+    const ev = {
+      5:  () => { found("standard", "MFRS"); say(S, "Found the filing standard — page 5."); },
+      12: () => { found("level", "Group"); found("denom", "RM '000"); say(S, "Found the statement of financial position — page 12."); },
+      13: () => say(S, "Found profit or loss and comprehensive income — page 13."),
+      14: () => say(S, "Found changes in equity — pages 14 to 15."),
+      16: () => say(S, "Found the statement of cash flows — page 16."),
+      18: () => say(S, "Notes start — page 18."),
+    };
+    for (let i = 0; i < TOTAL + 6; i++) {
+      if (i < TOTAL) {
+        pgs.forEach(p => p.classList.remove("now")); pgs[i].classList.add("now", "read");
+        $('[data-r="read"] .sub').textContent = `${i + 1} of ${TOTAL}`;
+        ev[i + 1]?.();
+      }
+      const c = i - 6;
+      if (c >= 0) {
+        if (c === 0) prow("check", "Working");
+        pgs[c].classList.remove("now"); pgs[c].classList.add("checked");
+        $('[data-r="check"] .sub').textContent = `${c + 1} of ${TOTAL}`;
+        if (c === 15) say(S, "Joined changes in equity across pages 14 and 15.");
+      }
+      if (i === TOTAL - 1) prow("read", "Complete", `${TOTAL} of ${TOTAL}`);
+      await wait(i < TOTAL ? 45 : 80, t);
+    }
+    pgs.forEach(p => p.classList.remove("now"));
+    prow("check", "Complete", `${TOTAL} of ${TOTAL}`);
+    prow("map", "Working", "Statements");
+    say(S, "Mapping statements and note ownership.");
+    for (let n = 1; n <= 5; n++) { found("stmts", n); await wait(260, t); }
+    $('[data-r="map"] .sub').textContent = "Notes";
+    for (let n = 4; n <= 27; n += 6) { found("notes", n); await wait(120, t); }
+    found("notes", 27); found("periods", "Current and prior");
+    say(S, "Checking notes inventory.");
+    await wait(700, t);
+    prow("map", "Complete", "");
+    $("#prep-state").textContent = "Complete"; $("#prep-stop").hidden = true;
+    say(S, "Document ready.");
+    track(1, "action");
+    await wait(1200, t);
+  }
+
+  /* ---------- Filing setup ---------- */
+  const STMTS = [["Statement of Financial Position", ["Current / non-current", "Order of liquidity"]],
+                 ["Statement of Profit or Loss", ["By function", "By nature"]],
+                 ["Statement of Comprehensive Income", ["Net of tax", "Before tax"]],
+                 ["Statement of Cash Flows", ["Indirect", "Direct"], "Page 16 shows both formats"],
+                 ["Statement of Changes in Equity", ["Standard"]]];
+  const TMPLS = ["Corporate information", "Accounting policies", "List of notes", "Issued capital", "Related party transactions"];
+  const NOTES = ["Corporate information", "Basis of preparation", "Material accounting policies", "Revenue", "Other income", "Finance costs", "Profit before tax", "Tax expense", "Earnings per share", "Dividends", "Employee benefits", "Property, plant and equipment", "Right-of-use assets", "Investment in subsidiaries", "Inventories", "Trade and other receivables", "Cash and bank balances", "Share capital", "Reserves", "Lease liabilities", "Borrowings", "Trade and other payables", "Related party disclosures", "Commitments", "Contingent liabilities", "Financial instruments", "Subsequent events"];
+
+  function setup() {
+    frame({ recentIcon: `<span style="color:var(--orange-500);display:inline-flex">${ic("ErrorCircle")}</span>` });
+    track(1, "action"); show("setup", "setup");
+    $("#stmts").innerHTML = STMTS.map(([n, opts, warn]) => `
+      <label class="stmt"><input type="checkbox" class="cb" checked data-pick><span>${n}</span>
+        <select class="sel" aria-label="${n} format">${opts.map(o => `<option>${o}</option>`).join("")}</select>
+        ${warn ? `<span class="attn" tabindex="0" title="${warn}" aria-label="${warn}">${ic("ErrorCircle")}</span>` : "<span></span>"}</label>`).join("");
+    $("#tmpls").innerHTML = TMPLS.map(n => `<label class="chk"><input type="checkbox" class="cb" checked data-pick>${n}</label>`).join("");
+    $("#inv").innerHTML = NOTES.map((n, i) => `<div class="inv-row"><span class="n">${i + 1}</span><span>${n}</span><button class="btn icon" title="Remove note ${i + 1}" aria-label="Remove note ${i + 1}">${ic("Close", "")}</button></div>`).join("");
+    $("#prep-log").innerHTML = $("#stream").innerHTML || `<li><span></span><div>Document ready.</div></li>`;
+    $("#prep-log").hidden = true; $('[data-disc="prep-log"]').setAttribute("aria-expanded", "false");
+  }
+
+  /* ---------- Run (one roster across Extract, Check, Review) ---------- */
+  const FS = [["Statement of financial position", "Source page 12"], ["Profit or loss", "Source page 13"], ["Comprehensive income", "Source page 13"], ["Changes in equity", "Source pages 14–15"], ["Cash flows", "Source page 16"]];
+  const NT = [["Corporate information", "Source page 18"], ["Accounting policies", "Source pages 19–27"], ["List of notes", "Source pages 28–84"], ["Issued capital", "Source page 61"], ["Related party transactions", "Source page 79"]];
+  const CK = [["Financial position balances", ""], ["Profit carries to equity", ""], ["Cash at end matches", ""], ["Cash flows add up", ""], ["Notes tie to statements", ""], ["Signs", ""]];
+  const RV = [["Figures review", ""], ["Notes review", ""]];
+  const runFrame = () => frame({ recentIcon: working, tabs: { list: ["Overview", "Activity"], on: "Activity" } });
+
+  function grp(id, label, rows) {
+    return `<div class="grp arrive" id="g-${id}"><button class="grp-sum" aria-expanded="true" data-disc="gb-${id}">${label}${ic("ExpandMore")}<span data-sum hidden>${rows.length} of ${rows.length} complete</span></button>
+      <div id="gb-${id}">${rows.map(([n, s], i) => `<div class="ag" data-a="${id}${i}"><span data-i>${ICO.Waiting}</span><div>${n}<span class="sub">${s}</span></div><span class="stat" data-s>Waiting</span></div>`).join("")}</div></div>`;
+  }
+  function setA(id, state) {
+    const r = $(`[data-a="${id}"]`); if (!r) return;
+    r.querySelector("[data-i]").innerHTML = ICO[state];
+    r.querySelector("[data-s]").textContent = state;
+    r.classList.toggle("sel-row", state === "Working" || state === "Needs review");
+  }
+  function fold(id) {
+    const b = $(`[data-disc="gb-${id}"]`); if (!b) return;
+    b.setAttribute("aria-expanded", "false"); $("#gb-" + id).hidden = true; $("[data-sum]", b).hidden = false;
+  }
+  function head(stage, count) { $("#run-stage").textContent = stage; $("#run-count").textContent = count; }
+  function seedRun(t, allDone) {
+    runFrame(); show("run", "extract"); clock($("#run-time"), t);
+    $("#roster").innerHTML = grp("fs", "Financial statements", FS) + grp("nt", "Notes", NT);
+    $("#run-stream").innerHTML = "";
+    if (allDone) $$("#roster .ag").forEach(r => setA(r.dataset.a, "Complete"));
+  }
+
+  async function extract(t) {
+    seedRun(t, false); track(2);
+    const R = $("#run-stream");
+    say(R, "Starting workstreams.");
+    const ids = [...FS.map((_, i) => "fs" + i), ...NT.map((_, i) => "nt" + i)];
+    const need = ids.map((_, i) => 3 + (i * 7) % 6);
+    const msgs = { fs0: "Reading the statement of financial position — page 12.", fs4: "Reading cash flows — page 16.", nt2: "Placing note 21 Borrowings.", nt1: "Copying accounting policies — page 19." };
+    for (let k = 0; k < 12; k++) {
+      let done = 0;
+      ids.forEach((id, i) => {
+        if (k < i % 3) return;
+        if (k === i % 3 && msgs[id]) say(R, msgs[id]);
+        if (k - (i % 3) >= need[i]) { setA(id, "Complete"); done++; } else setA(id, "Working");
+      });
+      head("Extracting", `${done} of ${ids.length}`);
+      await wait(330, t);
+    }
+    ids.forEach(id => setA(id, "Complete")); head("Extracting", `${ids.length} of ${ids.length}`);
+    await wait(400, t);
+  }
+
+  async function check(t) {
+    if (!$("#g-fs")) seedRun(t, true);
+    runFrame(); show("run", "check"); track(3);
+    $("#g-ck")?.remove(); $("#g-rv")?.remove();
+    fold("fs"); fold("nt");
+    $("#roster").insertAdjacentHTML("beforeend", grp("ck", "Run checks", CK));
+    const R = $("#run-stream");
+    for (let i = 0; i < CK.length; i++) {
+      head("Checking", `${i} of ${CK.length}`);
+      setA("ck" + i, "Working"); await wait(360, t);
+      if (i === 3) {
+        setA("ck3", "Needs review"); say(R, "Cash flows don't add up — net change differs by 1,204.");
+        const b = $("#gb-ck"); b.insertBefore($('[data-a="ck3"]'), b.firstElementChild);
+      } else setA("ck" + i, "Complete");
+    }
+    head("Checking", `5 of ${CK.length}`);
+    await wait(500, t);
+  }
+
+  async function review(t) {
+    if (!$("#g-ck")) await check(t);
+    runFrame(); show("run", "review"); track(4);
+    $("#g-rv")?.remove();
+    $("#roster").insertAdjacentHTML("beforeend", grp("rv", "AI review", RV));
+    const R = $("#run-stream");
+    head("Reviewing", "");
+    setA("rv0", "Working"); setA("rv1", "Working"); say(R, "Reviewing the cash flow difference.");
+    await wait(900, t); say(R, "Changed the sign of interest paid — page 16.");
+    await wait(700, t); setA("rv0", "Complete"); setA("ck3", "Working"); say(R, "Re-checking cash flows.");
+    await wait(700, t); setA("ck3", "Complete"); setA("rv1", "Complete"); say(R, "All checks pass.");
+    fold("ck");
+    await wait(600, t);
+  }
+
+  async function ready(t) {
+    frame({ recentIcon: `<span style="color:var(--black);display:inline-flex">${ic("CheckCircle")}</span>`, tabs: { list: ["Overview", "Figures", "Notes", "Cross-checks", "Activity", "AI review"], on: "Overview" } });
+    track(null); show("ready", "ready");
+    $("#ready-flash").hidden = false; $("#overview").hidden = true;
+    await wait(1500, t);
+    $("#ready-flash").hidden = true; $("#overview").hidden = false;
+  }
+
+  /* ---------- wiring ---------- */
+  const SEQ = ["upload", "prep", "setup", "extract", "check", "review", "ready"];
+  async function go(from, through) {
+    const t = ++token;
+    try {
+      for (let i = SEQ.indexOf(from); i <= SEQ.indexOf(through); i++) {
+        const s = SEQ[i];
+        if (s === "upload") await upload(t);
+        if (s === "prep") await prepare(t);
+        if (s === "setup") { setup(); if (i < SEQ.indexOf(through)) await wait(2200, t); }
+        if (s === "extract") await extract(t);
+        if (s === "check") await check(t);
+        if (s === "review") await review(t);
+        if (s === "ready") await ready(t);
+      }
+    } catch (e) {}
+  }
+  $$(".proto [data-go]").forEach(b => b.addEventListener("click", () => {
+    const s = b.dataset.go;
+    if (s === "upload" || s === "prep") go(s, "setup");
+    else if (s === "setup") go("setup", "setup");
+    else { $("#roster").innerHTML = ""; go(s, "ready"); }
+  }));
+  $("#play").addEventListener("click", () => go("upload", "ready"));
+  $("#choose").addEventListener("click", () => go("upload", "setup"));
+  $("#start").addEventListener("click", () => { $("#roster").innerHTML = ""; go("extract", "ready"); });
+  $("#open-ov").addEventListener("click", () => { ++token; $("#ready-flash").hidden = true; $("#overview").hidden = false; });
+
+  document.addEventListener("click", e => {
+    const seg = e.target.closest(".seg button");
+    if (seg) $$("button", seg.parentElement).forEach(x => x.setAttribute("aria-pressed", String(x === seg)));
+    const disc = e.target.closest("[data-disc]");
+    if (disc) {
+      const open = disc.getAttribute("aria-expanded") !== "true";
+      disc.setAttribute("aria-expanded", String(open));
+      $("#" + disc.dataset.disc).hidden = !open;
+      const sum = $("[data-sum]", disc); if (sum) sum.hidden = open;
+    }
+  });
+  document.addEventListener("change", e => {
+    if (!("pick" in (e.target.dataset || {}))) return;
+    e.target.closest(".stmt")?.classList.toggle("off", !e.target.checked);
+    $("#start").disabled = !$$("[data-pick]").some(x => x.checked);
+  });
+
+  frame({ title: "Add documents", sub: false }); track(null); show("upload", "upload");
+})();
+</script>
+</body>
+</html>

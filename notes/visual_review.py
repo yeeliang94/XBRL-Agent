@@ -1,8 +1,8 @@
 """Independently check prepared notes table appearance against the source PDF.
 
-The reviewer reads the same prepared HTML used by review and Copy, plus its
-table geometry, beside source page images. An incomplete assessment is
-unresolved, not a successful check.
+The reviewer reads the same prepared HTML used by review and Copy, plus the
+current canonical candidate and its geometry, beside source page images. An
+incomplete assessment is unresolved, not a successful check.
 """
 from __future__ import annotations
 
@@ -150,6 +150,7 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
             evidence[row] = identity
             content_by_row[row] = (
                 f"FORMATTED NOTE ROW {row}; geometry: " + json.dumps(_table_geometry(rows[row]))
+                + "\nCANONICAL CANDIDATE HTML:\n" + rows[row]
                 + "\nPREPARED OUTPUT HTML:\n" + prepared
             )
         except ValueError as exc:

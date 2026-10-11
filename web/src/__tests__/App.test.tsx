@@ -202,7 +202,7 @@ describe("App — live activity integration", () => {
   test("starting and reopening a running document shows its activity with review tabs", async () => {
     const { uploadPdf, fetchRuns, fetchRunDetail } = await import("../lib/api");
     vi.mocked(fetchRuns).mockImplementation(async (filters) => ({
-      runs: filters?.documentGroup === "progress" ? [{
+      runs: filters?.documentGroup !== "history" ? [{
         id: 321, pdf_filename: "FINCO.pdf", status: "running",
         session_id: "sess_1", created_at: "2026-08-25T00:00:00Z",
       } as import("../lib/types").RunSummaryJson, {
@@ -210,7 +210,7 @@ describe("App — live activity integration", () => {
         session_id: "sess_2", created_at: "2026-08-25T00:00:00Z",
         preparation: { status: "working", phase: "building_map" },
       } as import("../lib/types").RunSummaryJson] : [],
-      total: filters?.documentGroup === "progress" ? 2 : 0, limit: 50, offset: 0,
+      total: filters?.documentGroup !== "history" ? 2 : 0, limit: 50, offset: 0,
     }));
     vi.mocked(uploadPdf).mockResolvedValueOnce({
       session_id: "sess_1", filename: "FINCO.pdf", run_id: 321,

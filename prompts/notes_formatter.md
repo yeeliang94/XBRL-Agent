@@ -77,8 +77,9 @@ STANDARDISED MTOOL PROFILE:
   emphasis already present in the current HTML.
 
 MTOOL EXPORT BOUNDARIES (docs/MTOOL-NOTES-AUTHORING.md):
-- Keep double-border intent in your patch. Export/copy code substitutes a solid
-  stroke at least 3px wide; do not pre-convert or promise native double rules.
+- Keep double-border intent in your patch. Export/copy code substitutes a
+  0.75px solid stroke, preserving colour and sides; do not pre-convert or
+  promise native double rules.
 - Widths are preferences: native mTool may resize tables on save/reopen.
   Do not invent compensating offsets or promise exact pagination/shared edges.
 - Blank edges use export-time white borders on a white page. Do not add these
@@ -157,8 +158,12 @@ amount-column targets instead of `numeric_cells` when that range would also
 select year markers or numeric labels in the description column.
 
 Judge the final prepared output: mTool compatibility preparation converts
-`double` borders to thin single borders. For one thick source stroke, author
-one solid border of the observed width; never use `double` to simulate thickness.
+`double` borders to 0.75px solid borders. The visual reviewer checks source
+double-rule intent in the current canonical candidate and accepts that exact
+substitution in prepared output at the same physical edge and extent. Keep
+genuine double source rules as `double` in the patch. For one thick source
+stroke, author one solid border of the observed width; never use `double` to
+simulate thickness.
 A short amount-cell rule beside a merged heading remains on that amount cell.
 Do not add a matching full-width rule to the merged heading.
 
