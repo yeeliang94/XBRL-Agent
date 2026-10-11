@@ -50,6 +50,17 @@ async def test_prepared_output_is_given_to_fresh_reviewer(review_harness):
 
 
 @pytest.mark.asyncio
+async def test_a_structural_finding_is_never_a_pass(review_harness):
+    kwargs, decision, _ = review_harness
+    decision[0].update(status="pass", issue_kind="structure", reason="Total row is heading cells.")
+    errors, result = await vr.check_visual_rows(**kwargs)
+    assert errors[112] == "Table 0: Total row is heading cells."
+    assert result["tables"][0]["status"] == "unresolved"
+    assert vr.structure_findings({"failed_rows": [112], "visual_review": result}) == {
+        112: [(0, "Total row is heading cells.")]}
+
+
+@pytest.mark.asyncio
 async def test_formatter_layout_is_context_beside_the_actual_output(review_harness):
     kwargs, _, harness = review_harness
     layout = {"row": 112, "tables": [{"table": 0, "columns": ["label", "amount"],

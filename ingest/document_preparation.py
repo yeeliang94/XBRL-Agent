@@ -752,6 +752,7 @@ _AMOUNT_CELL_RE = re.compile(r"^\(?\s*-?\s*[\d,]+(?:\.\d+)?\s*\)?$|^[-—–]+$"
 # Bound model-authored geometry before allocating occupied columns. The same
 # ceiling applies to spans and cumulative row width, including carried cells.
 _MAX_TABLE_SPAN = 1000
+_YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
 # A header cell ending in a currency or unit names an amount column.
 _UNIT_CAPTION_RE = re.compile(r"(?:^|\s)(?:RM|USD|SGD|US\$|\$|%|RM\s?million|(?:RM)?['’]000)$")
 
@@ -813,6 +814,7 @@ def _table_shape_issues(html: str, *, allow_blank_label_rows: bool = False) -> l
     issues = []
     for table_number, table in enumerate(BeautifulSoup(html, "html.parser").find_all("table"), 1):
         rows, carried = [], {}
+        seen_data = False
         for tr in table.find_all("tr"):
             if tr.find_parent("table") is not table:
                 continue
@@ -854,6 +856,19 @@ def _table_shape_issues(html: str, *, allow_blank_label_rows: bool = False) -> l
                 column += span
             if cells:
                 texts = [" ".join(cell.get_text(" ").split()) for cell in cells]
+                # A heading-cell row holding figures below the data is a total
+                # captured as a heading (VTech note 71). A repeated column
+                # heading carries only years or captions, never amounts.
+                figures = [t for t in texts if _AMOUNT_CELL_RE.match(t) and not _YEAR_RE.match(t)]
+                if all(cell.name == "th" for cell in cells):
+                    if seen_data and figures:
+                        issues.append(
+                            f"Table {table_number}: row with figures {', '.join(figures[:3])} is "
+                            "captured as heading cells below the data; capture it as a data row "
+                            "(td cells) exactly as the source shows."
+                        )
+                elif figures:
+                    seen_data = True
                 label = next((text for text in texts if text), "(blank label)")
                 # Source-confirmed headings can have blank continuation cells.
                 # Amount rows and rows without source agreement remain checked.
@@ -1637,3 +1652,128 @@ async def reconcile_prepared_inventory(
                            best_effort_pages=[p["page"] for p in data["pages"] if p.get("capture_status") == "best_effort"])
             _atomic_text(sidecar_meta, json.dumps(sidecar, ensure_ascii=False))
     return _result(prepared.metadata_path, data)
+
+
+# --- one-table re-copy after a structural review finding --------------------
+# Reuses the page capture and independent verification prompts above, with the
+# reviewer's finding as the repair issue. Only the named table may change, and
+# only its structure: every word and figure must be the same multiset.
+
+def _page_nodes(html: str) -> list[Tag]:
+    """Top-level page nodes in the same order `_blocks` numbers them."""
+    soup = BeautifulSoup(html, "html.parser")
+    root = soup.body or soup
+    for node in list(root.find_all(["html", "body", "div", "section", "article"])):
+        node.unwrap()
+    return [node for node in root.contents
+            if not isinstance(node, Comment) and (isinstance(node, Tag) or str(node).strip())]
+
+
+def _structure_key(html: str) -> tuple:
+    soup = BeautifulSoup(html or "", "html.parser")
+    tags = tuple((el.name, el.get("rowspan", "1"), el.get("colspan", "1")) for el in soup.find_all(True))
+    return tags, " ".join(soup.get_text(" ").split())
+
+
+def _tokens(html: str) -> Counter:
+    return Counter(BeautifulSoup(html or "", "html.parser").get_text(" ").split())
+
+
+async def recapture_table(
+    pdf_path: str | Path, *, page_number: int, page_html: str, block_index: int,
+    finding: str, model: Any, rotation: int = 0, _caller: Callable | None = None,
+) -> dict:
+    """Re-copy one table on a prepared page; return its corrected HTML.
+
+    Raises PreparationError naming the failed gate. Nothing else on the page
+    may change, the table keeps exactly the same words and figures, the table
+    shape check must pass, and the independent verifier must confirm the page.
+    """
+    pdf = Path(pdf_path)
+    old_nodes = _page_nodes(page_html)
+    if not 0 <= block_index < len(old_nodes) or getattr(old_nodes[block_index], "name", None) != "table":
+        raise PreparationError("The named source table is not on its recorded page.")
+    old_table = str(old_nodes[block_index])
+    with fitz.open(pdf) as doc:
+        metadata_rotation = doc[page_number - 1].rotation
+    image = await asyncio.to_thread(_render_page, pdf, page_number, rotation)
+    focused = await asyncio.to_thread(_focused_views, pdf, page_number, rotation)
+    usage: dict = {}
+
+    async def request(stage: str, context: dict) -> dict:
+        if _caller is not None:
+            return await _caller(stage, [image, *focused], context)
+        return await _request_model(model, stage, [image, *focused], context, usage_out=usage)
+
+    issue = ("Re-copy table " + str(sum(getattr(n, "name", None) == "table" for n in old_nodes[:block_index]) + 1)
+             + " on this page from the source. Review finding: " + finding)
+    capture = await request("capturing", {
+        "page": page_number, "scope": "single supplied page only", "issues": [issue],
+        "view_rotation": rotation, "metadata_rotation": metadata_rotation,
+        "previous_html": page_html, "best_effort": False, "table_relationships": [],
+        "focused_views": ["top-left", "top-right", "bottom-left", "bottom-right"],
+    })
+    if capture.get("complete") is not True or capture.get("readable") is not True:
+        raise PreparationError("The page re-copy did not complete.")
+    new_html = normalize_transcription(capture.get("html", ""), preserve_meaningful_formatting=True)
+    new_nodes = _page_nodes(new_html)
+    if len(new_nodes) != len(old_nodes):
+        raise PreparationError("The re-copy changed the page outside the named table.")
+    for index, (old, new) in enumerate(zip(old_nodes, new_nodes)):
+        if index != block_index and _structure_key(str(old)) != _structure_key(str(new)):
+            raise PreparationError("The re-copy changed the page outside the named table.")
+    new_table = str(new_nodes[block_index])
+    if getattr(new_nodes[block_index], "name", None) != "table":
+        raise PreparationError("The re-copy did not return the named table.")
+    if _tokens(new_table) != _tokens(old_table):
+        raise PreparationError("The re-copy changed the table's words or figures.")
+    if _structure_key(new_table) == _structure_key(old_table):
+        raise PreparationError("The re-copy did not change the table's structure.")
+    shape = _table_shape_issues(new_table)
+    if shape:
+        raise PreparationError("The re-copied table still fails the shape check: " + "; ".join(shape))
+    check = await request("verifying", {
+        "page": page_number, "html": new_html, "scope": "single supplied page only",
+        "view_rotation": rotation, "best_effort": False, "previous_findings": [issue],
+        "candidate_non_text_regions": [],
+    })
+    relationships = check.get("table_relationships") or []
+    if (not all(check.get(k) is True for k in ("verified", "complete", "readable"))
+            or check.get("table_structure_verified") is not True
+            or any(r.get("matches") is False for r in relationships)
+            or check.get("uncertainties")):
+        raise PreparationError("The independent check did not confirm the re-copied table.")
+    return {"html": new_table, "page_html": new_html, "verification": {
+        "verified": True, "table_structure_verified": True,
+        "table_relationships": relationships, "issues": check.get("issues") or []}, "usage": usage}
+
+
+def record_table_correction(metadata_path: str | Path, *, block_id: str, table_html: str,
+                            record: dict) -> None:
+    """Write a verified table correction into the prepared document on disk.
+
+    A rerun of the same upload freezes its source from these files, so the
+    correction must live here too, with its hashes kept valid.
+    """
+    path = Path(metadata_path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    block = next((b for b in data["blocks"] if b["block_id"] == block_id), None)
+    if block is None:
+        raise PreparationError("The corrected source table is not in the prepared document.")
+    page = next(p for p in data["pages"] if p["page"] == block["page"])
+    index = block["locator"]["page_block"]
+    nodes = [str(node) for node in _page_nodes(page["html"])]
+    nodes[index] = table_html
+    page["html"] = "".join(nodes)
+    block["canonical_html"] = table_html
+    for page_block in page.get("blocks", []):
+        if page_block["block_id"] == block_id:
+            page_block["canonical_html"] = table_html
+    html = "\n".join(f"<!-- pdf-page: {p['page']} -->\n{p['html']}" for p in data["pages"])
+    html_path = path.parent / data["html_file"]
+    _atomic_text(html_path, html)
+    if (path.parent / "source.html").exists() and not (path.parent / "uploaded.docx").exists():
+        _atomic_text(path.parent / "source.html", html)
+    data["html_sha256"] = _digest(html_path)
+    data.setdefault("table_corrections", []).append({"block_id": block_id, **record})
+    _atomic_text(path, json.dumps(data, ensure_ascii=False))

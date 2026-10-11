@@ -1448,6 +1448,25 @@ Key invariants:
     retry (`person_edited_rows`). Earlier person edits carry no marker. Pinned
     by `tests/test_notes_table_layout.py`, `tests/test_notes_format_patch.py`,
     `tests/test_notes_visual_review.py` and `tests/test_server_notes_cells_api.py`.
+    **Table re-copy (schema v52):** a visual assessment with
+    `issue_kind = structure` (the copied table differs from the PDF: heading vs
+    data cells, rows, columns, merges) is never a pass and never enters the
+    style correction round. `notes/table_recopy.py` maps it to exactly one
+    source table block and re-copies it with preparation's own capture and
+    verification prompts (`ingest/document_preparation.recapture_table`).
+    Gates: nothing else on the page changes, identical word/figure multiset,
+    a real structural change, `_table_shape_issues` clean, and an independent
+    verified page with `table_structure_verified` true. The block and every
+    cell placed from it are corrected in one transaction (compare-and-swap on
+    content revision; history in `notes_source_block_revisions`), so cells
+    still equal the render of their blocks. Refused, leaving the finding:
+    person- or AI-edited cells (`human`/`human_modified`), cells that no longer
+    equal their render (including cleanup receipts), Word or non-prepared
+    sources, continued/grouped tables, and blocks used on another sheet. The
+    prepared document on disk is updated (`record_table_correction`) so a rerun
+    of the upload keeps the fix. Rebuilt rows get one ordinary formatting pass.
+    Pinned by `tests/test_table_recopy.py`, `tests/test_db_schema_v52.py`,
+    `tests/test_notes_format_patch.py` and `tests/test_notes_visual_review.py`.
     Partial saves retain
     `ok=false`, `validation_failed` or `visual_review_failed`, `failed_rows`, and per-row errors, alongside
     the actual `changed_rows`. Snapshots include only saved rows. The review
@@ -3200,7 +3219,9 @@ complete independent assessment and table relationships confirm source
 agreement without uncertainties. Missing evidence or a demonstrated mismatch
 keeps that row subject to repair. A lone amount or dash is never exempt, nor
 is a lone header cell ending in a currency/unit caption such as RM or RM'000:
-that is an amount-column heading captured over the description column),
+that is an amount-column heading captured over the description column; an
+all-heading-cell row holding amounts below the first data row is a total
+captured as headings and is repaired too),
 overrides a positive Boolean verdict and triggers focused repair.
 Malformed row nesting, including an empty row wrapping further rows, also
 triggers repair even when all amounts and column counts survive. Unrepaired

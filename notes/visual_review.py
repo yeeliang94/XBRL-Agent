@@ -38,6 +38,11 @@ class TableAssessment(BaseModel):
     status: Literal["pass", "needs_correction", "unresolved"]
     source_pages: list[int]
     reason: str = Field(min_length=1)
+    issue_kind: Literal["style", "structure"] = Field(
+        default="style",
+        description='"structure" when the copied table itself differs from the PDF '
+                    "(heading vs data cells, rows, columns, merged cells); otherwise style.",
+    )
 
 
 class VisualReview(BaseModel):
@@ -65,6 +70,21 @@ def _layout_text(note: dict | None) -> str:
         return "\n" + describe_layouts([TableLayout.model_validate(t) for t in note.get("tables") or []])
     except ValueError:
         return "unavailable"
+
+
+def structure_findings(outcome: dict) -> dict[int, list[tuple[int, str]]]:
+    """Current structural findings per failed note row: (table, reason)."""
+    reviews = outcome.get("visual_reviews") or [outcome.get("visual_review") or {}]
+    failed = {int(row) for row in outcome.get("failed_rows") or []}
+    current: dict[tuple[int, int], dict] = {}
+    for review in reviews:
+        for item in review.get("tables", []) + (review.get("recheck") or {}).get("tables", []):
+            current[(item["row"], item["table"])] = item
+    found: dict[int, list[tuple[int, str]]] = {}
+    for (row, table), item in sorted(current.items()):
+        if row in failed and item.get("issue_kind") == "structure" and item.get("status") != "pass":
+            found.setdefault(row, []).append((table, item.get("reason", "")))
+    return found
 
 
 def _add_error(errors: dict[int, str], row: int, finding: str) -> None:
@@ -244,6 +264,10 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
             issue = "Visual assessment cited pages outside this note's source pages."
         elif assessment.status != "pass":
             issue = assessment.reason
+        elif assessment.issue_kind == "structure":
+            # A structural defect is never a pass, whatever the status says.
+            assessment.status = "unresolved"
+            issue = assessment.reason
         if issue:
             finding = f"Table {assessment.table}: {issue}"
             _add_error(errors, assessment.row, finding)
@@ -292,8 +316,11 @@ async def review_and_correct_rows(
     try:
         phase("Checking formatted notes against the source PDF…")
         errors, review = await check(rows, "_visual")
+        # Structural findings go back to preparation (notes/table_recopy.py);
+        # an appearance correction cannot repair a wrongly copied table.
         correctable = {item["row"] for item in review.get("tables", [])
-                       if item["status"] == "needs_correction" and item["row"] in errors}
+                       if item["status"] == "needs_correction" and item["row"] in errors
+                       and item.get("issue_kind", "style") == "style"}
         if not correctable:
             return errors, review, {}
 
