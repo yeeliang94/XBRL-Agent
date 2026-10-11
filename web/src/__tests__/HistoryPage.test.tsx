@@ -133,7 +133,7 @@ describe("HistoryPage", () => {
     });
   });
 
-  test("drafts go into their own collapsed section, not the main list (E2)", async () => {
+  test("preparation drafts are visible alongside completed history", async () => {
     fetchRuns.mockResolvedValue({
       runs: [
         baseRun, // completed
@@ -148,6 +148,7 @@ describe("HistoryPage", () => {
     // The drafts section exists and is labelled with its count.
     const section = await waitFor(() => screen.getByTestId("drafts-section"));
     expect(section.textContent).toContain("Drafts — not started (2)");
+    expect(section).toHaveAttribute("open");
     // The completed run is in the MAIN list (the first table), the drafts
     // live inside the <details> section.
     expect(within(section).getByText("DRAFT-A.pdf")).toBeTruthy();

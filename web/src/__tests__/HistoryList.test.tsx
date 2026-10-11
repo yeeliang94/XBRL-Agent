@@ -95,7 +95,7 @@ describe("HistoryList", () => {
   // edit config and click Start.
   // ---------------------------------------------------------------------------
 
-  test("renders a 'Not started' badge for draft rows", () => {
+  test("shows the preparation stage for draft rows", () => {
     const drafts: RunSummaryJson[] = [
       {
         id: 7,
@@ -111,9 +111,8 @@ describe("HistoryList", () => {
       },
     ];
     render(<HistoryList runs={drafts} onRunSelected={() => {}} />);
-    // The badge label is "Waiting" (the design-system state), not the raw
-    // enum string "draft".
-    expect(screen.getByText("Waiting")).toBeInTheDocument();
+    // Drafts expose their preparation stage rather than a raw status enum.
+    expect(screen.getByText("Prepare document")).toBeInTheDocument();
   });
 
   test("clicking a draft row fires onResumeDraft, not onRunSelected", () => {
@@ -226,11 +225,12 @@ describe("HistoryList", () => {
     expect(screen.getByRole("link", { name: "Open review" })).toBeInTheDocument();
   });
 
-  test("concise date with the exact timestamp as supplementary title", () => {
+  test("upload date and time are visible", () => {
     render(<HistoryList runs={makeRuns()} onRunSelected={() => {}} />);
     const d = new Date("2026-04-10T09:30:00Z");
     const concise = screen.getAllByTitle(d.toLocaleString())[0];
-    expect(concise.textContent).toBe(d.toLocaleDateString());
+    expect(concise.textContent).toBe(d.toLocaleString());
+    expect(concise).toHaveStyle({ whiteSpace: "normal", overflowWrap: "anywhere" });
   });
 
   test("does not render models in the list row", () => {

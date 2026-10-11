@@ -356,7 +356,7 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
     ? `Showing ${visibleRuns.length} of ${runs.length} loaded run${runs.length === 1 ? "" : "s"} (${filters.standard!.toUpperCase()}). Load more to scan earlier rows.`
     : null;
 
-  // Split drafts into their own collapsed section so they don't bury the real
+  // Keep drafts in an expanded section so preparation remains visible beside saved
   // runs (E2). When the user explicitly filters by status, keep the single
   // list (the filter already scopes what they see).
   const statusFilterActive = !!filters.status;
@@ -426,11 +426,11 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
         onRunSelected={handleRunSelected}
         onResumeDraft={onResumeDraft}
       />
-      {/* Drafts sit in their own collapsed section so unstarted uploads don't
-          bury the real runs (E2). Skipped when the user explicitly filters by
+      {/* Preparation drafts remain visible in their own expanded section.
+          Skipped when the user explicitly filters by
           status — then everything shows in the main list above. */}
       {draftRuns.length > 0 && (
-        <details style={styles.draftsSection} data-testid="drafts-section">
+        <details open style={styles.draftsSection} data-testid="drafts-section">
           <summary style={styles.draftsSummary}>
             Drafts — not started ({draftRuns.length})
           </summary>

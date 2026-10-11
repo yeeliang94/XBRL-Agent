@@ -182,6 +182,10 @@ describe("Direction A shell and responsive composition", () => {
     expect(designSystem).toContain("Of these, not started identifies the draft subset of that same queue");
     expect(designSystem).toContain("without working glows or pulsing indicators");
     expect(designSystem).toContain("including Confirm setup");
+    expect(designSystem).toContain("opening a document never changes that order");
+    expect(designSystem).toContain("ordered by completion time descending, then upload time descending");
+    expect(designSystem).toContain("History includes every uploaded document");
+    expect(designSystem).toContain("matching neutral borders");
     expect(designSystem).toContain("preserves the document and selected section through refresh");
     expect(designSystem).toContain("block leaving Settings or reloading while an appearance save is pending or saving");
     expect(designSystem).toContain("prepared documents also rerun Corporate Information, Accounting Policies and List of Notes and replace edits in every retried template");

@@ -1,3 +1,4 @@
+import { fetchRuns } from "../lib/api";
 import { describe, test, expect, beforeAll, beforeEach, vi } from "vitest";
 import { render, fireEvent, cleanup, act, screen, waitFor, within } from "@testing-library/react";
 
@@ -106,6 +107,7 @@ describe("App routing", () => {
     window.sessionStorage.clear();
     window.localStorage.clear();
     cleanup();
+    vi.mocked(fetchRuns).mockResolvedValue({ runs: [{ id: 42, pdf_filename: "Document 42", status: "completed" } as import("../lib/types").RunSummaryJson], total: 1, limit: 50, offset: 0 });
   });
 
   test.each([1, 3, 8])("sidebar caps documents at three and keeps View all visible with %i queued documents", async count => {
@@ -119,12 +121,13 @@ describe("App routing", () => {
       const { default: App } = await import("../App");
       render(<App />);
       const sidebar = screen.getByRole("navigation", { name: "Recent documents" });
-      await waitFor(() => expect(within(sidebar).getAllByRole("button", { name: /^Open / })).toHaveLength(Math.min(count + 1, 3)));
-      expect(within(sidebar).getByRole("button", { name: "Open Document 42" })).toHaveAttribute("aria-current", "page");
+      await waitFor(() => expect(within(sidebar).getAllByRole("button", { name: /^Open / })).toHaveLength(Math.min(count, 3)));
+      expect(within(sidebar).queryByRole("button", { name: "Open Document 42" })).toBeNull();
       expect(within(sidebar).getByRole("button", { name: "Open Filing 1.pdf" })).toBeInTheDocument();
-      expect(within(sidebar).queryByRole("button", { name: "Open Filing 3.pdf" })).toBeNull();
+      const before = within(sidebar).getAllByRole("button", { name: /^Open / }).map((button) => button.textContent);
       fireEvent.click(within(sidebar).getByRole("button", { name: "View all documents" }));
       expect(window.location.pathname).toBe("/");
+      expect(within(sidebar).getAllByRole("button", { name: /^Open / }).map((button) => button.textContent)).toEqual(before);
       const queue = await screen.findByRole("table", { name: "Documents in progress" });
       expect(within(queue).getByRole("button", { name: `Filing ${count}.pdf` })).toBeInTheDocument();
       expect(within(sidebar).getAllByRole("button", { name: /^Open / })).toHaveLength(Math.min(count, 3));
@@ -147,7 +150,7 @@ describe("App routing", () => {
     const leave = vi.fn(() => false);
     const unguard = guardNavigationHistory(leave);
     try {
-      fireEvent.click(screen.getByRole("button", { name: "Open Document 42" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Open Document 42" }));
       expect(leave).not.toHaveBeenCalled();
       expect(window.location.pathname + window.location.search).toBe("/history/42?tab=values");
       fireEvent.click(screen.getByRole("link", { name: "Work queue" }));
@@ -318,7 +321,7 @@ describe("App routing", () => {
         screen.getByRole("tablist", { name: /run detail sections/i }),
       ).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole("button", { name: "Open Document 42" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Open Document 42" }));
 
       expect(await screen.findByTestId("run-detail-notes-review")).toBeInTheDocument();
       const tablist = await screen.findByRole("tablist", { name: /run detail sections/i });
@@ -340,7 +343,7 @@ describe("App routing", () => {
     render(<App />);
     const tabs = await screen.findByRole("tablist", { name: /run detail sections/i });
     expect(within(tabs).getByRole("tab", { name: "Cross-checks" })).toHaveAttribute("aria-selected", "true");
-    fireEvent.click(screen.getByRole("button", { name: "Open Document 42" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open Document 42" }));
     expect(window.location.search).toBe("?tab=checks");
     expect(within(screen.getByRole("tablist", { name: /run detail sections/i })).getByRole("tab", { name: "Cross-checks" })).toHaveAttribute("aria-selected", "true");
   });

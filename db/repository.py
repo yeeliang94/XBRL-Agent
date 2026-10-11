@@ -3005,7 +3005,8 @@ def list_runs(
 ) -> list[RunSummary]:
     """Return RunSummary rows for the History list view.
 
-    Ordering: created_at DESC (newest first). Filters are ANDed together.
+    Ordering: completed outcomes first by ended_at DESC, then upload time.
+    Other statuses use upload time; filters are ANDed together.
 
     `model` filter matches against run_agents.model — the effective resolved
     model per agent. This is the ONLY authoritative source for per-run model
@@ -3051,7 +3052,12 @@ def list_runs(
     sql = (
         "SELECT r.* FROM runs r"
         + where_sql
-        + " ORDER BY r.created_at DESC LIMIT ? OFFSET ?"
+        + " ORDER BY CASE WHEN r.status IN "
+        "('completed', 'completed_with_errors', 'correction_exhausted') THEN 0 ELSE 1 END, "
+        "CASE WHEN r.status IN "
+        "('completed', 'completed_with_errors', 'correction_exhausted') "
+        "THEN COALESCE(NULLIF(r.ended_at, ''), r.created_at) ELSE r.created_at END DESC, "
+        "r.created_at DESC, r.id DESC LIMIT ? OFFSET ?"
     )
     params.extend([int(limit), int(offset)])
 
