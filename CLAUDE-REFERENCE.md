@@ -1140,6 +1140,11 @@ source rendering, the editor, review display, clipboard and mTool decoration.
 New author-written section headings still use the established h3 convention.
 Source preparation captures hierarchy/emphasis; destination formatting may not
 flatten that hierarchy, remove source emphasis, or change text/table geometry.
+Emphasis patches add only; a false removal request is rejected with an explicit
+source-correction/human-review disposition. Appearance assessments distinguish
+style from source content, provenance, emphasis and structure defects. A note
+with a source defect cannot enter the style-correction retry or become verified.
+Pinned by `tests/test_notes_visual_review.py` and `tests/test_notes_format_patch.py`.
 Pinned by source-render, sanitizer, format-patch, clipboard and notes-decoration
 heading preservation tests.
 
@@ -1757,6 +1762,17 @@ check. Companion soft deadline: `run_agent_loop` publishes
 warning past 70% / CRITICAL past 90% of the cap. Pinned by
 `tests/test_agent_loop_wallclock.py`, `tests/test_limit_warnings.py`,
 `tests/test_reviewer_compact_context.py`.
+
+At the node iteration cap, one already-issued tool node may also finish under
+the per-turn timeout, even when ordinary tool streams are unbounded. No further
+model request runs after that grace; terminal graph output or a committed
+completion predicate ends the run normally. Tool-turn and token budgets remain enforced. Pinned by
+`tests/test_agent_loop_wallclock.py`.
+Post-write timeout salvage retains written figures but sets an explicit agent
+flag whenever current verification is absent/unclean or face coverage remains
+unaccounted. Other bounded salvage paths flag unresolved coverage too. That flag
+reaches the completion event and parent run status rather than remaining an
+advisory warning. Pinned by `tests/test_face_wallclock_cap.py`.
 
 For reviewer runs, the warning reports the same tool-turn unit shown in the
 prompt. Graph-node counters remain the fallback for other agent roles. Do not
@@ -3007,6 +3023,12 @@ subsections in mixed policy notes route by the active standard's specific fields
 MPERS has a basis policy field and MFRS uses the List-of-Notes basis disclosure
 field when no suitable policy field exists. Pinned by
 `tests/test_notes_agent_factory.py` and `tests/test_notes_reviewer_tools.py`.
+Extraction records an absent required policy using `report_missing_mandatory_field`
+with the exact live family row/label, inspected PDF pages, reason and evidence.
+The tool persists a human-review flag without writing disclosure content or
+waiving the requirement. Review receives that disposition beside the still-open
+mandatory finding. `save_result()` remains argument-free and only finalizes
+already-persisted writes. Pinned by `tests/test_notes_agent_factory.py`.
 
 Source-built disclosures may begin with prose when the source has no title;
 the reviewer may transfer complete frozen source sections from a mixed cell to
@@ -3178,6 +3200,14 @@ nesting remains best-effort uncertainty. Formatter coordinates, patch targets
 and geometry checks share the direct table-row model; nested tables have their
 own coordinates. A style-only patch cannot certify malformed row nesting.
 Pinned by `tests/test_document_preparation.py` and `tests/test_notes_format_patch.py`.
+Positive table relationships also cite exact candidate cell coordinates and
+text from the current page's supplied manifest. Missing, malformed, out-of-range,
+wrong-text or incomplete table coverage invalidates a positive verdict and uses
+the existing bounded repair/best-effort path. Coordinates are zero-based direct
+table/row/cell positions; nested tables own separate coordinates. This binds
+candidate claims to content; source agreement remains independent model judgment,
+not deterministic accounting-label matching. Preparation contract versioning
+invalidates older cached approvals. Pinned by `tests/test_document_preparation_batching.py`.
 Table shape checks bound cell spans and cumulative row width to
 `_MAX_TABLE_SPAN` before allocating occupied columns. Oversized geometry becomes
 a repair finding and remains unresolved if it survives repair; source HTML is

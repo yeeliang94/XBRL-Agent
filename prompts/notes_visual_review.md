@@ -28,6 +28,12 @@ resolve that gap, report uncertainty rather than demand a double underline.
 Report exact note row, table, year, row label and offending edge in the reason
 when correction is needed. If the source structure cannot be represented by
 style changes alone, mark unresolved and explain the structural problem.
+Set issue_kind to style only for a supported style adjustment. Wrong source-page
+identity is source_provenance; added/missing words or figures are source_content;
+captured emphasis that must be removed is source_emphasis; changed table geometry
+is structure. These findings remain unresolved for source correction or human
+review. Cite the recorded page and the exact note/table/row label and amounts.
+Do not request a style patch or repeat formatting to repair these defects.
 
 Apply the STANDARDISED MTOOL PROFILE: amount-column names, currency captions,
 period headers and figures are right-aligned, descriptions left-aligned. The

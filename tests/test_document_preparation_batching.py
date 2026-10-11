@@ -103,6 +103,57 @@ def test_wrong_page_capture_is_repaired_by_independent_verification(tmp_path):
                for stage, context in calls)
 
 
+@pytest.mark.parametrize("defect", ["wrong_text", "wrong_coordinate", "missing", "invalid_type"])
+def test_fabricated_candidate_cell_cannot_verify_swapped_table(tmp_path, defect):
+    async def call(stage, images, context):
+        result = response(context)
+        if stage == "capturing":
+            for item in result.get("pages", [result]):
+                if item["page"] == 1:
+                    item["html"] = "<table><tr><td>Deferred tax</td><td>100</td></tr></table>"
+        if stage == "verifying" and context["page"] == 1:
+            cells = [{"table": 0, "row": 0, "cell": 0, "text": "Fair value instruments"}]
+            if defect == "wrong_coordinate":
+                cells = [{"table": 0, "row": 9, "cell": 0, "text": "Deferred tax"}]
+            elif defect == "missing":
+                cells = []
+            elif defect == "invalid_type":
+                cells = [{"table": True, "row": 0, "cell": 0, "text": "Deferred tax"}]
+            result.update(table_structure_verified=True, table_relationships=[{
+                "source_relationship": "Fair value instruments: 200",
+                "candidate_relationship": "Fair value instruments: 200",
+                "matches": True,
+                "candidate_cells": cells,
+            }])
+        return result
+
+    prepared = run(source(tmp_path, 2), call)
+    assert not prepared.pages[0]["verified"]
+    assert prepared.pages[0]["capture_status"] == "best_effort"
+    assert prepared.pages[0]["uncertainties"]
+    assert prepared.pages[1]["verified"]
+
+
+@pytest.mark.parametrize("cover_both", [False, True])
+def test_candidate_cell_evidence_covers_each_nested_table(tmp_path, cover_both):
+    html = "<table><tr><td>Outer<table><tr><td>Nested</td><td>100</td></tr></table></td></tr></table>"
+    async def call(stage, images, context):
+        result = response(context)
+        if stage == "capturing":
+            result["html"] = html
+        elif stage == "verifying":
+            cells = context["candidate_cells"]
+            assert [(c["table"], c["row"], c["cell"]) for c in cells] == [(0, 0, 0), (1, 0, 0), (1, 0, 1)]
+            result.update(table_structure_verified=True, table_relationships=[{
+                "source_relationship": "Outer caption and nested amount 100",
+                "candidate_relationship": "Outer caption and nested amount 100", "matches": True,
+                "candidate_cells": cells if cover_both else cells[:1],
+            }])
+        return result
+    prepared = run(source(tmp_path, 1), call)
+    assert prepared.pages[0]["verified"] is cover_both
+
+
 @pytest.mark.parametrize("defect", ["missing", "duplicate", "invalid", "foreign"])
 def test_bad_capture_receipt_retries_only_affected_page(tmp_path, defect):
     singles, batch_responses = [], []
