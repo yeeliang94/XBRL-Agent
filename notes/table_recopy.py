@@ -75,13 +75,28 @@ def _table_block(blocks, ordered_ids: list[str], html: str, table: int):
     return block
 
 
+def _block_homes(conn, run_id: int, generation, blocks, block, sheet: str) -> dict[int, int]:
+    """Rows built from this block, with their content revisions, or a refusal."""
+    continued = any(b.continues_block_id == block.block_id for b in blocks)
+    if block.table_group_id or block.continues_block_id or continued:
+        raise RecopyRefused("tables continued across pages are not re-copied automatically")
+    homes = {(p["sheet"], p["row"]) for p in
+             srepo.placements_for_block(conn, generation["id"], block.block_id)}
+    if any(home_sheet != sheet for home_sheet, _ in homes):
+        raise RecopyRefused("the table is also used on another notes sheet")
+    return {home_row: _source_cell(conn, run_id, generation, blocks, sheet, home_row)[0]["content_revision"]
+            for _, home_row in homes}
+
+
 async def recopy_tables(*, run_id: int, db_path: str, pdf_path: str, sheet: str,
                         findings: dict[int, list[tuple[int, str]]], model: Any,
                         model_name: str = "", on_phase: Callable[[str], None] | None = None,
                         _recapture: Optional[Callable] = None) -> dict:
     """Re-copy each flagged table once; return rebuilt rows and refusals.
 
-    ``findings`` maps a note row to (table index, review reason) pairs.
+    ``findings`` maps a note row to (table index, review reason) pairs. One
+    page re-copy may also correct another table on that page with the same
+    defect; that table is saved only if it passes the same eligibility rules.
     """
     from ingest.document_preparation import (
         PREPARATION_NAME, PreparationError, recapture_table, record_table_correction,
@@ -105,12 +120,7 @@ async def recopy_tables(*, run_id: int, db_path: str, pdf_path: str, sheet: str,
                     block = _table_block(blocks, ordered, cell["html"], table)
                     if block.block_id in done_blocks:
                         continue
-                    homes = {(p["sheet"], p["row"]) for p in
-                             srepo.placements_for_block(conn, generation["id"], block.block_id)}
-                    if any(home_sheet != sheet for home_sheet, _ in homes):
-                        raise RecopyRefused("the table is also used on another notes sheet")
-                    revisions = {home_row: _source_cell(conn, run_id, generation, blocks, sheet, home_row)[0]
-                                 ["content_revision"] for _, home_row in homes}
+                    revisions = _block_homes(conn, run_id, generation, blocks, block, sheet)
                 data = json.loads(metadata_path.read_text(encoding="utf-8"))
                 prepared = next((b for b in data["blocks"] if b["block_id"] == block.block_id), None)
                 page = next((p for p in data["pages"] if prepared and p["page"] == prepared["page"]), None)
@@ -118,39 +128,57 @@ async def recopy_tables(*, run_id: int, db_path: str, pdf_path: str, sheet: str,
                     raise RecopyRefused("the prepared document does not hold this table")
                 if on_phase:
                     on_phase(f"Re-copying a table in note row {row} from the source PDF…")
-                result = await recapture(
-                    pdf_path, page_number=page["page"], page_html=page["html"],
-                    block_index=prepared["locator"]["page_block"], finding=reason, model=model,
-                    rotation=page.get("rotation") or 0)
-                for key in tokens:
-                    tokens[key] += int((result.get("usage") or {}).get(key) or 0)
-                new_html = result["html"]
-                rows = _commit(db_path, run_id=run_id, generation_id=generation["id"], sheet=sheet,
-                               block_id=block.block_id, before=block.canonical_html, after=new_html,
-                               revisions=revisions, finding=reason,
-                               verification=result["verification"], model_name=model_name)
-                done_blocks.add(block.block_id)
-                rebuilt.update(rows)
-                record = {"page": page["page"], "finding": reason, "rebuilt_rows": rows,
-                          "created_at": datetime.now(timezone.utc).isoformat()}
-                corrected.append({"block_id": block.block_id, "row": row, "table": table, **record})
+                usage: dict = {}
                 try:
-                    record_table_correction(metadata_path, block_id=block.block_id,
-                                            table_html=new_html, record=record)
-                except Exception:  # noqa: BLE001 — the run's source is already corrected
-                    logger.warning("Could not record table correction on disk run=%s block=%s",
-                                   run_id, block.block_id, exc_info=True)
-                    errors.setdefault(row, "Table re-copied for this run; a rerun may need it again.")
+                    result = await recapture(
+                        pdf_path, page_number=page["page"], page_html=page["html"],
+                        block_index=prepared["locator"]["page_block"], finding=reason, model=model,
+                        rotation=page.get("rotation") or 0, usage_out=usage)
+                finally:
+                    for key in tokens:
+                        tokens[key] += int(usage.get(key) or 0)
+                on_page = {b["locator"]["page_block"]: b for b in data["blocks"] if b["page"] == page["page"]}
+                changes = {block.block_id: (block.canonical_html, result["html"])}
+                with repo.db_session(db_path) as conn:
+                    by_id = {b.block_id: b for b in blocks}
+                    for index, html in (result.get("tables") or {}).items():
+                        other = on_page.get(int(index))
+                        if other is None or other["block_id"] in changes or other["block_id"] in done_blocks:
+                            continue
+                        source = by_id.get(other["block_id"])
+                        try:
+                            if source is None or source.canonical_html != other["canonical_html"]:
+                                raise RecopyRefused("not the saved source table")
+                            revisions.update(_block_homes(conn, run_id, generation, blocks, source, sheet))
+                        except RecopyRefused as exc:
+                            logger.info("Second table on page %s not corrected: %s", page["page"], exc)
+                            continue
+                        changes[source.block_id] = (source.canonical_html, html)
+                rows = _commit(db_path, run_id=run_id, generation_id=generation["id"], sheet=sheet,
+                               changes=changes, revisions=revisions, finding=reason,
+                               verification=result["verification"], model_name=model_name)
+                done_blocks.update(changes)
+                rebuilt.update(rows)
+                for block_id, (_before, after) in changes.items():
+                    record = {"page": page["page"], "finding": reason, "rebuilt_rows": rows,
+                              "created_at": datetime.now(timezone.utc).isoformat()}
+                    corrected.append({"block_id": block_id, "row": row, "table": table, **record})
+                    try:
+                        record_table_correction(metadata_path, block_id=block_id, table_html=after, record=record)
+                    except Exception:  # noqa: BLE001 — the run's source is already corrected
+                        logger.warning("Could not record table correction on disk run=%s block=%s",
+                                       run_id, block_id, exc_info=True)
+                        errors.setdefault(row, "Table re-copied for this run; a rerun may need it again.")
             except (RecopyRefused, PreparationError, ValueError) as exc:
                 message = f"Table {table} could not be re-copied: {exc}"
                 errors[row] = f"{errors[row]}; {message}" if row in errors else message
     return {"rebuilt_rows": sorted(rebuilt), "errors": errors, "corrected": corrected, "usage": tokens}
 
 
-def _commit(db_path: str, *, run_id: int, generation_id: int, sheet: str, block_id: str,
-            before: str, after: str, revisions: dict[int, int], finding: str,
+def _commit(db_path: str, *, run_id: int, generation_id: int, sheet: str,
+            changes: dict[str, tuple[str, str]], revisions: dict[int, int], finding: str,
             verification: dict, model_name: str) -> list[int]:
-    """Correct the block and rebuild every placed cell in one transaction."""
+    """Correct the blocks and rebuild every placed cell in one transaction."""
     now = datetime.now(timezone.utc).isoformat()
     with repo.db_session(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -158,13 +186,14 @@ def _commit(db_path: str, *, run_id: int, generation_id: int, sheet: str, block_
             generation = srepo.active_generation(conn, run_id)
             if generation is None or generation["id"] != generation_id:
                 raise RecopyRefused("the source changed during the re-copy")
-            current = conn.execute("SELECT canonical_html FROM notes_source_blocks "
-                                   "WHERE generation_id=? AND block_id=?", (generation_id, block_id)).fetchone()
-            if current is None or current["canonical_html"] != before:
-                raise RecopyRefused("the source table changed during the re-copy")
-            conn.execute("UPDATE notes_source_blocks SET canonical_html=?, content_sha256=? "
-                         "WHERE generation_id=? AND block_id=?",
-                         (after, hashlib.sha256(after.encode("utf-8")).hexdigest(), generation_id, block_id))
+            for block_id, (before, after) in changes.items():
+                current = conn.execute("SELECT canonical_html FROM notes_source_blocks "
+                                       "WHERE generation_id=? AND block_id=?", (generation_id, block_id)).fetchone()
+                if current is None or current["canonical_html"] != before:
+                    raise RecopyRefused("the source table changed during the re-copy")
+                conn.execute("UPDATE notes_source_blocks SET canonical_html=?, content_sha256=? "
+                             "WHERE generation_id=? AND block_id=?",
+                             (after, hashlib.sha256(after.encode("utf-8")).hexdigest(), generation_id, block_id))
             blocks = load_blocks(conn, generation_id)
             for row, revision in sorted(revisions.items()):
                 cell = conn.execute("SELECT * FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
@@ -186,12 +215,13 @@ def _commit(db_path: str, *, run_id: int, generation_id: int, sheet: str, block_
                     "content_revision=COALESCE(content_revision,0)+1 "
                     "WHERE run_id=? AND sheet=? AND row=?",
                     (html, now, content_sha256(html), rendered.source_rendered_sha256, run_id, sheet, row))
-            conn.execute(
-                "INSERT INTO notes_source_block_revisions(run_id, generation_id, block_id, before_html, "
-                "after_html, finding, verification_json, rebuilt_cells_json, model, created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (run_id, generation_id, block_id, before, after, finding, json.dumps(verification),
-                 json.dumps([{"sheet": sheet, "row": row} for row in sorted(revisions)]), model_name, now))
+            for block_id, (before, after) in changes.items():
+                conn.execute(
+                    "INSERT INTO notes_source_block_revisions(run_id, generation_id, block_id, before_html, "
+                    "after_html, finding, verification_json, rebuilt_cells_json, model, created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (run_id, generation_id, block_id, before, after, finding, json.dumps(verification),
+                     json.dumps([{"sheet": sheet, "row": row} for row in sorted(revisions)]), model_name, now))
             conn.commit()
         except Exception:
             conn.rollback()
