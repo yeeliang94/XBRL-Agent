@@ -50,8 +50,14 @@ def _source_cell(conn, run_id: int, generation, blocks, sheet: str, row: int):
         rendered = render_blocks(blocks, ids, wrap_subnotes=wrap)
     except BlockSelectionError as exc:
         raise RecopyRefused(str(exc)) from exc
-    if not ids or not verify_format_only(rendered.html, cell["html"] or "").ok:
-        raise RecopyRefused(f"{sheet} row {row} no longer matches its source exactly")
+    if not ids:
+        raise RecopyRefused(f"{sheet} row {row} has no source placement")
+    if not verify_format_only(rendered.html, cell["html"] or "").ok:
+        # Page-furniture cleanup is the one accepted difference; it removes
+        # short text lines, never tables, so it can be replayed after a re-copy.
+        from notes.cleanup_repository import receipt_matches
+        if not receipt_matches(conn, run_id, sheet, row, generation["id"], rendered.html, cell["html"] or ""):
+            raise RecopyRefused(f"{sheet} row {row} no longer matches its source exactly")
     return cell, rendered.block_ids, wrap
 
 
@@ -136,7 +142,8 @@ async def recopy_tables(*, run_id: int, db_path: str, pdf_path: str, sheet: str,
                                    run_id, block.block_id, exc_info=True)
                     errors.setdefault(row, "Table re-copied for this run; a rerun may need it again.")
             except (RecopyRefused, PreparationError, ValueError) as exc:
-                errors[row] = f"Table {table} could not be re-copied: {exc}"
+                message = f"Table {table} could not be re-copied: {exc}"
+                errors[row] = f"{errors[row]}; {message}" if row in errors else message
     return {"rebuilt_rows": sorted(rebuilt), "errors": errors, "corrected": corrected, "usage": tokens}
 
 
@@ -171,13 +178,14 @@ def _commit(db_path: str, *, run_id: int, generation_id: int, sheet: str, block_
                 # Unchanged revision proves the cell still equals its old render.
                 if not rendered.usable or rendered.oversized:
                     raise RecopyRefused(f"{sheet} row {row} cannot be rebuilt")
-                digest = content_sha256(rendered.html)
+                html = _replay_cleanup(conn, run_id=run_id, generation_id=generation_id, cell=cell,
+                                       rendered=rendered.html)
                 conn.execute(
                     "UPDATE notes_cells SET html=?, style_source='unstyled', updated_at=?, "
                     "current_html_sha256=?, source_rendered_sha256=?, "
                     "content_revision=COALESCE(content_revision,0)+1 "
                     "WHERE run_id=? AND sheet=? AND row=?",
-                    (rendered.html, now, digest, rendered.source_rendered_sha256, run_id, sheet, row))
+                    (html, now, content_sha256(html), rendered.source_rendered_sha256, run_id, sheet, row))
             conn.execute(
                 "INSERT INTO notes_source_block_revisions(run_id, generation_id, block_id, before_html, "
                 "after_html, finding, verification_json, rebuilt_cells_json, model, created_at) "
@@ -189,3 +197,31 @@ def _commit(db_path: str, *, run_id: int, generation_id: int, sheet: str, block_
             conn.rollback()
             raise
     return sorted(revisions)
+
+
+def _replay_cleanup(conn, *, run_id: int, generation_id: int, cell, rendered: str) -> str:
+    """Re-apply a cell's recorded page-furniture removals to its new render.
+
+    Removals address short text blocks by position and never tables, so a
+    table re-copy leaves them valid. The receipt is rewritten onto the new
+    render so integrity keeps replaying it exactly.
+    """
+    from notes.cleanup_patch import Patch, apply_patch
+    from notes.cleanup_repository import _receipt_steps, source_evidence
+
+    receipt = conn.execute(
+        "SELECT * FROM notes_cleanup_receipts WHERE run_id=? AND sheet=? AND row=? AND generation_id IS ?",
+        (run_id, cell["sheet"], cell["row"], generation_id)).fetchone()
+    if receipt is None:
+        return rendered
+    cid = f"{cell['sheet']}:{cell['row']}"
+    evidence = source_evidence(conn, run_id, {**dict(cell), "source_generation_id": generation_id})
+    html, history = rendered, []
+    for step in _receipt_steps(receipt):
+        patch = Patch.model_validate(step["patch"])
+        after = apply_patch({cid: {**evidence, "html": html}}, patch, set(step["viewed_pages"]))[cid]["html"]
+        history.append({**step, "before_html": html, "after_html": after})
+        html = after
+    conn.execute("UPDATE notes_cleanup_receipts SET before_html=?, after_html=?, patch_json=? WHERE id=?",
+                 (rendered, html, json.dumps(history), receipt["id"]))
+    return html
