@@ -3,6 +3,8 @@ import { ui, uiClass } from "../lib/uiStyles";
 import { runStatusDisplay } from "../lib/runStatus";
 import { denominationLabel } from "../lib/vocabulary";
 import type { RunSummaryJson } from "../lib/types";
+import { formatUploadTime } from "../lib/documentTime";
+import { documentStageLabel, documentStageSymbol } from "../lib/documentStage";
 import { Skeleton } from "./Skeleton";
 import { StatusLabel } from "./StatusLabel";
 
@@ -31,14 +33,6 @@ export interface HistoryListProps {
    *  nothing to render for an unstarted run). When omitted, drafts fall
    *  back to `onRunSelected` so legacy callers keep working. */
   onResumeDraft?: (runId: number) => void;
-}
-
-function formatDate(iso: string): { concise: string; exact: string } {
-  // Keep it timezone-local so the user sees "their" time, not UTC.
-  // If the date is unparseable we fall back to the raw string.
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return { concise: iso, exact: iso };
-  return { concise: d.toLocaleDateString(), exact: d.toLocaleString() };
 }
 
 function formatDuration(seconds: number | null): string {
@@ -112,17 +106,17 @@ export function HistoryList({
             timestamp/status columns. `table-layout: fixed` plus <col>
             widths makes the layout predictable regardless of content. */}
         <colgroup>
-          <col style={{ width: "32%" }} />
-          <col style={{ width: "12%" }} />
+          <col style={{ width: "28%" }} />
+          <col style={{ width: "19%" }} />
           <col style={{ width: "16%" }} />
           <col style={{ width: "15%" }} />
-          <col style={{ width: "10%" }} />
-          <col style={{ width: "15%" }} />
+          <col style={{ width: "9%" }} />
+          <col style={{ width: "13%" }} />
         </colgroup>
         <thead>
           <tr>
             <th style={styles.th}>Filename</th>
-            <th style={styles.th}>When</th>
+            <th style={styles.th}>Uploaded</th>
             <th style={styles.th}>Status</th>
             {/* The filter has a Standard control but the list had no matching
                 column; this carries the run's standard + level (E2). */}
@@ -150,7 +144,7 @@ export function HistoryList({
             // docs/PLAN-design-qa-fixes.md R4. Drafts resume at /run/{id};
             // finished runs open their detail at /history/{id}.
             const runHref = isDraft ? `/run/${run.id}` : `/history/${run.id}`;
-            const date = formatDate(run.created_at);
+            const date = formatUploadTime(run.created_at);
             const actionLabel = isDraft
               ? "Continue setup"
               : run.status === "completed" ||
@@ -200,16 +194,16 @@ export function HistoryList({
                     )}
                   </div>
                 </td>
-                <td style={styles.td}>
-                  <span style={styles.dim} title={date.exact}>
-                    {date.concise}
+                <td style={{ ...styles.td, whiteSpace: "normal" }}>
+                  <span style={styles.dim} title={date}>
+                    {date}
                   </span>
                 </td>
                 <td style={styles.td}>
                   <StatusLabel
                     state={statusState(run.status)}
-                    symbol={display.symbol}
-                    label={display.label}
+                    symbol={isDraft ? documentStageSymbol(run) : display.symbol}
+                    label={isDraft ? documentStageLabel(run) : display.label}
                   />
                 </td>
                 <td style={styles.td}>

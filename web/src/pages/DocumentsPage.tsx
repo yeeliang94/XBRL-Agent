@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchHomeStats, fetchRuns } from "../lib/api";
+import { deleteRun, fetchHomeStats, fetchRuns } from "../lib/api";
 import type { HomeStats } from "../lib/api";
 import type { RunSummaryJson } from "../lib/types";
 import { userMessage } from "../lib/errors";
@@ -10,11 +10,17 @@ import { HistoryPage } from "./HistoryPage";
 import { ArrowForward } from "../components/iconGlyphs";
 import { StatusLabel } from "../components/StatusLabel";
 import { StatusIcon } from "../components/StatusIcon";
-import { runStatusDisplay, STATUS_SYMBOLS, type StatusSymbol } from "../lib/runStatus";
+import { runStatusDisplay } from "../lib/runStatus";
+
+import { documentStageLabel, documentStageSymbol } from "../lib/documentStage";
+import { formatUploadTime } from "../lib/documentTime";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+export { documentStageLabel, documentStageSymbol } from "../lib/documentStage";
 
 /** One serial poll for the document list and switcher; preparation is durable. */
 export function useDocuments(enabled: boolean) {
   const [runs, setRuns] = useState<RunSummaryJson[]>([]);
+  const [recentDocuments, setRecentDocuments] = useState<RunSummaryJson[]>([]);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -34,7 +40,12 @@ export function useDocuments(enabled: boolean) {
     const poll = async () => {
       let delay = 10_000;
       try {
-        const response = await fetchRuns({ documentGroup: "progress", limit: 50 });
+        const [queueResult, recent] = await Promise.allSettled([
+          fetchRuns({ documentGroup: "progress", limit: 50 }),
+          fetchRuns({ limit: 8 }),
+        ]);
+        if (queueResult.status === "rejected") throw queueResult.reason;
+        const response = queueResult.value;
         for (let page = 1; page < pages && page * 50 < response.total && !cancelled; page++) {
           const next = await fetchRuns({ documentGroup: "progress", limit: 50, offset: page * 50 });
           response.runs.push(...next.runs);
@@ -42,6 +53,7 @@ export function useDocuments(enabled: boolean) {
         response.runs = [...new Map(response.runs.map((run) => [run.id, run])).values()];
         if (cancelled) return;
         setRuns(response.runs);
+        if (recent.status === "fulfilled") setRecentDocuments(recent.value.runs);
         setTotal(response.total);
         setError(null);
         delay = response.total > 0 ? 2_000 : 30_000;
@@ -57,55 +69,20 @@ export function useDocuments(enabled: boolean) {
     void poll();
     return () => { cancelled = true; clearTimeout(timer); };
   }, [enabled, visible, pages, revision]);
-  return { runs, total, error, loading, refresh,
+  return { runs, recentDocuments, total, error, loading, refresh,
     loadMore: () => setPages((value) => value + 1) };
 }
 
-/** Status family for a document's current stage — drives the one icon the
- *  sidebar shows beside a recent document instead of a second line of text. */
-export function documentStageSymbol(run: Pick<RunSummaryJson, "status" | "preparation">): StatusSymbol {
-  if (run.status === "draft") {
-    const prep = run.preparation;
-    if (prep?.status === "failed") return STATUS_SYMBOLS.failure;
-    if (prep?.status === "cancelled") return STATUS_SYMBOLS.inactive;
-    if (prep?.phase === "awaiting_confirmation") return STATUS_SYMBOLS.attention;
-    if (prep?.status === "working" || prep?.status === "retrying" || prep?.status === "queued") return STATUS_SYMBOLS.inProgress;
-    return STATUS_SYMBOLS.inactive;
-  }
-  if (run.status === "running") return STATUS_SYMBOLS.inProgress;
-  return runStatusDisplay(run.status).symbol;
-}
-
-export function documentStageLabel(run: Pick<RunSummaryJson, "status" | "preparation" | "pipeline_stage">): string {
-  if (run.status === "draft") {
-    const prep = run.preparation;
-    if (prep?.status === "failed") return "Preparation failed";
-    if (prep?.status === "cancelled") return "Preparation stopped";
-    if (prep?.phase === "awaiting_confirmation") return "Confirm setup";
-    if (prep?.phase === "building_map") return "Mapping document";
-    if (prep?.phase === "reconciling_map") return "Checking document map";
-    if (prep?.status === "queued") return "Waiting to prepare";
-    if (prep?.status === "working" || prep?.status === "retrying") return "Preparing document";
-    return "Prepare document";
-  }
-  const names: Record<string, string> = {
-    scouting: "Mapping document", reading_source: "Reading document", extracting: "Extracting",
-    merging: "Combining statements", cross_checking: "Checking figures", reviewing: "Reviewing figures",
-    correcting: "Reviewing figures", re_checking: "Checking corrections", reviewing_notes: "Reviewing notes",
-    validating_notes: "Reviewing notes",
-    formatting_notes: "Formatting notes", cleaning_notes: "Cleaning notes", saving: "Saving results",
-    done: "Saving results",
-  };
-  return names[run.pipeline_stage || ""] || "Extraction in progress";
-}
-
 export function DocumentsPage({ documents, section, onSection, onAdd, onOpen }: {
-  documents: ReturnType<typeof useDocuments>;
+  documents: Omit<ReturnType<typeof useDocuments>, "recentDocuments"> & { recentDocuments?: RunSummaryJson[] };
   section: "progress" | "history";
   onSection: (section: "progress" | "history") => void;
   onAdd: () => void;
   onOpen: (run: Pick<RunSummaryJson, "id" | "status">) => void;
 }) {
+  const [deleteTarget, setDeleteTarget] = useState<RunSummaryJson | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const tabRef = useRef<HTMLDivElement>(null);
   const [summary, setSummary] = useState<HomeStats | null>(null);
   const [recent, setRecent] = useState<RunSummaryJson[]>([]);
@@ -166,9 +143,10 @@ export function DocumentsPage({ documents, section, onSection, onAdd, onOpen }: 
       </button>)}
     </div>
     <section role="tabpanel" id={`documents-${section}-panel`} aria-labelledby={`documents-${section}`}>
-      {section === "history" ? <HistoryPage selectedId={null} documentGroup="history" refreshKey={documents.runs.map((run) => run.id).join(",")} hideHeader onSelectRun={(id) => {
+      {section === "history" ? <HistoryPage selectedId={null} onResumeDraft={(id) => onOpen({ id, status: "draft" })} refreshKey={documents.runs.map((run) => run.id).join(",")} hideHeader onSelectRun={(id) => {
         if (id != null) onOpen({ id, status: "completed" });
       }} /> : <>
+        {deleteError && <p role="alert" style={ui.bodyText}>{deleteError}</p>}
         {documents.error && <p role="alert" style={ui.bodyText}>{documents.error}</p>}
         {documents.loading ? <p role="status" style={ui.bodyText}>Loading documents…</p> : documents.runs.length === 0 && !documents.error ?
           <p style={ui.bodyText}>No documents in progress.</p> : <div role="table" aria-label="Documents in progress">
@@ -176,9 +154,9 @@ export function DocumentsPage({ documents, section, onSection, onAdd, onOpen }: 
               <span role="columnheader">Document</span><span role="columnheader">Stage</span><span role="columnheader" style={{ textAlign: "right" }}>Action</span>
             </div>
             {documents.runs.map((run) => <div role="row" key={run.id} className="document-list-row" style={rowStyle}>
-              <div role="cell" style={{ minWidth: 0 }}><button type="button" title={run.pdf_filename} onClick={() => onOpen(run)} style={nameButtonStyle}>{run.pdf_filename}</button></div>
+              <div role="cell" style={{ minWidth: 0 }}><button type="button" title={run.pdf_filename} onClick={() => onOpen(run)} style={nameButtonStyle}>{run.pdf_filename}</button><span style={{ ...ui.metadata, fontSize: 12 }}>Uploaded {formatUploadTime(run.created_at)}</span></div>
               <span role="cell" style={{ ...ui.status, fontSize: 14 }}><StatusIcon symbol={documentStageSymbol(run)} />{documentStageLabel(run)}</span>
-              <div role="cell" style={{ textAlign: "right" }}><button type="button" className={uiClass.btnQuiet} style={{ ...ui.buttonQuiet, marginRight: -15 }} onClick={() => onOpen(run)}>{run.status === "draft" ? "Open setup" : "Open"}</button></div>
+              <div role="cell" style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 8 }}><button type="button" className={uiClass.btnQuiet} style={{ ...ui.buttonQuiet, marginRight: -15 }} onClick={() => onOpen(run)}>{run.status === "draft" ? "Open setup" : "Open"}</button><button type="button" className={uiClass.btnQuiet} style={ui.buttonQuiet} aria-label={`Delete ${run.pdf_filename}`} disabled={run.status === "running" || ["queued", "working", "retrying"].includes(run.preparation?.status || "")} title="Active documents must finish or be stopped before deletion." onClick={() => { setDeleteError(null); setDeleteTarget(run); }}>Delete</button></div>
             </div>)}
           </div>}
         {documents.runs.length < documents.total && <div style={{ marginTop: 16 }}><button type="button" className={uiClass.btnSecondary} style={ui.buttonSecondary} onClick={documents.loadMore}>Load more documents</button></div>}
@@ -200,6 +178,11 @@ export function DocumentsPage({ documents, section, onSection, onAdd, onOpen }: 
         </section>
       </>}
     </section>
+    <ConfirmDialog isOpen={deleteTarget != null} title="Delete this document?" message={`Delete ${deleteTarget?.pdf_filename || "this document"} and its saved results from Work queue and History? This cannot be undone.`} confirmLabel="Delete document" busyLabel="Deleting…" busy={deleting} onCancel={() => setDeleteTarget(null)} onConfirm={() => {
+      if (!deleteTarget || deleting) return;
+      setDeleting(true);
+      void deleteRun(deleteTarget.id).then(() => { setDeleteTarget(null); documents.refresh(); }).catch((error) => { setDeleteTarget(null); setDeleteError(userMessage(error)); }).finally(() => setDeleting(false));
+    }} />
   </div>;
 }
 // One grid for in-progress rows and recent results so their columns line up.

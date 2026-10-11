@@ -6,6 +6,7 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 
 from mtool.notes_decorate import DEFAULT_STYLE
 from notes import visual_review as vr
+from notes.visual_review import prepare_note_evidence as prepare_note_evidence_real
 
 
 @pytest.fixture
@@ -46,6 +47,35 @@ async def test_prepared_output_is_given_to_fresh_reviewer(review_harness):
     assert any("PREPARED OUTPUT HTML:\n<table><tr><td>prepared</td></tr></table>" in part
                for part in calls[0][0] if isinstance(part, str))
     assert calls[0][1]["usage"] is kwargs["usage"]
+
+
+@pytest.mark.asyncio
+async def test_review_can_distinguish_double_intent_after_transport_normalization(review_harness, monkeypatch):
+    from bs4 import BeautifulSoup
+
+    kwargs, _, harness = review_harness
+    monkeypatch.setattr(vr, "prepare_note_evidence", prepare_note_evidence_real)
+    prepared_edges = []
+    for border in ("3px double", "0.75px solid"):
+        html = ('<table><tr><td>Total</td><td style="border-bottom:'
+                + border + ' #000000">24,000</td></tr></table>')
+        kwargs["rows"][112] = html
+        errors, _ = await vr.check_visual_rows(**kwargs)
+        assert errors == {}
+        note = next(part for part in harness.calls[-1][0]
+                    if isinstance(part, str) and "PREPARED OUTPUT HTML:" in part)
+        canonical, prepared = note.split("\nPREPARED OUTPUT HTML:\n")
+        assert "CANONICAL CANDIDATE HTML:\n" + html in canonical
+        assert "double" not in prepared
+        amount = BeautifulSoup(prepared, "html.parser").find_all("td")[1]
+        styles = dict(decl.strip().split(":", 1) for decl in amount["style"].split(";") if decl.strip())
+        styles = {prop: value.strip() for prop, value in styles.items()}
+        assert styles["border-bottom"] == "0.75px solid #000000"
+        assert amount.get_text() == "24,000"
+        prepared_edges.append(styles)
+    # The same transport output must not hide whether the source double rule
+    # was actually captured. The reviewer needs both current representations.
+    assert prepared_edges[0] == prepared_edges[1]
 
 
 @pytest.mark.asyncio

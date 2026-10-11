@@ -1413,6 +1413,13 @@ Key invariants:
     certify native Word or mTool rendering. Pinned by
     `tests/test_notes_visual_review.py` and the visual-save cases in
     `tests/test_notes_format_patch.py`.
+    Visual review also receives the current canonical candidate so it can check
+    source double-rule intent before the approved mTool substitution erases it.
+    A source double rule requires a canonical double edge at the correct position
+    and extent, plus the corresponding prepared 0.75px solid edge with its colour
+    and sides retained. Missing or misplaced intent and degraded output still
+    fail; the substitution alone does not. The evidence boundary is pinned by
+    `tests/test_notes_visual_review.py::test_review_can_distinguish_double_intent_after_transport_normalization`.
     Partial saves retain
     `ok=false`, `validation_failed` or `visual_review_failed`, `failed_rows`, and per-row errors, alongside
     the actual `changed_rows`. Snapshots include only saved rows. The review

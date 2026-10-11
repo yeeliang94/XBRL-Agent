@@ -71,7 +71,7 @@ def _seed_run(
 # ---------------------------------------------------------------------------
 
 def test_list_runs_basic_ordering(db_path: Path) -> None:
-    """Default sort is created_at DESC (newest first)."""
+    """Newest upload first; later inserts win when upload timestamps tie."""
     with repo.db_session(db_path) as conn:
         _seed_run(conn, session_id="a", pdf_filename="one.pdf",
                   created_at="2026-04-01T10:00:00Z")
@@ -79,11 +79,38 @@ def test_list_runs_basic_ordering(db_path: Path) -> None:
                   created_at="2026-04-02T10:00:00Z")
         _seed_run(conn, session_id="c", pdf_filename="three.pdf",
                   created_at="2026-04-03T10:00:00Z")
+        _seed_run(conn, session_id="d", pdf_filename="four.pdf",
+                  created_at="2026-04-03T10:00:00Z")
 
     with repo.db_session(db_path) as conn:
         rows = repo.list_runs(conn)
 
-    assert [r.pdf_filename for r in rows] == ["three.pdf", "two.pdf", "one.pdf"]
+    assert [r.pdf_filename for r in rows] == ["four.pdf", "three.pdf", "two.pdf", "one.pdf"]
+
+
+@pytest.mark.parametrize("completion_status", ["completed", "completed_with_errors", "correction_exhausted"])
+def test_list_runs_recent_completion_precedes_newer_uploads(db_path: Path, completion_status: str) -> None:
+    """An older upload finished today leads Recent and History before pagination."""
+    with repo.db_session(db_path) as conn:
+        older = _seed_run(conn, session_id="older", pdf_filename="older.pdf",
+                          status="draft", created_at="2026-04-01T10:00:00Z")
+        _seed_run(conn, session_id="completed", pdf_filename="completed.pdf",
+                  created_at="2026-04-05T10:00:00Z")
+        _seed_run(conn, session_id="new", pdf_filename="new.pdf",
+                  status="running", created_at="2026-04-10T10:00:00Z")
+        assert repo.list_runs(conn, limit=1)[0].pdf_filename == "completed.pdf"
+        conn.execute("UPDATE runs SET status = ?, ended_at = ? WHERE id = ?",
+                     (completion_status, "2026-04-11T10:00:00Z", older))
+        conn.commit()
+        assert [row.pdf_filename for row in repo.list_runs(conn)] == [
+            "older.pdf", "completed.pdf", "new.pdf",
+        ]
+        assert repo.list_runs(conn, limit=1)[0].id == older
+        assert repo.list_runs(conn, document_group="history", limit=1)[0].id == older
+        assert repo.list_runs(conn, document_group="progress")[0].pdf_filename == "new.pdf"
+        # Historical completions without a recorded finish time remain readable.
+        conn.execute("UPDATE runs SET ended_at = NULL WHERE id = ?", (older,))
+        assert repo.list_runs(conn, limit=1)[0].pdf_filename == "completed.pdf"
 
 
 def test_list_runs_filter_by_filename_substring(db_path: Path) -> None:

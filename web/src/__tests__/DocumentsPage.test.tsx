@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { act, fireEvent, render, renderHook, screen, within } from "@testing-library/react";
 import { DocumentsPage, useDocuments } from "../pages/DocumentsPage";
-import { fetchHomeStats, fetchRuns } from "../lib/api";
-vi.mock("../lib/api", () => ({ fetchRuns: vi.fn(), fetchHomeStats: vi.fn() }));
+import { deleteRun, fetchHomeStats, fetchRuns } from "../lib/api";
+vi.mock("../lib/api", () => ({ fetchRuns: vi.fn(), fetchHomeStats: vi.fn(), deleteRun: vi.fn() }));
 import type { RunSummaryJson } from "../lib/types";
 
 const runs = [
@@ -26,20 +26,33 @@ describe("Documents workspace", () => {
     const hook = renderHook(() => useDocuments(true));
     try {
       await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
-      expect(fetchRuns).toHaveBeenCalledTimes(1);
-      await act(async () => { await vi.advanceTimersByTimeAsync(28_000); });
       expect(fetchRuns).toHaveBeenCalledTimes(2);
+      await act(async () => { await vi.advanceTimersByTimeAsync(28_000); });
+      expect(fetchRuns).toHaveBeenCalledTimes(4);
       act(() => { visibility = "hidden"; document.dispatchEvent(new Event("visibilitychange")); });
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
-      expect(fetchRuns).toHaveBeenCalledTimes(2);
+      expect(fetchRuns).toHaveBeenCalledTimes(4);
       await act(async () => { visibility = "visible"; document.dispatchEvent(new Event("visibilitychange")); });
-      expect(fetchRuns).toHaveBeenCalledTimes(3);
+      expect(fetchRuns).toHaveBeenCalledTimes(6);
     } finally {
       hook.unmount();
       if (original) Object.defineProperty(document, "visibilityState", original);
       else Reflect.deleteProperty(document, "visibilityState");
       vi.useRealTimers();
     }
+  });
+  test("confirms queue deletion, refreshes after success, and protects active work", async () => {
+    vi.mocked(deleteRun).mockResolvedValue({ deleted: 2 });
+    const refresh = vi.fn();
+    render(<DocumentsPage documents={{ runs, total: 4, error: null, loading: false, loadMore: vi.fn(), refresh }} section="progress" onOpen={vi.fn()} onSection={vi.fn()} onAdd={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Delete Preparing.pdf" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete Extracting.pdf" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Delete Ready.pdf" }));
+    expect(deleteRun).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Delete document" }));
+    await act(async () => {});
+    expect(deleteRun).toHaveBeenCalledWith(2);
+    expect(refresh).toHaveBeenCalledOnce();
   });
   test("shows truthful per-document stages and opens the selected document", async () => {
     const onOpen = vi.fn();
