@@ -266,9 +266,9 @@ ADVANCED_SETTINGS: tuple[AdvancedSetting, ...] = (
     ),
     AdvancedSetting(
         "XBRL_SOFT_COMPACT_TOKENS", "History trimming threshold (tokens)",
-        "After this many tokens, older tool results are trimmed more "
-        "aggressively. 0 turns this off.",
-        _EFFICIENCY, "int", 60000, minimum=0,
+        "When the current conversation reaches this many tokens, older tool "
+        "results are trimmed more aggressively. 0 turns this off.",
+        _EFFICIENCY, "int", 100000, minimum=0,
     ),
     AdvancedSetting(
         "XBRL_SOFT_COMPACT_OUTBOUND_CHARS", "History trimming by request size (characters)",
