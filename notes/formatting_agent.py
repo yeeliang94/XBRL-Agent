@@ -14,6 +14,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Collection
 from typing import Any, Callable, Optional, Union
@@ -413,6 +414,11 @@ async def run_notes_formatter(
         agent_id = repo.create_run_agent(conn, run_id, "NOTES_FORMATTING", variant=trace_label or sheet, model=model_name)
     outcome = None
     status = "failed"
+    # The first pass and a post-re-copy pass write snapshots separately; one
+    # shared start time keeps the second from wiping the first's revert copy.
+    if pass_started_at is None:
+        pass_started_at = datetime.now(timezone.utc).isoformat(
+            timespec="microseconds").replace("+00:00", "Z")
     try:
         outcome = await _run_notes_formatter_impl(
             run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
@@ -517,6 +523,13 @@ async def _recopy_and_reformat(outcome: dict, structural: dict, *, run_id: int, 
         summary=(f"Re-copied {len(recopy['corrected'])} table(s) from the source PDF. "
                  + (final.get("summary") or "")),
     )
+    warnings = recopy.get("warnings") or {}
+    if warnings:
+        # The note is right for this run, so not a failure, but the user must
+        # hear that a rerun of the upload may bring the old table back.
+        result["recopy_warnings"] = warnings
+        result["summary"] += " " + " ".join(
+            f"Row {row}: {text}" for row, text in sorted(warnings.items()))
     for key in ("error", "error_type", "failed_rows", "row_errors"):
         result.pop(key, None)
     if errors:

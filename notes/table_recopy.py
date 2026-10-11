@@ -105,6 +105,8 @@ async def recopy_tables(*, run_id: int, db_path: str, pdf_path: str, sheet: str,
     metadata_path = Path(pdf_path).parent / PREPARATION_NAME
     rebuilt: set[int] = set()
     errors: dict[int, str] = {}
+    # The run's note is corrected, but a rerun of the upload may not be.
+    warnings: dict[int, str] = {}
     corrected: list[dict] = []
     done_blocks: set[str] = set()
     tokens = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -168,7 +170,8 @@ async def recopy_tables(*, run_id: int, db_path: str, pdf_path: str, sheet: str,
                     except Exception:  # noqa: BLE001 — the run's source is already corrected
                         logger.warning("Could not record table correction on disk run=%s block=%s",
                                        run_id, block_id, exc_info=True)
-                        errors.setdefault(row, "Table re-copied for this run; a rerun may need it again.")
+                        warnings.setdefault(row, "Table re-copied for this run only; rerunning the "
+                                                 "upload may bring back the old table.")
             except (RecopyRefused, PreparationError, ValueError) as exc:
                 message = f"Table {table} could not be re-copied: {exc}"
                 errors[row] = f"{errors[row]}; {message}" if row in errors else message
@@ -179,7 +182,7 @@ async def recopy_tables(*, run_id: int, db_path: str, pdf_path: str, sheet: str,
                                run_id, sheet, row, table, exc_info=True)
                 message = f"Table {table} could not be re-copied: {type(exc).__name__}: {exc}"
                 errors[row] = f"{errors[row]}; {message}" if row in errors else message
-    return {"rebuilt_rows": sorted(rebuilt), "errors": errors, "corrected": corrected, "usage": tokens}
+    return {"rebuilt_rows": sorted(rebuilt), "errors": errors, "warnings": warnings, "corrected": corrected, "usage": tokens}
 
 
 def _commit(db_path: str, *, run_id: int, generation_id: int, sheet: str,

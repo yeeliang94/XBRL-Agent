@@ -64,7 +64,9 @@ def table_rules(html: str) -> list[dict]:
     """Every horizontal line per table: {table, below_row, cells, kind}.
 
     ``below_row`` is the 1-based direct row the line sits under (0 = above the
-    first row). ``cells`` are 1-based direct cell numbers of that row.
+    first row). ``cells`` are 1-based direct cell numbers of that row;
+    ``columns`` is the 1-based grid-column span the line actually covers,
+    which is narrower than a merged cell when the line is partial.
     """
     out: list[dict] = []
     for index, table in enumerate(BeautifulSoup(html or "", "html.parser").find_all("table")):
@@ -88,8 +90,10 @@ def table_rules(html: str) -> list[dict]:
             return sides[key]
 
         for boundary in range(n_rows + 1):
-            found: dict[int, set] = {}
-            kinds: dict[int, str] = {}
+            # One entry per contiguous run of grid columns with the same owner
+            # row and stroke kind: a single and a double line side by side are
+            # two lines, and a partial line under a merged cell keeps its span.
+            runs: list[dict] = []
             for col in range(n_cols):
                 upper = grid.get((boundary - 1, col))
                 lower = grid.get((boundary, col))
@@ -103,19 +107,31 @@ def table_rules(html: str) -> list[dict]:
                 row_index, cell_number = direct.get(id(owner), (None, None))
                 if row_index is None:
                     continue
-                found.setdefault(row_index, set()).add(cell_number)
-                kinds[row_index] = "double" if stroke[0] == "double" else (
-                    "single" if kinds.get(row_index, "single") == "single" else "mixed")
-            for row_index, cells in sorted(found.items()):
-                below = boundary if boundary > 0 else 0
+                kind = "double" if stroke[0] == "double" else "single"
+                last = runs[-1] if runs else None
+                if (last and last["_row"] == row_index and last["kind"] == kind
+                        and last["columns"][1] == col):
+                    last["columns"][1] = col + 1
+                    last["_cells"].add(cell_number)
+                else:
+                    runs.append({"_row": row_index, "kind": kind, "columns": [col + 1, col + 1],
+                                 "_cells": {cell_number}})
+            for run in runs:
+                row_index = run["_row"]
                 out.append({
                     "table": index,
-                    "below_row": below,
+                    "below_row": boundary,
                     "row_label": _label(rows[row_index]) if row_index < len(rows) else "",
-                    "cells": sorted(cells),
-                    "kind": kinds[row_index],
+                    "cells": sorted(run["_cells"]),
+                    "columns": run["columns"],
+                    "kind": run["kind"],
                 })
     return out
+
+
+def _span(columns: list[int]) -> str:
+    first, last = columns
+    return f"column {first}" if first == last else f"columns {first}-{last}"
 
 
 def rule_map_text(html: str) -> str:
@@ -127,5 +143,6 @@ def rule_map_text(html: str) -> str:
         lines.append(
             f"table {rule['table']}: {rule['kind']} line {where} "
             f"(\"{rule['row_label']}\"), under cells {rule['cells']}"
+            f" (grid {_span(rule['columns'])})"
         )
     return "\n".join(lines) if lines else "no explicit lines"

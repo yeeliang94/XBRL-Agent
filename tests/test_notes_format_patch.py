@@ -1241,6 +1241,40 @@ async def test_failed_reformat_after_recopy_keeps_saved_rows_and_receipts(monkey
 
 
 @pytest.mark.asyncio
+async def test_recopy_pass_keeps_first_pass_revert_and_save_warning(monkeypatch, formatter_db):
+    """The post-re-copy pass must not wipe the first pass's revert snapshot,
+    and a failed save to the prepared document is reported, not hidden."""
+    import notes.table_recopy as tr
+    from db import repository as repo
+    db_path, _, run_id = formatter_db
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113, label="Other",
+                               html=_TABLE_HTML, source_pages=[3])
+    checks = []
+
+    async def check(**kwargs):
+        checks.append(kwargs)
+        if len(checks) == 1:
+            return {112: "Total captured as heading cells."}, {"tables": [
+                {"row": 112, "table": 0, "status": "unresolved", "issue_kind": "structure",
+                 "reason": "Total captured as heading cells."}]}
+        return {}, {"tables": [{"row": 112, "table": 0, "status": "pass"}]}
+
+    async def recopy(**_kwargs):
+        return {"rebuilt_rows": [112], "errors": {}, "corrected": [{"row": 112}],
+                "warnings": {112: "Table re-copied for this run only."},
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0}}
+
+    monkeypatch.setattr(tr, "recopy_tables", recopy)
+    fake = _FakeAgent([_layout(_note(), _note(113)), _GOOD_PATCH])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
+    assert result["ok"] and result["changed_rows"] == 2
+    assert "Row 112: Table re-copied for this run only." in result["summary"]
+    with repo.db_session(db_path) as conn:
+        assert set(repo.fetch_notes_format_snapshots(conn, run_id, _SHEET)) == {112, 113}
+
+
+@pytest.mark.asyncio
 async def test_person_save_during_formatting_keeps_ownership(monkeypatch, formatter_db):
     """A person saving identical HTML mid-pass still owns the note: the final
     write re-checks ownership, not only the HTML."""
