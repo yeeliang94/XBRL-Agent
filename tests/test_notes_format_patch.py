@@ -676,6 +676,21 @@ async def test_formatter_stopped_before_its_time_limit_is_cancelled(monkeypatch,
     assert _final_phase(live)["phase"] == "cancelled"
 
 
+@pytest.mark.asyncio
+async def test_live_formatter_events_reach_the_queue_from_tool_threads():
+    # view_pdf_pages is synchronous, so PydanticAI runs it on a worker thread.
+    from notes.formatter_activity import queue_event_sink
+
+    queue: asyncio.Queue = asyncio.Queue()
+    sink = queue_event_sink(queue, "notes-formatting", "NOTES_FORMATTING")
+    await asyncio.to_thread(sink, "tool_call", {"tool_name": "view_pdf_pages"})
+    event = await asyncio.wait_for(queue.get(), timeout=1)
+    assert event == {"event": "tool_call", "data": {
+        "tool_name": "view_pdf_pages", "agent_id": "notes-formatting",
+        "agent_role": "NOTES_FORMATTING",
+    }}
+
+
 def test_formatter_tool_reports_page_images_as_a_count():
     from pydantic_ai.messages import BinaryContent
     from notes.formatter_activity import FormatterActivity

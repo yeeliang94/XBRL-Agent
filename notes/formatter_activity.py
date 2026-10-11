@@ -15,6 +15,7 @@ database write never fails a formatting pass.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -29,6 +30,31 @@ logger = logging.getLogger(__name__)
 _RESULT_SUMMARY_CHARS = 800
 
 EventSink = Callable[[str, dict], None]
+
+
+def queue_event_sink(queue: "asyncio.Queue", agent_id: str, agent_role: str) -> EventSink:
+    """An ``on_event`` that feeds the run's live event queue from any thread.
+
+    Formatter tools such as ``view_pdf_pages`` are synchronous, so PydanticAI
+    runs them on worker threads; ``asyncio.Queue`` is not thread-safe, so
+    every event is handed to the queue's event loop. Must be created on that
+    loop.
+    """
+    from agent_runner import build_agent_event
+
+    loop = asyncio.get_running_loop()
+
+    def sink(event_type: str, data: dict) -> None:
+        event = build_agent_event(event_type, agent_id, agent_role, data)
+
+        def put() -> None:
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                logger.warning("event_queue full; formatter %s dropped", event_type)
+
+        loop.call_soon_threadsafe(put)
+    return sink
 
 
 def _event_time() -> str:
