@@ -1054,3 +1054,23 @@ def test_all_source_heading_levels_retain_semantics_and_receive_mbrs_style(level
     assert heading.em.get_text() == "detail"
     assert "font-size: 14pt" in heading["style"]
     assert "font-weight: 700" in heading["style"]
+
+
+def test_heading_cells_below_the_heading_rows_render_as_data_cells():
+    """VTech notes 19 and 71: a row label or a total captured as <th> below the
+    data must not inherit heading bold or fill; the top heading row keeps it."""
+    from mtool.notes_decorate import NotesTableStyle, decorate_notes_html
+    from notes.table_theme import house_style
+    html = ("<table><tr><th></th><th>2025</th></tr>"
+            "<tr><th>Total cash outflows for leases</th><td>1,127</td></tr>"
+            "<tr><th></th><th>12,856</th></tr></table>")
+    for style in (NotesTableStyle(), NotesTableStyle.from_theme(house_style())):
+        for compact in (False, True):
+            out = decorate_notes_html(html, style, compact=compact)
+            cells = re.findall(r"<th([^>]*)>([^<]*)</th>", out)
+            styles = {text: attrs for attrs, text in cells}
+            assert "font-weight: 600" in styles["2025"]
+            for body in ("Total cash outflows for leases", "12,856"):
+                assert "font-weight: 400" in styles[body] and "background" not in styles[body]
+            assert "text-align: left" in styles["Total cash outflows for leases"]
+            assert "text-align: right" in styles["12,856"]

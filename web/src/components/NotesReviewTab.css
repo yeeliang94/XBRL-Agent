@@ -212,6 +212,15 @@
   border-bottom: var(--nt-header-rule, var(--nt-grid-border, 0.75px solid #CBD1D6));
 }
 
+/* A heading cell below the table's heading rows labels its row (a row label
+ * or a total captured as <th>). tagNumericCells tags it; it renders like a data
+ * cell, matching mtool/notes_decorate.py. Inline styles still win. */
+.notes-review-tab .tiptap th.is-body-th {
+  background: transparent;
+  font-weight: 400;
+  border-bottom: var(--nt-grid-border, 0.75px solid #CBD1D6);
+}
+
 /* Numeric value cells right-align so the review preview matches the
  * clipboard / M-Tool paste. The `.is-numeric` class is toggled on by
  * tagNumericCells (web/src/lib/tableAlign.ts) after every editor update;

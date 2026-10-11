@@ -1465,6 +1465,12 @@ Key invariants:
     sources, continued/grouped tables, and blocks used on another sheet. The
     prepared document on disk is updated (`record_table_correction`) so a rerun
     of the upload keeps the fix. Rebuilt rows get one ordinary formatting pass.
+    Heading styling (bold, fill, header rule) applies only to a table's
+    leading heading rows (thead, or all-`th` rows before the first data row);
+    a `th` lower down is a row label or a captured total and renders as a data
+    cell (`heading_rows` in `mtool/notes_decorate.py`, `headingRows` in
+    `web/src/lib/tableAlign.ts`). Pinned by
+    `tests/test_mtool_notes_decorate.py` and `tableAlign.test.ts`.
     Pinned by `tests/test_table_recopy.py`, `tests/test_db_schema_v52.py`,
     `tests/test_notes_format_patch.py` and `tests/test_notes_visual_review.py`.
     Partial saves retain

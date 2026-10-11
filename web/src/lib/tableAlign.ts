@@ -60,6 +60,27 @@ export function amountColumns(table: Element): Set<number> {
   return columns;
 }
 
+/** The table's leading heading rows: thead rows, or all-`th` rows before the
+ * first row holding a data cell. Only these get heading styling; a `th` further
+ * down labels its row and renders like a data cell. Mirrors heading_rows in
+ * mtool/notes_decorate.py. */
+export function headingRows(table: Element): Set<Element> {
+  const rows = new Set<Element>();
+  for (const row of Array.from(table.querySelectorAll("tr"))) {
+    if (row.closest("table") !== table) continue;
+    const cells = Array.from(row.children).filter(
+      (cell) => cell.tagName === "TD" || cell.tagName === "TH",
+    );
+    const inHead = row.parentElement?.tagName === "THEAD";
+    if (inHead || (cells.length > 0 && cells.every((cell) => cell.tagName === "TH"))) {
+      rows.add(row);
+      continue;
+    }
+    break;
+  }
+  return rows;
+}
+
 /** Figures align by their own content. Inferred amount-column alignment applies
  * only to heading rows, so descriptive body text stays left. */
 export function shouldRightAlignTableCell(
@@ -67,14 +88,13 @@ export function shouldRightAlignTableCell(
   index: number,
   cells: Element[],
   amountCols: Set<number>,
+  heading = false,
 ): boolean {
   const colspan = Number(cell.getAttribute("colspan")) || 1;
   if (shouldRightAlignCell(cell.textContent ?? "", index, cells.length, colspan)) return true;
   if (index === 0 || !amountCols.has(index) || cells.some((item) =>
     item.hasAttribute("colspan") || item.hasAttribute("rowspan"))) return false;
-  const row = cell.parentElement;
-  return row?.parentElement?.tagName === "THEAD" || cells.every((item) =>
-    item.tagName === "TH");
+  return heading;
 }
 
 /** Does the cell OWN its border through a persisted inline style? Mirrors the
@@ -110,8 +130,10 @@ export function tagNumericCells(
   root: ParentNode,
   className = "is-numeric",
   totalsClassName = "is-totals-num",
+  bodyHeadingClassName = "is-body-th",
 ): void {
   const columnsByTable = new Map<Element, Set<number>>();
+  const headingsByTable = new Map<Element, Set<Element>>();
   for (const row of Array.from(root.querySelectorAll("tr"))) {
     const cells = Array.from(row.children).filter(
       (c) => c.tagName === "TD" || c.tagName === "TH",
@@ -123,9 +145,16 @@ export function tagNumericCells(
     }
     const amountCols = (table ? columnsByTable.get(table) : undefined) ??
       new Set<number>();
+    if (table && !headingsByTable.has(table)) {
+      headingsByTable.set(table, headingRows(table));
+    }
+    const heading = Boolean(table && headingsByTable.get(table)?.has(row));
     cells.forEach((cell, idx) => {
       const right = shouldRightAlignTableCell(
-        cell, idx, cells, amountCols,
+        cell, idx, cells, amountCols, heading,
+      );
+      (cell as HTMLElement).classList.toggle(
+        bodyHeadingClassName, cell.tagName === "TH" && !heading,
       );
       (cell as HTMLElement).classList.toggle(className, right);
       (cell as HTMLElement).classList.toggle(
