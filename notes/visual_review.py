@@ -134,7 +134,8 @@ def retain_other_verification_receipts(previous: dict, current: dict, *, active_
 
 
 async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
-                            sheet, model, usage, limits, output_dir, trace_label):
+                            sheet, model, usage, limits, output_dir, trace_label,
+                            activity=None):
     """A fresh context on every check; no formatter conversation is evidence."""
     from notes.formatting_agent import _preload_source_pages, _table_geometry
 
@@ -183,6 +184,7 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
         model=model,
     )
     deps.viewed_pages.update(attached)
+    deps.activity = activity
     manifest = [{"row": row, "table": table, "source_pages": by_row[row].source_pages}
                 for row, table in sorted(reviewable)]
     try:
@@ -238,6 +240,7 @@ async def review_and_correct_rows(
     pdf_path: str, sheet: str, model, usage: RunUsage,
     formatter_run: Callable[[Any], Awaitable[Any]], output_dir: str,
     trace_label: str, on_phase: Callable[[str], None] | None = None,
+    activity: Any = None,
 ) -> tuple[dict[int, str], dict, dict[int, str]]:
     """Keep passed rows when a later correction or check cannot finish."""
     from notes.formatting_agent import _output_json, _partition_valid_patch, _screen_patch, _table_geometry, _allowed_targets_from_geometry
@@ -258,6 +261,7 @@ async def review_and_correct_rows(
             run_id=run_id, db_path=db_path, pdf_path=pdf_path,
             sheet=sheet, model=model, usage=review_usage, limits=review_limits,
             output_dir=output_dir, trace_label=trace_label + suffix,
+            activity=activity,
         )
 
     try:

@@ -1,7 +1,7 @@
 import { describe, test, expect, vi } from "vitest";
 import { act, render, screen, fireEvent, within } from "@testing-library/react";
 import { ExtractPage } from "../pages/ExtractPage";
-import { initialState } from "../lib/appReducer";
+import { appReducer, initialState } from "../lib/appReducer";
 import { createAgentState } from "../lib/types";
 import type { AppState } from "../lib/appReducer";
 import type { ExtendedSettingsResponse, PreparationSnapshot } from "../lib/types";
@@ -501,6 +501,33 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(panel.getByText(message)).toBeVisible();
     expect(panel.queryByText("Formatting complete")).toBeNull();
     expect(screen.getByRole("tab", { name: /notes formatting/i })).toHaveTextContent("Failed");
+  });
+
+  test("formatting shows each sub-agent's own activity in one tab", () => {
+    const formatterEvent = (event: "status" | "tool_call" | "tool_result", timestamp: number, data: Record<string, unknown>) => ({
+      type: "EVENT" as const,
+      payload: { event, timestamp, data: { agent_id: "notes-formatting", agent_role: "NOTES_FORMATTING", ...data } } as never,
+    });
+    let state: AppState = { ...initialState, sessionId: "test-session", filename: "test.pdf", isRunning: true,
+      pipelineStage: "formatting_notes", activeTab: "notes-formatting", notesInRun: ["CORP_INFO"],
+      events: [{ event: "pipeline_stage", timestamp: 1, data: { stage: "formatting_notes", started_at: 1, completed: 0, total: 2 } }] };
+    for (const action of [
+      formatterEvent("status", 2, { sub_agent_id: "Notes-Issuedcapital", phase: "started", message: "Formatting started" }),
+      formatterEvent("status", 3, { sub_agent_id: "notes_format_Notes-Listofnotes_part1", phase: "started", message: "Formatting started" }),
+      formatterEvent("status", 4, { sub_agent_id: "notes_format_Notes-Listofnotes_part1", phase: "working", message: "Checking formatted notes against the source PDF…" }),
+      formatterEvent("status", 5, { sub_agent_id: "Notes-Issuedcapital", phase: "failed", message: "Visual reviewer did not complete a valid assessment." }),
+    ]) state = appReducer(state, action);
+    render(<ExtractPage {...makeProps({ state })} />);
+    expect(screen.getAllByRole("tab", { name: /notes formatting/i })).toHaveLength(1);
+    const panel = within(screen.getByRole("tabpanel", { name: "Notes formatting activity" }));
+    const subTabs = within(panel.getByRole("tablist", { name: "Formatting sub-agents" }));
+    expect(subTabs.getByRole("tab", { name: "Issued Capital · Failed" })).toBeVisible();
+    expect(subTabs.getByRole("tab", { name: "List of Notes · part 1" })).toBeVisible();
+    const updates = () => within(panel.getByRole("list", { name: "Activity updates" }));
+    expect(updates().getByText("List of Notes · part 1: Checking formatted notes against the source PDF…")).toBeVisible();
+    fireEvent.click(subTabs.getByRole("tab", { name: "Issued Capital · Failed" }));
+    expect(updates().getByText("Visual reviewer did not complete a valid assessment.")).toBeVisible();
+    expect(updates().queryByText(/Checking formatted notes/)).toBeNull();
   });
 
   test("only an observed successful formatting pass is shown complete", () => {
