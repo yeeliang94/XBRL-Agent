@@ -1682,28 +1682,37 @@ def _tokens(html: str) -> Counter:
 async def recapture_table(
     pdf_path: str | Path, *, page_number: int, page_html: str, block_index: int,
     finding: str, model: Any, rotation: int = 0, _caller: Callable | None = None,
+    usage_out: dict | None = None,
 ) -> dict:
-    """Re-copy one table on a prepared page; return its corrected HTML.
+    """Re-copy one table on a prepared page; return the corrected tables.
 
-    Raises PreparationError naming the failed gate. Nothing else on the page
-    may change, the table keeps exactly the same words and figures, the table
-    shape check must pass, and the independent verifier must confirm the page.
+    Raises PreparationError naming the failed gate. Text outside tables may
+    not change. The named table must change; another table on the page may
+    change too (the same capture defect often repeats). Every changed table
+    keeps exactly the same words and figures and passes the shape check, and
+    the independent verifier must confirm the whole page. Returns
+    ``tables`` keyed by page block index, ``html`` for the named table.
     """
     pdf = Path(pdf_path)
     old_nodes = _page_nodes(page_html)
     if not 0 <= block_index < len(old_nodes) or getattr(old_nodes[block_index], "name", None) != "table":
         raise PreparationError("The named source table is not on its recorded page.")
-    old_table = str(old_nodes[block_index])
     with fitz.open(pdf) as doc:
         metadata_rotation = doc[page_number - 1].rotation
     image = await asyncio.to_thread(_render_page, pdf, page_number, rotation)
     focused = await asyncio.to_thread(_focused_views, pdf, page_number, rotation)
-    usage: dict = {}
+    usage = usage_out if usage_out is not None else {}
 
     async def request(stage: str, context: dict) -> dict:
         if _caller is not None:
             return await _caller(stage, [image, *focused], context)
-        return await _request_model(model, stage, [image, *focused], context, usage_out=usage)
+        # Billable usage is kept even when a later gate refuses the re-copy.
+        stage_usage: dict = {}
+        try:
+            return await _request_model(model, stage, [image, *focused], context, usage_out=stage_usage)
+        finally:
+            for key in ("prompt_tokens", "completion_tokens"):
+                usage[key] = usage.get(key, 0) + int(stage_usage.get(key) or 0)
 
     issue = ("Re-copy table " + str(sum(getattr(n, "name", None) == "table" for n in old_nodes[:block_index]) + 1)
              + " on this page from the source. Review finding: " + finding)
@@ -1719,23 +1728,29 @@ async def recapture_table(
     new_nodes = _page_nodes(new_html)
     if len(new_nodes) != len(old_nodes):
         raise PreparationError("The re-copy changed the page outside the named table.")
+    changed: dict[int, str] = {}
     for index, (old, new) in enumerate(zip(old_nodes, new_nodes)):
-        if index != block_index and _structure_key(str(old)) != _structure_key(str(new)):
-            raise PreparationError("The re-copy changed the page outside the named table.")
-    new_table = str(new_nodes[block_index])
-    if getattr(new_nodes[block_index], "name", None) != "table":
-        raise PreparationError("The re-copy did not return the named table.")
-    if _tokens(new_table) != _tokens(old_table):
-        raise PreparationError("The re-copy changed the table's words or figures.")
-    if _structure_key(new_table) == _structure_key(old_table):
+        if _structure_key(str(old)) == _structure_key(str(new)):
+            continue
+        if getattr(old, "name", None) != "table" or getattr(new, "name", None) != "table":
+            raise PreparationError("The re-copy changed the page outside its tables.")
+        if _tokens(str(new)) != _tokens(str(old)):
+            raise PreparationError("The re-copy changed a table's words or figures.")
+        shape = _table_shape_issues(str(new))
+        if shape:
+            raise PreparationError("The re-copied table still fails the shape check: " + "; ".join(shape))
+        changed[index] = str(new)
+    if block_index not in changed:
         raise PreparationError("The re-copy did not change the table's structure.")
-    shape = _table_shape_issues(new_table)
-    if shape:
-        raise PreparationError("The re-copied table still fails the shape check: " + "; ".join(shape))
+    new_table = changed[block_index]
     check = await request("verifying", {
         "page": page_number, "html": new_html, "scope": "single supplied page only",
         "view_rotation": rotation, "best_effort": False, "previous_findings": [issue],
         "candidate_non_text_regions": [],
+        # The capture prompt leaves graphical rules to the later formatter;
+        # the check must not withhold verification for their absence.
+        "instruction": "Graphical table rules are added later by the border formatter and are "
+                       "not part of this transcription. Judge wording and table structure only.",
     })
     relationships = check.get("table_relationships") or []
     if (not all(check.get(k) is True for k in ("verified", "complete", "readable"))
@@ -1743,7 +1758,7 @@ async def recapture_table(
             or any(r.get("matches") is False for r in relationships)
             or check.get("uncertainties")):
         raise PreparationError("The independent check did not confirm the re-copied table.")
-    return {"html": new_table, "page_html": new_html, "verification": {
+    return {"html": new_table, "tables": changed, "page_html": new_html, "verification": {
         "verified": True, "table_structure_verified": True,
         "table_relationships": relationships, "issues": check.get("issues") or []}, "usage": usage}
 

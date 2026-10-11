@@ -58,7 +58,7 @@ async def test_recopy_returns_the_corrected_table_after_independent_check(tmp_pa
 
 
 @pytest.mark.parametrize("page_html,verified,message", [
-    ("<p>Deferred taxes</p>" + GOOD, True, "outside the named table"),
+    ("<p>Deferred taxes</p>" + GOOD, True, "outside its tables"),
     (HEAD + GOOD.replace("12,856", "12,865"), True, "words or figures"),
     (PAGE, True, "did not change the table's structure"),
     (HEAD + GOOD.replace("<tr><td></td><td>12,856</td></tr>", "<tr><td>12,856</td></tr>"), True, "shape check"),
@@ -70,6 +70,17 @@ async def test_recopy_gates_refuse_anything_but_a_confirmed_structure_fix(
     with pytest.raises(PreparationError, match=message):
         await recapture_table(_pdf(tmp_path), page_number=1, page_html=PAGE, block_index=1,
                               finding="x", model=None, _caller=_caller(page_html, verified))
+
+
+@pytest.mark.asyncio
+async def test_a_second_table_with_the_same_defect_is_corrected_too(tmp_path):
+    # Live VTech page 24: both deferred-tax totals were captured as headings.
+    second_bad = BAD.replace("12,856", "12,847")
+    page = HEAD + BAD + second_bad
+    call = _caller(HEAD + GOOD + GOOD.replace("12,856", "12,847"))
+    result = await recapture_table(_pdf(tmp_path), page_number=1, page_html=page, block_index=1,
+                                   finding="x", model=None, _caller=call)
+    assert result["tables"] == {1: GOOD, 2: GOOD.replace("12,856", "12,847")}
 
 
 def test_correction_is_written_to_the_prepared_document(tmp_path):
@@ -130,7 +141,8 @@ def recopy_run(tmp_path):
 
 async def _fake_recapture(pdf_path, **kwargs):
     assert kwargs["block_index"] == 1 and kwargs["page_html"] == PAGE
-    return {"html": GOOD, "verification": {"verified": True}, "usage": {"prompt_tokens": 7}}
+    kwargs["usage_out"]["prompt_tokens"] = 7
+    return {"html": GOOD, "tables": {1: GOOD}, "verification": {"verified": True}}
 
 
 @pytest.mark.asyncio
