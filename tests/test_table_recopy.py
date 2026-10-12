@@ -175,7 +175,7 @@ async def test_recopy_corrects_the_source_and_rebuilds_the_note(recopy_run):
 @pytest.mark.parametrize("setup,message", [
     ("UPDATE notes_cells SET style_source='human'", "edited after it was copied"),
     ("UPDATE notes_cells SET html=html||'<p>Reviewer addition.</p>'", "no longer matches its source"),
-    ("UPDATE notes_source_blocks SET table_group_id='g1' WHERE block_id='p1-b1'", "continued across pages"),
+    ("UPDATE notes_source_blocks SET table_group_id='g1' WHERE block_id='p1-b1'", "needs source correction: the table continues across"),
     ("INSERT INTO notes_block_placements(run_id, generation_id, block_id, sheet, row, active, created_at) "
      "SELECT run_id, generation_id, block_id, 'Notes-Issuedcapital', 5, 1, created_at "
      "FROM notes_block_placements WHERE block_id='p1-b1'", "used on another notes sheet"),

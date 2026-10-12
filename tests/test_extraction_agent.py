@@ -91,6 +91,9 @@ def test_verify_totals_tool_output_includes_mandatory_unfilled():
     assert "*Revenue" in rendered
     assert "*Finance income" in rendered
     assert "Action required:" in rendered
+    # An undisclosed mandatory row is acknowledged, never filled with zero.
+    assert "never write an invented zero" in rendered
+    assert "acknowledge_unresolved=true" in rendered
 
 
 def test_verify_totals_clean_pass_is_not_an_action():

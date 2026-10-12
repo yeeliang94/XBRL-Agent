@@ -21,7 +21,7 @@ import { Highlight } from "@tiptap/extension-highlight";
 import { TextAlign } from "@tiptap/extension-text-align";
 import type { NotesCellsResponse } from "../lib/notesCells";
 import { pwc } from "../lib/theme";
-import { PreparedNotesHtml } from "../components/PreparedNotesHtml";
+import { PreparedNotesHtml, readablePreviewHtml } from "../components/PreparedNotesHtml";
 import { humanSlotKey, type HumanFigureSlot } from "../lib/humanFile";
 
 const notesCss = readFileSync("src/components/NotesReviewTab.css", "utf8");
@@ -36,6 +36,16 @@ test("wide prepared tables gain display sizing without altering the output HTML"
   expect(view.container.querySelectorAll("td")).toHaveLength(5);
   expect(output.html).toBe(html);
   cleanup();
+});
+
+test("empty spacer columns from mTool or Word do not make a note table wide", () => {
+  // Run 183 human file: label, note, spacer, 2025, spacer, 2024 was forced to
+  // 840px inside the half-width comparison, pushing figures out of view.
+  const spaced = '<table><tr><td></td><td></td><td></td><td>2025</td><td></td><td>2024</td></tr>'
+    + '<tr><td>Third parties</td><td></td><td></td><td>18,606</td><td></td><td>22,060</td></tr></table>';
+  expect(readablePreviewHtml(spaced)).not.toContain("data-wide-preview");
+  const schedule = '<table><tr><td>Cost</td><td>1</td><td>2</td><td>3</td><td>4</td></tr></table>';
+  expect(readablePreviewHtml(schedule)).toContain('data-wide-preview="true"');
 });
 
 // Issue 3 (2026-06-21): empty notes cells were flipping to "Saved" without
