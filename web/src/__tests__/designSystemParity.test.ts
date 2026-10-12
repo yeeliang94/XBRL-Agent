@@ -387,6 +387,7 @@ test("Stacked worksheet navigation never covers the figures beneath it", () => {
 // CSS focus geometry cannot be evaluated by jsdom; pin the shared contract.
 test("search controls use one focus edge and Notes filters fields in the content pane", () => {
   expect(designSystem).toContain("Filter the selected worksheet in place by field name only");
+  expect(designSystem).toContain("Place Search all sheets in the middle content pane above the figures table");
   expect(designSystem).toContain("Source-note and checklist jumps clear field search and reveal their target");
   expect(designSystem).toContain("Template preparation uses one unboxed status line");
   expect(designSystem).toContain("Search inputs use a single dark focus edge");
