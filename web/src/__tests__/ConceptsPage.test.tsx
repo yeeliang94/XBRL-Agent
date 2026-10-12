@@ -374,12 +374,20 @@ describe("ConceptsPage", () => {
     render(<ConceptsPage runId={42} />);
     await screen.findByTestId("review-sheet-picker");
 
-    fireEvent.change(screen.getByTestId("concept-search"), {
+    const results = screen.getByRole("region", { name: "Review results" });
+    const search = within(results).getByRole("searchbox", { name: "Search" });
+    expect(within(screen.getByRole("complementary", { name: "Figure template navigator" })).queryByRole("searchbox")).toBeNull();
+    fireEvent.change(search, {
       target: { value: "Revenue" },
     });
+    expect(screen.queryByRole("navigation", { name: "Matching figure fields" })).toBeNull();
+    expect(screen.queryByTestId("concept-row-leaf-1")).toBeNull();
     // Cross-template hit — leaf-2 (in SOPL) is now visible despite
     // SOFP being the active template.
     expect(screen.getByTestId("concept-row-leaf-2")).toBeTruthy();
+    fireEvent.change(search, { target: { value: "" } });
+    expect(screen.getByTestId("concept-row-leaf-1")).toBeVisible();
+    expect(screen.queryByTestId("concept-row-leaf-2")).toBeNull();
   });
 
   // -- Phase 4 step 4.12: entity_scope selector on Group runs ---------
