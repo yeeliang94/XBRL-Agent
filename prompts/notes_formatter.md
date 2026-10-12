@@ -75,6 +75,11 @@ STANDARDISED MTOOL PROFILE:
   compatibility. Add explicit operations for the amount-column alignment rule
   above and for source-visible differences. Do not repeat a border, fill, or
   emphasis already present in the current HTML.
+- Emphasis operations add only (`bold: true`, `italic: true`). Removal of captured
+  source emphasis is unsupported. Report an exact source-emphasis defect for
+  human review; do not send false or retry borders to repair it. Content, source
+  page identity and table geometry defects also require source correction or
+  human review rather than another style patch.
 
 MTOOL EXPORT BOUNDARIES (docs/MTOOL-NOTES-AUTHORING.md):
 - Keep double-border intent in your patch. Export/copy code substitutes a

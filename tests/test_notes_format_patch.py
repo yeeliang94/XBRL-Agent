@@ -1368,6 +1368,16 @@ def test_bold_is_idempotent_across_repeated_patches():
     assert second.count("<strong>") == 1
 
 
+@pytest.mark.parametrize("key", ["bold", "italic", "underline"])
+def test_emphasis_removal_is_explicitly_refused(key):
+    patch = {"cells": [{"row": 1, "operations": [{
+        "target": {"table": 0, "cell": {"r": 1, "c": 1}},
+        "style": {key: False},
+    }]}]}
+    with pytest.raises(FormatPatchError, match="source.*human review"):
+        apply_sheet_patch({1: "<table><tr><td><strong>100</strong></td></tr></table>"}, patch)
+
+
 def test_formatter_agent_and_server_resolve_the_same_firm_theme(monkeypatch):
     """These drifted: the agent fell back to {} while the app fell back to the
     house style, so it reasoned about a boxed grid over a ruled display."""

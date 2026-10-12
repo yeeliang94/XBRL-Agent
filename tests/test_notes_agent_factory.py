@@ -147,6 +147,90 @@ def test_notes_deps_defaults_wrote_once_false(tmp_path: Path):
     assert deps.wrote_once is False
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("region", ["full", "top-half"])
+async def test_missing_policy_report_accepts_pages_inspected_by_zoom(tmp_path, monkeypatch, region):
+    from types import SimpleNamespace
+    from pydantic_ai.models.test import TestModel
+    from db import repository as repo
+    from db.schema import init_db
+    from notes import agent as na, reviewer_agent as ra
+
+    label = "*Disclosure of material accounting policy information"
+    db = tmp_path / "run.db"
+    init_db(db)
+    with repo.db_session(db) as conn:
+        run_id = repo.create_run(conn, "source.pdf", config={"notes_to_run": ["ACC_POLICIES"]})
+        conn.execute("INSERT INTO notes_nodes(node_uuid,template_id,sheet,row,label,kind,slot_role) "
+                     "VALUES ('required','mfrs-company-notes-policies-v1',?,4,?,'LEAF','INPUT')",
+                     (ra.POLICIES_SHEET, label))
+    agent, deps = create_notes_agent(NotesTemplateType.ACC_POLICIES, "unused.pdf", [], "company",
+        TestModel(), output_dir=str(tmp_path), filing_standard="mfrs", db_path=str(db), run_id=run_id)
+    funcs = {name: tool.function for ts in agent.toolsets for name, tool in getattr(ts, "tools", {}).items()}
+    ctx = SimpleNamespace(deps=deps)
+    monkeypatch.setattr(na, "count_pdf_pages", lambda path: 2)
+    async def render(path, page, dpi, *, policy, clip=None):
+        return b"png"
+    monkeypatch.setattr(na, "_render_one_page_single_flight", render)
+    args = dict(row=4, target_label=label, source_pages=[2], reason="Only specific policies are present.",
+                evidence="Page 2 opens directly with the revenue policy.")
+    await funcs["zoom_pdf_region"](ctx, 1, region)
+    assert "rejected" in funcs["report_missing_mandatory_field"](ctx, **args)  # page 2 not inspected
+    await funcs["zoom_pdf_region"](ctx, 2, region)
+    assert "Recorded" in funcs["report_missing_mandatory_field"](ctx, **args)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("standard,level,label", [
+    ("mfrs", "company", "*Disclosure of material accounting policy information"),
+    ("mpers", "group", "Disclosure of significant accounting policies"),
+])
+async def test_missing_policy_report_is_grounded_persisted_and_given_to_review(tmp_path, monkeypatch, standard, level, label):
+    from types import SimpleNamespace
+    from pydantic_ai.models.test import TestModel
+    from db import repository as repo
+    from db.schema import init_db
+    from notes import agent as na, reviewer_agent as ra
+
+    db = tmp_path / "run.db"
+    init_db(db)
+    with repo.db_session(db) as conn:
+        run_id = repo.create_run(conn, "source.pdf", config={"notes_to_run": ["ACC_POLICIES"]})
+        conn.execute("INSERT INTO notes_nodes(node_uuid,template_id,sheet,row,label,kind,slot_role) "
+                     "VALUES ('required',?,?,4,?,'LEAF','INPUT')",
+                     (f"{standard}-{level}-notes-policies-v1", ra.POLICIES_SHEET, label))
+    agent, deps = create_notes_agent(NotesTemplateType.ACC_POLICIES, "unused.pdf", [], level,
+        TestModel(), output_dir=str(tmp_path), filing_standard=standard, db_path=str(db), run_id=run_id)
+    funcs = {name: tool.function for ts in agent.toolsets for name, tool in getattr(ts, "tools", {}).items()}
+    ctx = SimpleNamespace(deps=deps)
+    report = funcs["report_missing_mandatory_field"]
+    args = dict(row=4, target_label=label, source_pages=[1], reason="Only heading and specific policies are present.",
+                evidence="The policies start with a heading followed by dedicated subsections.")
+    assert "rejected" in report(ctx, **args)
+    monkeypatch.setattr(na, "count_pdf_pages", lambda path: 1)
+    async def render(path, pages):
+        return {p: b"png" for p in pages}
+    monkeypatch.setattr(na, "_render_pages_async", render)
+    await funcs["view_pdf_pages"](ctx, [1])
+    assert "rejected" in report(ctx, **{**args, "target_label": "Wrong label"})
+    assert "Recorded" in report(ctx, **args)
+    assert "Recorded" in report(ctx, **args)
+    await funcs["save_result"](ctx)
+    with repo.db_session(db) as conn:
+        flags = repo.fetch_notes_review_flags(conn, run_id)
+        assert len(flags) == 1 and flags[0]["reason"] == args["reason"]
+        assert flags[0]["source_pages"] == [1] and flags[0]["evidence"] == args["evidence"]
+        assert repo.list_notes_cells_for_run(conn, run_id) == []
+    _, _, context = ra.create_notes_reviewer_agent(run_id=run_id, db_path=str(db), pdf_path="unused.pdf",
+        filing_standard=standard, filing_level=level, model=TestModel(), output_dir=str(tmp_path))
+    assert context["mandatory_fields"][0]["extraction_disposition"]["reason"] == args["reason"]
+    packet = ra.build_notes_reviewer_packet(context)
+    assert args["evidence"] in packet and ra.count_open_items(context) > 0
+    with repo.db_session(db) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=ra.POLICIES_SHEET, row=4, label=label, html="<p>Policy overview.</p>")
+    assert "rejected" in report(ctx, **args)
+
+
 def test_notes_deps_filled_filename_uses_template_prefix(tmp_path: Path):
     pdf_path = tmp_path / "fake.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n%dummy\n")
