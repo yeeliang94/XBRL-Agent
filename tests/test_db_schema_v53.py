@@ -1,11 +1,13 @@
 """Last-update migration preserves historical activity and tracks saved work."""
 import sqlite3
+import pytest
 
 from db import repository as repo
 from db.schema import CURRENT_SCHEMA_VERSION, init_db
 
 
-def test_v52_migration_backfills_latest_activity_and_is_idempotent(tmp_path):
+@pytest.mark.parametrize("resolution", [None, "resolved", "dismissed"])
+def test_v52_migration_backfills_latest_activity_and_is_idempotent(tmp_path, resolution):
     path = tmp_path / "legacy.db"
     init_db(path)
     with sqlite3.connect(path) as conn:
@@ -14,6 +16,12 @@ def test_v52_migration_backfills_latest_activity_and_is_idempotent(tmp_path):
         repo.upsert_notes_cell(conn, run_id=1, sheet="Notes", row=10,
                                label="Note", html="<p>Saved edit.</p>")
         conn.execute("UPDATE notes_cells SET updated_at = '2026-04-03T10:00:00Z'")
+        if resolution:
+            conn.execute("INSERT INTO run_concept_conflicts(run_id, concept_uuid, period, entity_scope, kind, "
+                         "status, created_at, resolved_at) VALUES (1, 'fact', 'CY', 'Company', "
+                         "'cross_check_failure', ?, '2026-04-02T10:00:00Z', '2026-04-05T10:00:00Z')", (resolution,))
+        conn.execute("INSERT INTO runs(created_at, pdf_filename, status) "
+                     "VALUES ('2026-04-04T10:00:00Z', 'newer.pdf', 'completed')")
         # Recreate the actual v52 boundary, before activity triggers existed.
         triggers = conn.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'").fetchall()
         for (name,) in triggers:
@@ -25,8 +33,10 @@ def test_v52_migration_backfills_latest_activity_and_is_idempotent(tmp_path):
     init_db(path)
     with repo.db_session(path) as conn:
         assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == CURRENT_SCHEMA_VERSION
-        summary = repo.list_runs(conn)[0]
-        assert summary.updated_at == "2026-04-03T10:00:00.000Z"
+        runs = repo.list_runs(conn)
+        summary = next(run for run in runs if run.pdf_filename == "old.pdf")
+        assert summary.updated_at == ("2026-04-05T10:00:00.000Z" if resolution else "2026-04-03T10:00:00.000Z")
+        assert runs[0].pdf_filename == ("old.pdf" if resolution else "newer.pdf")
         assert summary.status == "completed"
         assert conn.execute("SELECT html FROM notes_cells").fetchone()[0] == "<p>Saved edit.</p>"
 
