@@ -16,7 +16,7 @@ function makeAgentStates(): Record<string, AgentTabState> {
 }
 
 describe("AgentTabs", () => {
-  test("final notes activities follow content, completeness, then appearance order", () => {
+  test("final notes activities list the latest first: appearance, completeness, content", () => {
     const agents: Record<string, AgentTabState> = {
       formatting: {agentId: "formatting", role: "NOTES_FORMATTING", label: "Notes formatting", status: "failed"},
       integrity: {agentId: "integrity", role: "NOTES_INTEGRITY", label: "Notes completeness", status: "complete"},
@@ -24,9 +24,9 @@ describe("AgentTabs", () => {
     };
     render(<AgentTabs agents={agents} tabOrder={Object.keys(agents)} activeTab="formatting" onTabClick={() => {}} />);
     const tabs = screen.getAllByRole("tab");
-    expect(tabs[0]).toHaveTextContent("Notes cleanup");
+    expect(tabs[0]).toHaveTextContent("Notes formatting");
     expect(tabs[1]).toHaveTextContent("Notes completeness");
-    expect(tabs[2]).toHaveTextContent("Notes formatting");
+    expect(tabs[2]).toHaveTextContent("Notes cleanup");
   });
   test("renders all tabs", () => {
     const agents = makeAgentStates();
@@ -478,7 +478,7 @@ describe("AgentTabs", () => {
   // keyed by agent_id prefix "notes:" and gated by `notesInRun`.
   // ---------------------------------------------------------------------
 
-  test("notes tabs render after statement tabs and before validator", () => {
+  test("validator renders first, then statement tabs, then notes", () => {
     const agents: Record<string, AgentTabState> = {
       sofp_0: { agentId: "sofp_0", label: "SOFP", status: "complete", role: "SOFP" },
       "notes:CORP_INFO": {
@@ -506,10 +506,10 @@ describe("AgentTabs", () => {
     );
     const tabs = screen.getAllByRole("tab");
     const labels = tabs.map((t) => t.getAttribute("data-agent-label") ?? "");
-    // Expected order: [SOFP, Corporate information, Validator]
-    expect(labels[0]).toBe("SOFP");
-    expect(labels[1]).toContain("Corporate information");
-    expect(labels[labels.length - 1]).toContain("Validator");
+    // Expected order: [Validator, SOFP, Corporate information]
+    expect(labels[0]).toContain("Validator");
+    expect(labels[1]).toBe("SOFP");
+    expect(labels[2]).toContain("Corporate information");
   });
 
   test("notes tab is hidden when its role isn't in notesInRun", () => {
@@ -554,7 +554,7 @@ describe("AgentTabs", () => {
     ).toBe("true");
   });
 
-  test("document preparation renders before notes skeletons and run checks", () => {
+  test("run checks render first, then notes skeletons, with document preparation last", () => {
     const agents: Record<string, AgentTabState> = {
       sofp_0: { agentId: "sofp_0", label: "SOFP", status: "complete", role: "SOFP" },
       scout: { agentId: "scout", label: "Scout", status: "complete", role: "scout" },
@@ -582,8 +582,9 @@ describe("AgentTabs", () => {
     const scoutIdx = labels.findIndex((l) => l === "Scout");
     const validatorIdx = labels.findIndex((l) => l === "Validator");
     expect(notesIdx).toBeGreaterThan(-1);
-    expect(scoutIdx).toBeLessThan(notesIdx);
-    expect(notesIdx).toBeLessThan(validatorIdx);
+    expect(validatorIdx).toBeLessThan(notesIdx);
+    expect(notesIdx).toBeLessThan(scoutIdx);
+    expect(scoutIdx).toBe(labels.length - 1);
   });
 
   test("legacy callers (no notesInRun) still render notes tabs — backward compatible", () => {
@@ -607,10 +608,9 @@ describe("AgentTabs", () => {
     expect(screen.getByText(/Corporate information/)).toBeTruthy();
   });
 
-  test("validator tab is rendered last in tab order when present with statement tabs", () => {
-    // Construct a mixed state where the tabOrder intentionally has validator
-    // BEFORE the statement tabs. The gating code should still push validator
-    // to the end of the render order so users always find it on the right.
+  test("validator tab is rendered first when present with statement tabs", () => {
+    // tabOrder lists validator after the statements here; run checks are the
+    // latest stage, so they still render at the top of the list.
     const agents: Record<string, AgentTabState> = {
       validator: {
         agentId: "validator",
@@ -624,7 +624,7 @@ describe("AgentTabs", () => {
     render(
       <AgentTabs
         agents={agents}
-        tabOrder={["validator", "sofp_0", "sopl_0"]}
+        tabOrder={["sofp_0", "sopl_0", "validator"]}
         activeTab="sofp_0"
         onTabClick={() => {}}
         statementsInRun={["SOFP", "SOPL"]}
@@ -632,8 +632,7 @@ describe("AgentTabs", () => {
     );
     const tabs = screen.getAllByRole("tab");
     const labels = tabs.map((t) => t.textContent?.trim() ?? "");
-    // Validator must be the last non-skeleton tab.
-    expect(labels[labels.length - 1]).toContain("Cross-checks");
+    expect(labels[0]).toContain("Cross-checks");
   });
 
   // Per-tab abort/rerun controls now live in ActiveTabPanel's toolbar

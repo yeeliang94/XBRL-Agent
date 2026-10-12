@@ -325,9 +325,14 @@ async def test_large_sheet_is_formatted_in_concurrent_row_groups(auto_format_db)
 @pytest.mark.asyncio
 async def test_auto_format_limits_model_requests_across_sheets(auto_format_db):
     db_path, run_id, tmp_path = auto_format_db
+    # Each sheet splits into as many groups as the cap, so the two sheets
+    # together queue twice as many requests as may run at once.
+    limit = auto_format.FORMAT_MAX_CONCURRENT_REQUESTS
+    # One under a full split leaves room for the fixture's existing note.
+    rows_per_sheet = auto_format.FORMAT_ROWS_PER_PART * limit - 1
     with repo.db_session(db_path) as conn:
         for sheet in ("Notes-CI", "Notes-Listofnotes"):
-            for row in range(100, 113):
+            for row in range(100, 100 + rows_per_sheet):
                 repo.upsert_notes_cell(
                     conn, run_id=run_id, sheet=sheet, row=row,
                     label="Note", html="<p>Note</p>",
@@ -337,7 +342,7 @@ async def test_auto_format_limits_model_requests_across_sheets(auto_format_db):
     active = 0
     maximum = 0
     started = 0
-    first_four = asyncio.Event()
+    first_batch = asyncio.Event()
     release = asyncio.Event()
 
     async def fake_formatter(**_kwargs):
@@ -346,7 +351,7 @@ async def test_auto_format_limits_model_requests_across_sheets(auto_format_db):
         started += 1
         maximum = max(maximum, active)
         if started == auto_format.FORMAT_MAX_CONCURRENT_REQUESTS:
-            first_four.set()
+            first_batch.set()
         try:
             await release.wait()
         finally:
@@ -360,14 +365,91 @@ async def test_auto_format_limits_model_requests_across_sheets(auto_format_db):
         formatter=fake_formatter,
     ))
     try:
-        await asyncio.wait_for(first_four.wait(), timeout=2)
+        await asyncio.wait_for(first_batch.wait(), timeout=2)
         assert started == auto_format.FORMAT_MAX_CONCURRENT_REQUESTS
     finally:
         release.set()
     result = await task
-    assert started == 8
+    assert started == 2 * limit
     assert maximum == auto_format.FORMAT_MAX_CONCURRENT_REQUESTS
     assert result["formatted"] == 2
+
+
+@pytest.mark.asyncio
+async def test_each_pass_reports_waiting_before_it_gets_a_model_slot(auto_format_db):
+    """Activity shows queued passes as waiting under their own sub-agent id."""
+    db_path, run_id, tmp_path = auto_format_db
+    with repo.db_session(db_path) as conn:
+        for row in range(100, 100 + auto_format.FORMAT_ROWS_PER_PART + 1):
+            repo.upsert_notes_cell(
+                conn, run_id=run_id, sheet="Notes-Listofnotes", row=row,
+                label="Note", html="<p>Note</p>", evidence="Page 9",
+                source_pages=[9], style_source="unstyled",
+            )
+    events = []
+
+    async def fake_formatter(**kwargs):
+        label = kwargs.get("trace_label") or kwargs["sheet"]
+        assert ("queued", label) in [(data["phase"], data["sub_agent_id"]) for _, data in events]
+        return {"ok": True, "changed_rows": 0}
+
+    await run_pdf_auto_format(
+        run_id=run_id, db_path=db_path, pdf_path=str(tmp_path / "uploaded.pdf"),
+        sheets=["Notes-CI", "Notes-Listofnotes"], model_name="model-a",
+        model_factory=object, output_dir=str(tmp_path), timeout_s=30,
+        formatter=fake_formatter, on_event=lambda kind, data: events.append((kind, data)),
+    )
+    queued = sorted(data["sub_agent_id"] for kind, data in events
+                    if kind == "status" and data["phase"] == "queued")
+    assert queued == ["Notes-CI", "notes_format_Notes-Listofnotes_part1",
+                      "notes_format_Notes-Listofnotes_part2"]
+
+
+@pytest.mark.asyncio
+async def test_stop_terminalizes_queued_parts_and_preserves_completed_work(auto_format_db, monkeypatch):
+    db_path, run_id, tmp_path = auto_format_db
+    monkeypatch.setattr(auto_format, "FORMAT_MAX_CONCURRENT_REQUESTS", 1)
+    with repo.db_session(db_path) as conn:
+        for row in range(100, 105):
+            repo.upsert_notes_cell(conn, run_id=run_id, sheet="Notes-Listofnotes",
+                row=row, label="Note", html="<p>Note</p>", source_pages=[1],
+                style_source="unstyled")
+    events = []
+    all_queued = asyncio.Event()
+
+    def on_event(kind, data):
+        events.append((kind, data))
+        if sum(d["phase"] == "queued" for _, d in events) == 3:
+            all_queued.set()
+
+    async def fake_formatter(**kwargs):
+        identity = {"sub_agent_id": kwargs.get("trace_label") or kwargs["sheet"],
+                    "sheet": kwargs["sheet"]}
+        if kwargs["sheet"] == "Notes-CI":
+            on_event("status", {**identity, "phase": "completed"})
+            return {"ok": True, "changed_rows": 0}
+        on_event("status", {**identity, "phase": "started"})
+        try:
+            await asyncio.Event().wait()
+        finally:
+            on_event("status", {**identity, "phase": "cancelled"})
+
+    task = asyncio.create_task(run_pdf_auto_format(
+        run_id=run_id, db_path=db_path, pdf_path=str(tmp_path / "uploaded.pdf"),
+        sheets=["Notes-CI", "Notes-Listofnotes"], model_name="fake",
+        model_factory=object, output_dir=str(tmp_path), timeout_s=0,
+        formatter=fake_formatter, on_event=on_event,
+    ))
+    try:
+        await asyncio.wait_for(all_queued.wait(), timeout=2)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    latest = {data["sub_agent_id"]: data["phase"] for _, data in events}
+    assert latest == {"Notes-CI": "completed",
+                      "notes_format_Notes-Listofnotes_part1": "cancelled",
+                      "notes_format_Notes-Listofnotes_part2": "cancelled"}
 
 
 def test_parts_of_one_pass_share_the_revert_snapshot(auto_format_db, monkeypatch):

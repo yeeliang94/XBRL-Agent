@@ -465,7 +465,7 @@ function unresolvedReasonText(u: UnresolvedNote): string {
     case "no_match":
       return "No matching row was found in this template. It will be skipped — you can add the note in mTool afterwards.";
     case "no_slot":
-      return "This note has no spot in the template yet. Turn on “Add missing note spots” above to add one.";
+      return "No matching field. Enable “Add missing note fields” in Customize.";
     case "no_payload_row":
       return "The template is missing the hidden row this note is stored in — fill it manually in mTool.";
     default:
@@ -1084,7 +1084,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
             <span>{notice}</span>
           </p>
         )}
-        {!file && <p style={styles.sub}>Upload an empty .xlsx template exported from mTool.</p>}
+        {!file && <p style={styles.sub}>Use an empty .xlsx template from mTool.</p>}
 
         <fieldset disabled={busy || downloading || fillQueued} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
         {!file && (
@@ -1127,7 +1127,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
 
         {file && meta && !report && (
           <p aria-label="Fill summary" style={{ margin: `${pwc.space.md}px 0`, color: pwc.grey700, fontSize: 14 }}>
-            Available from this run: <strong style={{ color: pwc.grey900 }}>{meta.counts.writes} figures</strong>
+            <strong style={{ color: pwc.grey900 }}>{meta.counts.writes} figures</strong>
             {notesCount !== null && <> · <strong style={{ color: pwc.grey900 }}>{notesCount} notes</strong></>}
           </p>
         )}
@@ -1160,8 +1160,8 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
               disabled={busy || previewBusy} onClick={() => void runPreview()}>Refresh notes preview</button>}
           </div>
         )}
-        {busy && <div role="status" style={ui.alertInfo}>Preparing your template…</div>}
-        {readinessErr && <p role="status" style={styles.statLine}>Run checks are unavailable: {readinessErr} You can still fill the template; checks are repeated when you fill.</p>}
+        {busy && <p role="status" style={{ ...ui.bodyText, margin: `0 0 ${pwc.space.md}px` }}>Preparing template…</p>}
+        {readinessErr && <p role="status" style={styles.statLine}>Run checks unavailable: {readinessErr}</p>}
         {loadErr && (
           <div style={ui.alertError}>Could not load fill data: {loadErr}</div>
         )}
@@ -1190,9 +1190,9 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
                   void runPreview(undefined, true);
                 }
               }}
-              aria-label="Also fill notes"
+              aria-label="Include written notes"
             />
-            Also fill the written notes (accounting policies, disclosures)
+            Include written notes
           </label>
         )}
 
@@ -1214,15 +1214,10 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
                   void runPreview(undefined, true, selectedSheets, e.target.checked);
                 }
               }}
-              aria-label="Add missing note spots"
+              aria-label="Add missing note fields"
               style={{ ...ui.checkbox, marginTop: 2 }}
             />
-            <span>
-              Add missing note spots
-              <span style={{ display: "block", color: pwc.grey700, fontSize: 12 }}>
-                Creates a destination only when the template has an exact matching note label.
-              </span>
-            </span>
+            <span title="Creates a destination only when the template has an exact matching note label.">Add missing note fields</span>
           </label>
         )}
 
@@ -1401,8 +1396,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
 
                 {!createMissingNotes && preview.unresolved.length > 0 && preview.will_create.length === 0 && (
                   <div style={{ color: pwc.grey700, marginTop: pwc.space.sm }}>
-                    Tip: turning on “Add missing note spots” above lets the tool add spots
-                    for notes the template doesn't have yet.
+                    Enable “Add missing note fields” in Customize.
                   </div>
                 )}
               </details>

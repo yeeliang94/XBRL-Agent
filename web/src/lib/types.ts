@@ -63,6 +63,10 @@ export type EventPhase =
   | "starting"           // Multi-agent run initializing
   | "scouting"           // Scout analyzing PDF structure
   | "started"            // Notes agent / sub-agent first status event
+  | "queued"             // Formatter waiting for a model slot
+  | "working"            // Formatter pass in progress
+  | "completed"          // Formatter part finished; the run can still be active
+  | "failed"             // Formatter part needs review
   | "reading_template"
   | "viewing_pdf"
   | "writing_notes"      // Notes agent payload emission phase
@@ -114,6 +118,7 @@ export type SSEEventType =
 export interface AgentRouting {
   agent_id?: string;
   agent_role?: string;
+  sub_agent_id?: string;
 }
 
 // Phase 6 decision: Option A (discriminated union) with the routing fields
@@ -159,6 +164,8 @@ export type SSEEvent = {
 export interface StatusData {
   phase: EventPhase;
   message: string;
+  /** Full formatter finding, available in Technical detail. */
+  detail?: string;
   /** Durable audit id emitted by the coordinator's starting event. */
   run_id?: number;
   /** Preparation identity retained in the worker's durable starting event. */
@@ -218,6 +225,8 @@ export type ErrorBucket = "advisory" | "recoverable" | "fatal";
 
 export interface ErrorData {
   message: string;
+  /** Per-sheet outcomes on notes_formatting_incomplete. */
+  sheets?: Record<string, { ok?: boolean; skipped?: boolean; error?: string | null; summary?: string | null }>;
   traceback?: string;
   /** Discriminator for coordinator/sub-pass error shapes (`merge_failed`,
    *  `cross_check_exception`, `canonical_reexport_failed`,

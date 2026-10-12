@@ -31,7 +31,7 @@ import type { AgentTabStatus } from "../lib/types";
 import { AgentTimeline } from "./AgentTimeline";
 import { NotesSubTabBar } from "./NotesSubTabBar";
 import { FormatterSubAgentActivity } from "./FormatterSubAgentActivity";
-import { deriveFormatterSubAgents } from "../lib/formatterSubAgents";
+import { deriveFormatterSheets, deriveFormatterSubAgents, formatterProgressSummary, formatterRunningParts } from "../lib/formatterSubAgents";
 import { TabPanelFade } from "./TabPanelFade";
 import { NotesReviewerPanel } from "./NotesReviewerPanel";
 import { NotesTablesPanel } from "./NotesTablesPanel";
@@ -350,7 +350,11 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
   const showFormatterSubAgents = agent.statement_type === "NOTES_FORMATTING"
     && deriveFormatterSubAgents(formatterEvents).length > 0;
 
-  const showErrorDetail = Boolean(agent.error_message)
+  // A sheet's failure is already explained in the panel; its raw finding
+  // repeating here is noise. Any other stage failure stays visible.
+  const formatterFailureReported = showFormatterSubAgents && latestFormattingCalls(formattingCalls)
+    .some((call) => call.status === "failed" && call.error_message === agent.error_message);
+  const showErrorDetail = Boolean(agent.error_message) && !formatterFailureReported
     && (agent.statement_type !== "CORRECTION" || agent.error_message !== updates[0]);
   const agentEnded = ["failed", "cancelled", "aborted"].includes(agent.status);
 
@@ -380,7 +384,7 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
       </div>
       {/* Only what the status badge doesn't already say: the latest update
           and its source pages, when recorded. */}
-      {((updates[0] && updates[0] !== "Finished its assigned work") || agent.status === "cancelled" || agent.status === "aborted") && <div style={styles.agentSummary}>
+      {!showFormatterSubAgents && ((updates[0] && updates[0] !== "Finished its assigned work") || agent.status === "cancelled" || agent.status === "aborted") && <div style={styles.agentSummary}>
         <span>{agent.status === "cancelled" || agent.status === "aborted" ? "Workstream stopped" : updates[0]}</span>
       </div>}
       {/* A failure's reason stays visible; for a workstream that finished,
@@ -391,7 +395,7 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
           <span>{agent.error_message}</span>
         </div>
       )}
-      {formattingCalls.length > 0 && <details style={styles.agentTechnicalDetails}>
+      {formattingCalls.length > 0 && !showFormatterSubAgents && <details style={styles.agentTechnicalDetails}>
         <summary style={styles.perfSummary}>Formatting calls</summary>
         <ul>{formattingCalls.map((call, index) => <li key={call.id}>
           {call.variant ?? `Call ${index + 1}`} · {agentStatusDisplay(call.status).label}
@@ -404,7 +408,8 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
       </ul>}
       {showSubTabs && <NotesSubTabBar subAgents={subAgents} activeSubId={notes12SubId} onSelect={setNotes12SubId} />}
       {showFormatterSubAgents ? <FormatterSubAgentActivity events={formatterEvents}
-        status={savedAgentStatus(agent.status)} recorded={agent.status !== "running"} /> : <ActivityStream events={events} toolTimeline={toolTimeline} reasoningBlocks={[]}
+        status={savedAgentStatus(agent.status)} recorded={agent.status !== "running"}
+        technical={<FormattingCallsDetail calls={formattingCalls} />} /> : <ActivityStream events={events} toolTimeline={toolTimeline} reasoningBlocks={[]}
         isRunning={agent.status === "running"} status={savedAgentStatus(agent.status)}
         recorded={agent.status !== "running"} streamKey={`${agent.id}:${notes12SubId ?? "all"}`}
         onTechnicalChange={setTechnicalOpen}
@@ -550,6 +555,21 @@ function observedStageAgents(detail: RunDetailJson): RunAgentJson[] {
   return result;
 }
 
+/** Technical detail for notes formatting: every call including earlier
+ *  attempts, its outcome, tokens and the recorded reason when it failed. */
+function FormattingCallsDetail({ calls }: { calls: RunAgentJson[] }) {
+  return (
+    <ul aria-label="Formatting calls" style={styles.formattingCalls}>
+      {calls.map((call, index) => <li key={call.id}>
+        <span style={styles.formattingCallName}>{call.variant ?? `Call ${index + 1}`}</span>
+        {` · ${agentStatusDisplay(call.status).label}`}
+        {call.total_tokens != null ? ` · ${call.total_tokens.toLocaleString()} tokens` : ""}
+        {call.error_message && <div style={styles.formattingCallError}>{call.error_message}</div>}
+      </li>)}
+    </ul>
+  );
+}
+
 function latestFormattingCalls(calls: RunAgentJson[]): RunAgentJson[] {
   const latest = new Map<string, { sheet: string; call: RunAgentJson }>();
   const ordered = [...calls].sort((a, b) =>
@@ -630,17 +650,26 @@ function SavedAgentWorkspace({ detail, filingStandard, onRetry, retryPending }: 
       const update = agentSemanticUpdates(agent)[0];
       const source = agentSourceReference(agent);
       const unfinished = ["failed", "cancelled", "aborted"].includes(agent.status);
-      const task = unfinished && update ? update : source
-        ?? (update && update !== "Finished its assigned work" ? update : formatAgentDuration(agent));
+      // Formatting shows its sheet and part progress, not whichever sheet
+      // reported last.
+      const formatterEvents = agent.statement_type === "NOTES_FORMATTING"
+        ? latestFormattingCalls(detail.agents.filter((call) => call.statement_type === "NOTES_FORMATTING"))
+          .flatMap((call) => call.events)
+        : [];
+      const formatterProgress = formatterProgressSummary(deriveFormatterSheets(formatterEvents));
+      const formatterRunning = formatterRunningParts(formatterEvents);
+      const task = formatterProgress ?? (unfinished && update ? update : source
+        ?? (update && update !== "Finished its assigned work" ? update : formatAgentDuration(agent)));
       tabs[String(agent.id)] = {
         agentId: String(agent.id), label: agentDisplayName(agent),
         role: agent.statement_type, status: savedAgentStatus(agent.status),
-        task, taskDetail: unfinished && task !== source ? source : null,
+        task, taskDetail: formatterProgress ? (formatterRunning ? `${formatterRunning} running` : null)
+          : unfinished && task !== source ? source : null,
         flag: agent.status === "completed_with_errors" ? "Review the unresolved findings" : null,
       };
     }
     return tabs;
-  }, [orderedAgents]);
+  }, [orderedAgents, detail.agents]);
   const selectedAgent = orderedAgents.find((agent) => String(agent.id) === selectedId) ?? orderedAgents[0];
   return (
     <AgentWorkspace panelId={panelId} agents={navigation} tabOrder={orderedAgents.map((agent) => String(agent.id))}
@@ -2087,6 +2116,16 @@ const styles = {
   // Proportional, not monospace (UX-QA #12): the model · turns · duration meta
   // read as a debug log in mono. Numbers here are incidental, not a table to
   // align, so the body font is friendlier for the accountant/PM audience.
+  formattingCalls: {
+    display: "grid",
+    gap: pwc.space.sm,
+    margin: 0,
+    paddingLeft: pwc.space.lg,
+    fontSize: 13,
+    color: pwc.grey700,
+  } as React.CSSProperties,
+  formattingCallName: { fontFamily: pwc.fontMono, fontSize: 12, color: pwc.grey900 } as React.CSSProperties,
+  formattingCallError: { marginTop: 2, whiteSpace: "pre-wrap" as const } as React.CSSProperties,
   agentErrorLabel: {
     fontSize: 13,
     fontWeight: pwc.weight.medium,

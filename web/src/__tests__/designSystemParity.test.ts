@@ -270,9 +270,13 @@ describe("Direction A shell and responsive composition", () => {
     expect(designSystem).toContain("one flat chronological <em>Live activity</em> stream (or <em>Recorded activity</em> for settled workstreams)");
     expect(designSystem).toContain("no event cards, navigation buttons or nested activity panels");
     expect(designSystem).toContain("Opening Activity never scrolls the page");
-    expect(designSystem).toContain("Follow new updates when it opens at the bottom and only while the operator remains there");
+    expect(designSystem).toContain("Stack concise updates newest first, with the latest update at the top");
+    expect(designSystem).toContain("switching workstream or sub-agent opens its stream at the latest update");
+    expect(designSystem).toContain("The navigator lists the latest stage first: Run checks (newest check first) once they start, then Financial statements, then Notes, with Document preparation at the bottom");
     expect(designSystem).toContain("Decision cards name the affected figure even when its value is unchanged");
     expect(designSystem).toContain("Keep tool operations, provider reasoning, tokens and request metadata in closed technical diagnostics");
+    expect(designSystem).toContain("Live Technical detail retains the full failed checker finding");
+    expect(designSystem).toContain("A failed sheet never hides a separate skipped-sheet reason or stage failure");
     expect(designSystem).toContain("the activity roster shows item states without a second completion total");
     expect(prototype).toContain("Live activity");
     expect(prototype).not.toContain("Provider reasoning");
@@ -283,6 +287,7 @@ describe("Direction A shell and responsive composition", () => {
 
 describe("Simplified template-oriented review", () => {
   test("pins the minimal Notes review contract", () => {
+    expect(designSystem).toContain("current worksheet’s displayed concepts, periods, category members and entities");
     expect(designSystem).toContain("Notes formatting rechecks use one compact notice beside the action, without internal row numbers");
     expect(designSystem).toContain("Notes use one divider between peer fields");
     for (const requirement of [
@@ -290,9 +295,10 @@ describe("Simplified template-oriented review", () => {
       "Offer a keyboard-accessible Open editor action beside each populated field heading",
       "Offer Hide empty fields for the current worksheet",
       "Preserve level-three field headings and announce filing warnings and comparison markers as descriptions of the disclosure button",
-      "Derive prose comparison markers and the Missed by AI filter from current extracted and human content",
-      "A comparison view offers an Only missed by AI checkbox",
-      "Keep the active field open when changing views",
+      "Derive prose comparison markers and highlight filters from current extracted and human content",
+      "Comparison controls use one compact highlight toolbar",
+      "Read-only selected fields obey the active comparison filter",
+      "Keep pending edits open when changing views",
       "Include human-only numeric categories only for the worksheet’s applicable periods and entity scopes",
       "hide these headings when no pair is open",
       "Do not show evidence prose, appearance provenance, internal row numbers",
@@ -376,4 +382,14 @@ test("Stacked worksheet navigation never covers the figures beneath it", () => {
   const css = readReference("../index.css");
   const narrow = css.slice(css.indexOf(".review-workspace > .review-template-rail {"));
   expect(narrow.slice(0, narrow.indexOf("}"))).toContain("position: static !important");
+});
+
+// CSS focus geometry cannot be evaluated by jsdom; pin the shared contract.
+test("search controls use one focus edge and Notes filters fields in the content pane", () => {
+  expect(designSystem).toContain("Filter the selected worksheet in place by field name only");
+  expect(designSystem).toContain("Source-note and checklist jumps clear field search and reveal their target");
+  expect(designSystem).toContain("Template preparation uses one unboxed status line");
+  expect(designSystem).toContain("Search inputs use a single dark focus edge");
+  const css = readReference("../index.css");
+  expect(css).toMatch(/input\[type="search"\]:focus\s*\{[^}]*outline: 2px solid #000000;[^}]*outline-offset: -2px;[^}]*border-color: transparent !important;[^}]*box-shadow: none !important;/);
 });

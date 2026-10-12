@@ -113,6 +113,11 @@ const thBase: CSSProperties = {
 };
 
 export const ui = {
+  segmentControl: { display: "inline-flex", alignItems: "center", gap: 2, padding: 3, border: `1px solid ${pwc.grey300}`, borderRadius: 8, background: pwc.white, minHeight: 40 } as CSSProperties,
+  segmentOption: { ...buttonQuiet, minHeight: 32, padding: "0 16px", borderRadius: 6 } as CSSProperties,
+  segmentOptionActive: { background: pwc.grey100, color: pwc.black } as CSSProperties,
+  comparisonAttention: { background: pwc.orange50 } as CSSProperties,
+  comparisonQuiet: { background: pwc.grey50 } as CSSProperties,
   // --- Typography --------------------------------------------------------
   // Focused-workspace scale: 28 Page title · 16 Section/item · 14 Body.
   // Short metadata and mono identifiers may step down to 12–13px.

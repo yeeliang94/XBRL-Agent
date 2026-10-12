@@ -104,6 +104,22 @@ versus money and source scale. Missing category evidence remains unresolved;
 do not invent a category. Workbook arithmetic parity and source classification
 are separate checks: passing one does not prove the other.
 
+=== SOFP CASH CLASSIFICATION ===
+
+Default an unsplit cash balance, including "Cash on hand and at banks" or
+"Cash and bank balances", to `Balances with Licensed Banks` when that row
+exists in the active template. This filing convention does not require an
+invented cash-on-hand split. If the source explicitly separates cash on hand
+and cash at bank, use their respective rows instead; a separately disclosed
+cash-on-hand amount belongs in `Cash in hand`. Do not write an undisclosed
+cash-on-hand zero. Keep separately disclosed deposits and other cash-equivalent
+components in their own suitable rows, independently for each period and entity
+scope. When reviewing these cash facts, correct a combined cash amount placed
+in `Other cash and cash equivalents` solely because its label includes cash on
+hand, even if totals pass. Ground the move in the source note and clear the
+old placement so the amount is counted once. This default does not move the
+entire cash-and-cash-equivalents total to banks.
+
 === SOPL, PPE AND COMPANY SOCI CLASSIFICATION ===
 
 SOPL permits complete disclosed components only when they reconcile exactly to

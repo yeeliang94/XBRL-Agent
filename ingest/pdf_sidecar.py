@@ -70,7 +70,7 @@ _FENCE_RE = re.compile(r"^```[a-zA-Z]*\n?|\n?```$")
 # Exotic whitespace observed in live transcriptions (U+3000 ideographic space
 # on the first gpt-5.6-luna test) plus the usual non-breaking variants. The
 # sanitiser downstream doesn't strip these, so normalise at the source.
-_ODD_WHITESPACE_RE = re.compile("[\u00a0\u2000-\u200b\u3000]")
+_ODD_WHITESPACE_RE = re.compile("[\u00a0\u1680\u2000-\u200b\u202f\u205f\u3000]")
 
 _PRESENTATION_TAGS = frozenset({
     "b", "strong", "i", "em", "u", "s", "strike", "mark", "span", "font",
@@ -112,9 +112,14 @@ def normalize_transcription(html: str, *, preserve_meaningful_formatting: bool =
     purely-presentational inline tags are removed deterministically.
     """
     out = _FENCE_RE.sub("", html.strip()).strip()
-    if not preserve_meaningful_formatting:
-        out = _ODD_WHITESPACE_RE.sub(" ", out)
     soup = BeautifulSoup(out, "html.parser")
+    # Normalize decoded text, including &emsp;/&nbsp;, in both capture modes.
+    # Preserving headings and emphasis must not preserve special spacing glyphs.
+    for node in list(soup.find_all(string=True)):
+        normalized = _ODD_WHITESPACE_RE.sub(" ", str(node))
+        if normalized != str(node):
+            # Keep the node's kind so a comment stays a comment, not visible text.
+            node.replace_with(type(node)(normalized))
     if preserve_meaningful_formatting and soup.find(
         ["script", "style", "iframe", "object", "embed", "img", "svg", "math"]
     ):

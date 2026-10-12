@@ -32,7 +32,7 @@ export function MtoolSheetSelection({ sheets, selected, onChange }: Props) {
   return (
     <fieldset style={{ border: 0, borderTop: `1px solid ${pwc.grey200}`, padding: "12px 0 0", margin: "12px 0", minWidth: 0 }}>
       <legend style={{ fontWeight: 500, padding: 0 }}>Sheets</legend>
-      <p style={{ margin: "2px 0 12px", color: pwc.grey700, fontSize: 12 }}>{selectedCount} of {sheets.length} selected. Unselected sheets remain unchanged.</p>
+      <p style={{ margin: "2px 0 12px", color: pwc.grey700, fontSize: 12 }}>{selectedCount} of {sheets.length} selected</p>
       <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         {selectedCount < sheets.length && <button type="button" className={uiClass.btnSecondary} style={ui.buttonSecondary} onClick={() => onChange(null)}>Select all</button>}
         {selectedCount > 0 && <button type="button" className={uiClass.btnSecondary} style={ui.buttonSecondary} onClick={() => onChange([])}>Clear all</button>}

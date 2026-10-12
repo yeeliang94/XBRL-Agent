@@ -1,42 +1,91 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { AgentTabStatus, SSEEvent } from "../lib/types";
-import { buildToolTimeline, filterEventsBySubAgent } from "../lib/buildToolTimeline";
-import { deriveFormatterSubAgents, labelFormatterEvents } from "../lib/formatterSubAgents";
+import { buildToolTimeline } from "../lib/buildToolTimeline";
+import { deriveFormatterSheets, labelFormatterEvents } from "../lib/formatterSubAgents";
+import { pwc } from "../lib/theme";
 import { ActivityStream } from "./ActivityStream";
 import { NotesSubTabBar } from "./NotesSubTabBar";
 
-/** Notes-formatting activity split by sub-agent (one per sheet or table
- *  group), like the Sheet-12 notes sub-agents. "All" names each sub-agent
- *  on its own status lines. Shared by the live tab and History. */
-export function FormatterSubAgentActivity({ events, status, recorded = false }: {
+/** Notes-formatting activity with one chip per notes sheet, laid out like
+ *  every other workstream: chips, a failure note when one applies, then the
+ *  activity stream. A large sheet's parts share its chip; "All" shows each
+ *  part's named status lines. Shared by the live tab and History. */
+export function FormatterSubAgentActivity({ events, status, recorded = false, technical }: {
   events: SSEEvent[];
   status: AgentTabStatus;
   recorded?: boolean;
+  /** Shown in place of the stream when Technical detail is ticked. */
+  technical?: ReactNode;
 }) {
-  const [subId, setSubId] = useState<string | null>(null);
-  const subAgents = useMemo(() => deriveFormatterSubAgents(events), [events]);
-  const selected = subAgents.find((sub) => sub.subAgentId === subId) ?? null;
+  const [sheetKey, setSheetKey] = useState<string | null>(null);
+  const sheets = useMemo(() => deriveFormatterSheets(events), [events]);
+  const selected = sheets.find((sheet) => sheet.sheet === sheetKey) ?? null;
   const stream = useMemo(() => {
-    const shown = selected ? filterEventsBySubAgent(events, selected.subAgentId) : labelFormatterEvents(events);
-    return { events: shown, toolTimeline: buildToolTimeline(shown) };
+    const ids = new Set(selected?.subAgentIds ?? []);
+    // "All" keeps to each part's named status lines; a sheet's chip adds its
+    // individual steps, which would not say which sheet they belong to here.
+    const shown = selected
+      ? events.filter((event) => ids.has(String((event.data as unknown as Record<string, unknown>).sub_agent_id ?? "")))
+      : events.filter((event) => event.event === "status");
+    // Part names only help when a sheet was split; a single pass reads plainly.
+    const labelled = !selected || selected.subAgentIds.length > 1 ? labelFormatterEvents(shown) : shown;
+    return { events: labelled, toolTimeline: buildToolTimeline(labelled) };
   }, [events, selected]);
-  if (subAgents.length === 0) return null;
+  if (sheets.length === 0) return null;
   const shownStatus = selected?.status ?? status;
+  // A failure is reported once the sheet (or, on "All", the whole pass) ends.
+  const failed = (selected ? [selected] : status === "running" ? [] : sheets)
+    .filter((sheet) => sheet.status === "failed");
   return <>
     <NotesSubTabBar
-      ariaLabel="Formatting sub-agents"
-      subAgents={subAgents.map((sub) => ({ ...sub, notes: null, pages: null }))}
-      activeSubId={selected?.subAgentId ?? null}
-      onSelect={setSubId}
+      ariaLabel="Formatting by sheet"
+      showStatus
+      subAgents={sheets.map((sheet) => ({
+        subAgentId: sheet.sheet,
+        notes: null,
+        pages: null,
+        status: sheet.status,
+        label: sheet.partsTotal > 1 && sheet.status === "running"
+          ? `${sheet.label} · ${sheet.partsDone} of ${sheet.partsTotal}` : sheet.label,
+      }))}
+      activeSubId={selected?.sheet ?? null}
+      onSelect={setSheetKey}
     />
+    {failed.length > 0 && (
+      <div data-testid="formatting-failure" style={styles.failure}>
+        <span style={styles.failureLabel}>What went wrong</span>
+        {failed.map((sheet) => (
+          <span key={sheet.sheet}>
+            {!selected && <strong style={styles.sheetName}>{sheet.label}: </strong>}
+            {sheet.failures[0] ?? "Formatting did not finish. Retry it from the Notes tab."}
+          </span>
+        ))}
+      </div>
+    )}
     <ActivityStream
       events={stream.events}
       toolTimeline={stream.toolTimeline}
       reasoningBlocks={[]}
-      isRunning={shownStatus === "running"}
+      isRunning={shownStatus === "running" || shownStatus === "pending"}
       status={shownStatus}
       recorded={recorded}
-      streamKey={`notes-formatting:${selected?.subAgentId ?? "all"}`}
+      streamKey={`notes-formatting:${selected?.sheet ?? "all"}`}
+      technical={technical}
     />
   </>;
 }
+
+// Same "What went wrong" treatment as a failed workstream in RunDetailView.
+const styles = {
+  failure: {
+    display: "grid",
+    gap: 4,
+    padding: "10px 0",
+    color: pwc.grey900,
+    borderTop: `1px solid ${pwc.grey100}`,
+    fontSize: 14,
+    lineHeight: 1.55,
+  },
+  failureLabel: { fontSize: 13, fontWeight: pwc.weight.medium, color: pwc.grey700 },
+  sheetName: { fontWeight: pwc.weight.medium },
+};

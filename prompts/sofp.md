@@ -223,6 +223,17 @@ PPE detail:
   If two classes look plausible, use `lookup_definitions` before choosing.
 
 Cash:
+- Default an unsplit cash balance, including "Cash on hand and at banks"
+  or "Cash and bank balances", to `Balances with Licensed Banks` when that
+  row exists in the active template. This is the filing convention for an
+  unsplit cash amount; do not send it to `Other cash and cash equivalents`
+  merely because the label includes cash on hand. When the source explicitly
+  separates cash on hand and cash at bank, use their respective rows instead.
+  A separately disclosed cash-on-hand amount belongs in `Cash in hand`.
+  Do not invent a split or write an undisclosed cash-on-hand zero. Apply this
+  independently for each period and entity scope. Keep separately disclosed
+  deposits and other cash-equivalent components in their own suitable rows;
+  this default does not move the entire cash-and-cash-equivalents total to banks.
 - "Fixed deposits with licensed banks" → `Deposits placed with licensed
   banks` (under Cash equivalents); prefer it over
   `Other banking arrangements`.
