@@ -45,6 +45,7 @@ def caller(*, fail_verify=False, rotation=0, link=False):
             result["html"] = f'<h2>Note</h2><p><strong>Text {context["page"]}</strong></p>'
         if stage == "verifying" and "<table" in context.get("html", ""):
             result["table_relationships"] = [{
+                "candidate_cells": context["candidate_cells"],
                 "source_relationship": "Fixture table labels, periods and amounts",
                 "candidate_relationship": "Fixture table labels, periods and amounts",
                 "matches": True, "repair_instruction": "",
@@ -678,6 +679,7 @@ def test_unverified_table_repairs_even_when_general_verdict_is_positive(tmp_path
         if stage == "verifying":
             result["table_structure_verified"] = verdict if captures == 1 else True
             result["table_relationships"] = [{
+                "candidate_cells": context["candidate_cells"],
                 "source_relationship": "Tax and adjustment occupy separate label/amount rows",
                 "candidate_relationship": "Separate rows" if captures == 2 else "Stacked entries",
                 "matches": captures == 2,
@@ -759,6 +761,7 @@ def test_changed_repair_gets_third_round_with_previous_findings(tmp_path):
             verifications.append(context)
             correct = context["html"] == pages[2]
             result["table_relationships"] = [{
+                "candidate_cells": context["candidate_cells"],
                 "source_relationship": "Deferred: 2024 -, 2023 13,949",
                 "candidate_relationship": "Deferred: 2024 -, 2023 13,949" if correct else "Deferred: 2024 13,949",
                 "matches": correct, "repair_instruction": "" if correct else "Place 13,949 under 2023",
@@ -829,6 +832,7 @@ def test_blank_padded_section_heading_requires_source_agreement(tmp_path, eviden
             result["html"] = html
         if stage == "verifying":
             result["table_relationships"] = [] if evidence == "missing" else [{
+                "candidate_cells": context["candidate_cells"],
                 "source_relationship": f"Source row {label} has blank continuation cells; Assets has 10 and 20",
                 "candidate_relationship": f"Candidate row {label} has blank continuation cells; Assets has 10 and 20",
                 "matches": evidence != "mismatch",
@@ -909,6 +913,7 @@ def test_verified_multiline_table_preserves_best_effort_wording(tmp_path):
         if stage == "verifying":
             result.update(verified=False, table_structure_verified=True,
                           table_relationships=[{"source_relationship": "Wrapped label spans two rows, amounts 10 and 20",
+                                                "candidate_cells": context["candidate_cells"],
                                                 "candidate_relationship": "Wrapped label spans two rows, amounts 10 and 20",
                                                 "matches": True, "repair_instruction": ""}],
                           uncertainties=[{"reason": "Faint label reconstructed"}])

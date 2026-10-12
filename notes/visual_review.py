@@ -32,16 +32,22 @@ logger = logging.getLogger(__name__)
 MAX_VISUAL_REVIEW_REQUESTS = 8
 
 
+SOURCE_DEFECT_KINDS = frozenset({"source_content", "source_provenance", "source_emphasis"})
+
+
 class TableAssessment(BaseModel):
     row: int = Field(ge=1)
     table: int = Field(ge=0)
     status: Literal["pass", "needs_correction", "unresolved"]
     source_pages: list[int]
     reason: str = Field(min_length=1)
-    issue_kind: Literal["style", "structure"] = Field(
+    issue_kind: Literal["style", "structure", "source_content", "source_provenance",
+                        "source_emphasis"] = Field(
         default="style",
         description='"structure" when the copied table itself differs from the PDF '
-                    "(heading vs data cells, rows, columns, merged cells); otherwise style.",
+                    "(heading vs data cells, rows, columns, merged cells); source_content, "
+                    "source_provenance or source_emphasis for wrong words/figures, wrong "
+                    "source page or captured emphasis that must be removed; otherwise style.",
     )
 
 
@@ -262,6 +268,10 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
             issue = "Visual assessment cited unseen source pages."
         elif not set(assessment.source_pages).issubset(by_row[assessment.row].source_pages):
             issue = "Visual assessment cited pages outside this note's source pages."
+        elif assessment.issue_kind in SOURCE_DEFECT_KINDS:
+            # Neither a style patch nor a table re-copy repairs these.
+            assessment.status = "unresolved"
+            issue = "Source correction or human review required: " + assessment.reason
         elif assessment.status != "pass":
             issue = assessment.reason
         elif assessment.issue_kind == "structure":

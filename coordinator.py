@@ -215,6 +215,8 @@ def _verify_is_clean(verify_result) -> bool:
         return False
     if verify_result.is_balanced is False:
         return False
+    if getattr(verify_result, "matches_pdf", None) is False:
+        return False
     if getattr(verify_result, "mandatory_unfilled", None):
         return False
     if getattr(verify_result, "mismatches", None):
@@ -1238,6 +1240,16 @@ async def _run_single_agent_attempt(
             )
         )
         if salvageable:
+            coverage_warnings = _face_warnings()
+            incomplete = list(coverage_warnings)
+            if not _verify_is_clean(deps.last_verify_result):
+                incomplete.insert(0, "Current figures have not passed verification.")
+            if getattr(deps, "completed_with_flag", False) is True and deps.unresolved_summary:
+                incomplete.append(str(deps.unresolved_summary))
+            flag = (
+                f"Extraction stopped before completion ({reason}); " + " ".join(incomplete)
+                if incomplete else None
+            )
             logger.warning(
                 "%s/%s: %s — salvaging (workbook at %s).",
                 statement_type.value, variant, salvage_log, deps.filled_path,
@@ -1245,16 +1257,18 @@ async def _run_single_agent_attempt(
             await _emit("complete", {
                 "success": True,
                 "workbook_path": deps.filled_path,
+                "flag": flag,
                 salvage_event_key: True,
                 # Item 23: surface coverage warnings on the live event here too,
                 # so a salvaged statement reports unaccounted face lines.
-                "warnings": _face_warnings(),
+                "warnings": coverage_warnings,
             })
             return _finalize(AgentResult(
                 statement_type=statement_type,
                 variant=variant,
                 status="succeeded",
                 workbook_path=deps.filled_path,
+                flag=flag,
                 total_tokens=_tokens,
                 total_cost=_cost,
             ))

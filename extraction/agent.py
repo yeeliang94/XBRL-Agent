@@ -1162,8 +1162,8 @@ def create_extraction_agent(
         # Token-cost reduction: strip re-billed payloads from the outbound
         # request each turn — stale page images, the repeated template summary,
         # and (item 30) stale oversized text results superseded by fresher ones.
-        # The `_ctx` variants are token-aware (Plan 2): once cumulative usage
-        # crosses the soft watermark they escalate to aggressive trimming. See
+        # The `_ctx` variants are token-aware (Plan 2): once the current
+        # conversation crosses the soft watermark, text compaction escalates. See
         # extraction/history_processors.py and docs/Archive/PLAN-token-cost-reduction.md.
         # V2-idiom registration (pydantic-ai 1.107+): each processor wraps
         # in a ProcessHistory capability; `Agent(history_processors=)` is
