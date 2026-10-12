@@ -26,6 +26,7 @@ const fetchRuns = vi.mocked(api.fetchRuns);
 const baseRun = {
   id: 1,
   created_at: "2026-04-10T09:30:00Z",
+  updated_at: "2026-04-10T09:30:00Z",
   pdf_filename: "FINCO-Audited-2021.pdf",
   status: "completed",
   session_id: "sess-1",

@@ -3,7 +3,6 @@ import type {
   SettingsResponse,
   ExtendedSettingsResponse,
   RunListResponse,
-  RunSummaryJson,
   RunDetailJson,
   RunAgentJson,
   RunsFilterParams,
@@ -308,30 +307,12 @@ export async function fetchRuns(params: RunsFilterParams): Promise<RunListRespon
 // format and error handling stay in one place (`fetchRuns`).
 // ---------------------------------------------------------------------------
 
-/** Headline counts shown in the homepage stat tiles.
- *
- *  `lastStatus` is intentionally NOT computed here — it comes from the
- *  most-recent run in `fetchRecentRuns`, so the homepage derives it from
- *  that list rather than paying for a fourth round-trip. */
+/** Headline counts shown in the work queue. */
 export interface HomeStats {
   drafts: number;
   completedThisMonth: number;
   needsReview: number;
   active: number;
-}
-
-/** The few most-recent runs for the landing page, with real RESULTS surfaced
- *  ahead of drafts (UX-QA #10). A draft row is created at upload time, so the
- *  raw newest-first page is often all abandoned drafts — a first-time viewer
- *  then sees no evidence the tool has ever produced a result. We fetch a wider
- *  window and stable-partition non-drafts first (each group still newest-first),
- *  then cap to `limit`. */
-export async function fetchRecentRuns(limit = 5): Promise<RunSummaryJson[]> {
-  const res = await fetchRuns({ limit: Math.max(limit * 4, 20) });
-  const rows = res.runs;
-  const results = rows.filter((r) => r.status !== "draft");
-  const drafts = rows.filter((r) => r.status === "draft");
-  return [...results, ...drafts].slice(0, limit);
 }
 
 /** First day of the current month as `YYYY-MM-01`, in the browser's local
