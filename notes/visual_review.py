@@ -312,12 +312,16 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
         for row in {row for row, _ in reviewable}
         for index, table in enumerate(BeautifulSoup(rows[row], "html.parser").find_all("table"))
     }
-    for assessment in decision.tables:
+    rejected: set[int] = set()
+    for index, assessment in enumerate(decision.tables):
         key = (assessment.row, assessment.table)
         if key not in reviewable or key in seen:
-            # An ambiguous output cannot establish which tables were checked.
+            # An ambiguous output cannot establish which tables were checked,
+            # so neither copy of a duplicated table may drive a re-copy.
             for row in {row for row, _ in reviewable}:
                 _add_error(errors, row, "Visual assessment contained duplicate or unexpected tables.")
+            rejected.add(index)
+            ineligible.add(key)
             continue
         seen.add(key)
         issue = None
@@ -365,8 +369,8 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
     for row, _ in reviewable - seen:
         _add_error(errors, row, "Visual assessment omitted a table.")
     dumped = decision.model_dump()
-    for item in dumped["tables"]:
-        if (item["row"], item["table"]) in ineligible:
+    for index, item in enumerate(dumped["tables"]):
+        if index in rejected or (item["row"], item["table"]) in ineligible:
             item["recopy_eligible"] = False
     return errors, {**dumped, "evidence": evidence}
 

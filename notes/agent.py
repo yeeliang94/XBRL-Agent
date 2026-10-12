@@ -2041,6 +2041,17 @@ def _sub_agent_sink_write(
 MAX_SHARE_CLASS_REFUSALS = 2
 
 
+def _numeric_cells_fingerprint(deps: "NotesDeps") -> frozenset:
+    """Every written numeric cell and value. A receipt describes exactly these;
+    any later write, even to the same category, makes it stale."""
+    from concept_model.dimensions import dimension_key
+    return frozenset(
+        (c.get("sheet"), c.get("row"), c.get("col"),
+         dimension_key(c.get("dimensions")), repr(c.get("value")))
+        for c in deps.numeric_cells
+    )
+
+
 def _numeric_dimension_keys(deps: "NotesDeps") -> frozenset:
     from concept_model.dimensions import dimension_key
     return frozenset(dimension_key(c.get("dimensions")) for c in deps.numeric_cells)
@@ -2111,7 +2122,7 @@ def _submit_share_classes_impl(deps: "NotesDeps", classes: Any) -> str:
         return ("Share-class receipt refused. Fix every item and resubmit the whole list:\n"
                 + "\n".join(f"{n}. {e}" for n, e in enumerate(errors, 1)))
     deps.share_class_receipt = entries
-    deps.share_class_receipt_cells = written_keys
+    deps.share_class_receipt_cells = _numeric_cells_fingerprint(deps)
     skipped = [e for e in entries if e["action"] == "not_written"]
     _set_share_class_warnings(deps, [
         f"Share class '{e['class_name']}' (Note {e['note']}) not written: {e['reason']}"
@@ -2138,7 +2149,7 @@ def _set_share_class_warnings(deps: "NotesDeps", warnings: list[str]) -> None:
 def _share_class_coverage_confirmed(deps: "NotesDeps") -> bool:
     return (getattr(deps, "template_type", None) != NotesTemplateType.ISSUED_CAPITAL
             or (deps.share_class_receipt is not None
-                and deps.share_class_receipt_cells == _numeric_dimension_keys(deps)))
+                and deps.share_class_receipt_cells == _numeric_cells_fingerprint(deps)))
 
 
 def share_class_exit_check(deps: "NotesDeps") -> None:
