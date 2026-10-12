@@ -26,6 +26,16 @@ import { humanSlotKey, type HumanFigureSlot } from "../lib/humanFile";
 
 const notesCss = readFileSync("src/components/NotesReviewTab.css", "utf8");
 
+test("editor note content uses the prepared-output face and semibold emphasis", () => {
+  const view = render(<><style>{notesCss}</style><div className="notes-review-tab"><div className="tiptap">
+    <p><strong>Deferred tax assets</strong> <b>2025</b></p>
+  </div></div></>);
+  expect(getComputedStyle(view.container.querySelector(".tiptap")!).fontFamily).toBe("Arial, sans-serif");
+  expect(getComputedStyle(screen.getByText("Deferred tax assets")).fontWeight).toBe("600");
+  expect(getComputedStyle(screen.getByText("2025")).fontWeight).toBe("600");
+  cleanup();
+});
+
 test("wide prepared tables gain display sizing without altering the output HTML", () => {
   const html = '<table><tr><th>Payment description</th><th colspan="4">Contractual cash flows</th></tr><tr><td>Trade payables</td><td>100</td><td>200</td><td>300</td><td>400</td></tr></table>';
   const output = { html, tier: "full" as const, revision: "1", source_styling_dropped: false, white_grid_dropped: false };
