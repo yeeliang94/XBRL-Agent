@@ -268,7 +268,9 @@ describe("Direction A shell and responsive composition", () => {
     expect(designSystem).toContain("one flat chronological <em>Live activity</em> stream (or <em>Recorded activity</em> for settled workstreams)");
     expect(designSystem).toContain("no event cards, navigation buttons or nested activity panels");
     expect(designSystem).toContain("Opening Activity never scrolls the page");
-    expect(designSystem).toContain("Follow new updates when it opens at the bottom and only while the operator remains there");
+    expect(designSystem).toContain("Stack concise updates newest first, with the latest update at the top");
+    expect(designSystem).toContain("switching workstream or sub-agent opens its stream at the latest update");
+    expect(designSystem).toContain("The navigator lists the latest stage first: Run checks (newest check first) once they start, then Financial statements, then Notes, with Document preparation at the bottom");
     expect(designSystem).toContain("Decision cards name the affected figure even when its value is unchanged");
     expect(designSystem).toContain("Keep tool operations, provider reasoning, tokens and request metadata in closed technical diagnostics");
     expect(designSystem).toContain("the activity roster shows item states without a second completion total");
@@ -288,9 +290,10 @@ describe("Simplified template-oriented review", () => {
       "Offer a keyboard-accessible Open editor action beside each populated field heading",
       "Offer Hide empty fields for the current worksheet",
       "Preserve level-three field headings and announce filing warnings and comparison markers as descriptions of the disclosure button",
-      "Derive prose comparison markers and the Missed by AI filter from current extracted and human content",
-      "A comparison view offers an Only missed by AI checkbox",
-      "Keep the active field open when changing views",
+      "Derive prose comparison markers and highlight filters from current extracted and human content",
+      "Comparison controls use one compact highlight toolbar",
+      "Read-only selected fields obey the active comparison filter",
+      "Keep pending edits open when changing views",
       "Include human-only numeric categories only for the worksheet’s applicable periods and entity scopes",
       "hide these headings when no pair is open",
       "Do not show evidence prose, appearance provenance, internal row numbers",

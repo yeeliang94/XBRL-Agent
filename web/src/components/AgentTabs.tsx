@@ -178,8 +178,9 @@ function AgentTabsImpl({
   //     4. The agent's role is in statementsInRun — i.e. the user actually
   //        picked this statement for the current run.
   //
-  // Ordering: document preparation first, then statements, notes and checks.
-  // The visible navigator groups those buckets vertically.
+  // Ordering (latest stage first): run checks, statements, notes, then
+  // document preparation. The visible navigator groups those buckets
+  // vertically.
   const visiblePreparation: string[] = [];
   const visibleStatementActive: string[] = [];
   const visibleNotesActive: string[] = [];
@@ -198,9 +199,11 @@ function AgentTabsImpl({
       visibleStatementActive.push(id);
     }
   }
-  const checksOrder = ["NOTES_VALIDATOR", "CORRECTION", "validator", "notes-cleanup", "notes-integrity", "notes-formatting"];
+  // The latest stage sits at the top: run checks (newest check first), then
+  // the extraction workstreams, with document preparation at the bottom.
+  const checksOrder = ["notes-formatting", "notes-integrity", "notes-cleanup", "validator", "CORRECTION", "NOTES_VALIDATOR"];
   visibleChecks.sort((a, b) => checksOrder.indexOf(workstreamKind(agents[a])) - checksOrder.indexOf(workstreamKind(agents[b])));
-  const navigationOrder = [...visiblePreparation, ...visibleStatementActive, ...visibleNotesActive, ...visibleChecks];
+  const navigationOrder = [...visibleChecks, ...visibleStatementActive, ...visibleNotesActive, ...visiblePreparation];
   const navigationKey = navigationOrder.join("\u0000");
   const focusableTab = navigationOrder.includes(activeTab) ? activeTab : navigationOrder[0];
 
@@ -284,13 +287,12 @@ function AgentTabsImpl({
     <div className="workstream-nav" style={styles.tabBar}>
       {/* No list heading: the Activity tab already names this view. */}
       <div role="tablist" aria-label="Run workstreams" aria-orientation="vertical" style={styles.tabList}>
-        {visiblePreparation.length > 0 && (
-          <div role="presentation" data-bucket="preparation" style={styles.tabGroup}>
-            <div role="presentation" style={styles.groupLabel}>Preparation</div>
-            {visiblePreparation.map(renderTab)}
+        {visibleChecks.length > 0 && (
+          <div role="presentation" data-bucket="run-checks" style={styles.tabGroup}>
+            <div role="presentation" style={styles.groupLabel}>Run checks</div>
+            {visibleChecks.map(renderTab)}
           </div>
         )}
-
         {(visibleStatementActive.length > 0 || (skeletonTabs?.length ?? 0) > 0) && (
           <div role="presentation" data-bucket="statements" style={styles.tabGroup}>
             <div role="presentation" style={styles.groupLabel}>Financial statements</div>
@@ -311,10 +313,10 @@ function AgentTabsImpl({
           </div>
         )}
 
-        {visibleChecks.length > 0 && (
-          <div role="presentation" data-bucket="run-checks" style={styles.tabGroup}>
-            <div role="presentation" style={styles.groupLabel}>Run checks</div>
-            {visibleChecks.map(renderTab)}
+        {visiblePreparation.length > 0 && (
+          <div role="presentation" data-bucket="preparation" style={styles.tabGroup}>
+            <div role="presentation" style={styles.groupLabel}>Preparation</div>
+            {visiblePreparation.map(renderTab)}
           </div>
         )}
       </div>

@@ -406,6 +406,25 @@ def _usage_fields(usage: RunUsage) -> dict[str, int]:
     }
 
 
+def _plain_failure(outcome: Optional[dict]) -> str:
+    """One plain sentence for a failed pass, shown before any technical detail."""
+    outcome = outcome or {}
+    error_type = outcome.get("error_type")
+    if error_type == "visual_review_failed":
+        count = len(outcome.get("failed_rows") or outcome.get("row_errors") or {}) or 1
+        notes = "1 note still looks" if count == 1 else f"{count} notes still look"
+        recopied = " after re-copying its tables" if "table_recopy" in outcome else ""
+        return f"{notes} different from the source PDF{recopied}. Retry it from the Notes tab."
+    return {
+        "timeout": "Formatting reached its time limit. Retry it from the Notes tab.",
+        "turn_budget": "Formatting reached its request limit. Retry it from the Notes tab.",
+        "validation_failed": "The formatting result could not be applied safely. Retry it from the Notes tab.",
+        "wrong_sheet": "The formatting result was for a different sheet. Retry it from the Notes tab.",
+        "model_error": "The AI request failed. Retry it from the Notes tab.",
+        "precondition_failed": "Formatting could not start for this sheet.",
+    }.get(error_type, "Formatting did not finish. Retry it from the Notes tab.")
+
+
 async def run_notes_formatter(
     *,
     run_id: int,
@@ -499,7 +518,12 @@ async def run_notes_formatter(
         elif status == "cancelled":
             activity.status("cancelled", "Formatting stopped")
         else:
-            activity.status("failed", (outcome or {}).get("error") or "Formatting did not finish")
+            # The plain sentence leads; the raw finding stays as technical detail.
+            activity.emit("status", {
+                "phase": "failed", "message": _plain_failure(outcome),
+                "error_type": (outcome or {}).get("error_type"),
+                "detail": (outcome or {}).get("error") or "",
+            })
         activity.save(db_path, agent_id)
         # One aggregate ledger entry includes formatter and independent checker
         # requests. Task totals are diagnostic, not additional ledger entries.

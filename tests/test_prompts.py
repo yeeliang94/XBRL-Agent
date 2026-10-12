@@ -6,6 +6,41 @@ from prompts import render_prompt
 from statement_types import StatementType
 
 
+@pytest.mark.parametrize("prompt_role", [
+    "sofp-mfrs-company", "sofp-mfrs-group", "sofp-mpers-company",
+    "sofp-mpers-group", "reviewer", "scoped_investigation",
+])
+def test_unsplit_cash_bank_default_contract(prompt_role):
+    """Pin the team-approved filing convention in every affected prompt.
+
+    Model judgement needs a live run; scripted model responses cannot prove
+    this mapping. The offline seam proves agents receive the default and its
+    explicit-split/deposit boundaries, even when arithmetic already passes.
+    """
+    from pathlib import Path
+
+    if prompt_role.startswith("sofp-"):
+        _, standard, level = prompt_role.split("-")
+        prompt = render_prompt(StatementType.SOFP, "CuNonCu",
+                               filing_standard=standard, filing_level=level)
+    else:
+        prompt = (Path(__file__).resolve().parent.parent / "prompts"
+                  / f"{prompt_role}.md").read_text(encoding="utf-8")
+    text = " ".join(prompt.replace("`", "").split())
+    assert "default an unsplit cash balance" in text.lower()
+    assert "Cash on hand and at banks" in text
+    assert "Balances with Licensed Banks" in text
+    assert "row exists in the active template" in text
+    assert "explicitly separates cash on hand and cash at bank" in text
+    assert "separately disclosed cash-on-hand amount belongs in Cash in hand" in text
+    assert "undisclosed cash-on-hand zero" in text
+    assert "disclosed deposits and other cash-equivalent components in their own suitable rows" in text
+    assert "does not move the entire cash-and-cash-equivalents total to banks" in text
+    if prompt_role in {"reviewer", "scoped_investigation"}:
+        assert "even if totals pass" in text
+        assert "clear the old placement" in text
+
+
 class TestRenderPrompt:
     """Verify render_prompt produces correct prompts for each statement type."""
 

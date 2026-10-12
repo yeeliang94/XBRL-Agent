@@ -181,6 +181,32 @@ function selectSheet(name: RegExp) {
 }
 
 describe("NotesReviewTab — read-only render (Step 9)", () => {
+  test("shared highlights filter current note content and retain only an active edit outside the view", async () => {
+    const row = SAMPLE.sheets[0].rows[0];
+    mockFetchOnce({ sheets: [{ sheet: "Notes-CI", rows: [
+      { ...row, label: "Both filled", node_uuid: "both" },
+      { ...row, row: 5, label: "Human only", node_uuid: "human", html: "" },
+    ] }] });
+    const human = { html: { both: "<p>Human text</p>", human: "<p>Missing note</p>" }, status: { both: "agree" as const, human: "missed" as const } };
+    const showAll = vi.fn();
+    const { rerender } = render(<NotesReviewTab runId={42} human={human} comparisonHighlights={["missed"]} onlyHighlighted onShowAllComparisonFields={showAll} />);
+    await screen.findByRole("button", { name: "Review Human only" });
+    expect(screen.queryByRole("button", { name: "Review Both filled" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "Only missed by AI" })).toBeNull();
+    const missedRow = screen.getByRole("region", { name: "Human only" });
+    expect(missedRow).toHaveAttribute("data-comparison-highlight", "true");
+    openField(screen.getByRole("button", { name: "Review Human only" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Edit$/ }));
+    const editor = screen.getByTestId("notes-review-editor");
+    rerender(<NotesReviewTab runId={42} human={human} comparisonHighlights={[]} onlyHighlighted onShowAllComparisonFields={showAll} />);
+    expect(screen.getByTestId("notes-review-editor")).toBe(editor);
+    expect(screen.getByText("Editing · outside this filter")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /^Done$/ }));
+    expect(screen.getByRole("status")).toHaveTextContent("No fields match this view.");
+    fireEvent.click(screen.getByRole("button", { name: "Show all fields" }));
+    expect(showAll).toHaveBeenCalledOnce();
+  });
+
   test("hides only mutually empty fields and isolates human-filled AI gaps", async () => {
     const row = SAMPLE.sheets[0].rows[0];
     mockFetchOnce({ sheets: [{ sheet: "Notes-CI", rows: [
@@ -198,6 +224,8 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     for (const label of ["AI only", "Both filled", "Human only"]) {
       expect(screen.getByRole("button", { name: `Review ${label}` })).toBeVisible();
     }
+    // A populated field selected for reading must still obey the missed filter.
+    openField(screen.getByRole("button", { name: "Review Both filled" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Only missed by AI" }));
     expect(screen.queryByRole("button", { name: "Review AI only" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Review Both filled" })).toBeNull();
@@ -216,16 +244,17 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     await screen.findByRole("button", { name: "Review Human only" });
     openField(screen.getByRole("button", { name: "Review Human only" }));
     const correctedEditor = screen.getByTestId("notes-review-editor");
+    fireEvent.click(screen.getByRole("button", { name: /^Edit$/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Only missed by AI" }));
     expect(screen.getByTestId("notes-review-editor")).toBe(correctedEditor);
-    fireEvent.click(screen.getByRole("button", { name: "Review Human only" }));
+    expect(screen.getByText("Editing · outside this filter")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /^Done$/ }));
     expect(screen.getByRole("status")).toHaveTextContent("No fields match this view.");
     expect(screen.queryByText("AI note")).toBeNull();
     expect(screen.queryByText("Human note")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Show all fields" }));
     expect(screen.getByRole("button", { name: "Review Human only" })).toBeVisible();
     expect(screen.queryByRole("img", { name: "Missed by AI" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Review Human only" }));
     expect(within(screen.getByTestId("notes-human-cell")).queryByRole("img")).toBeNull();
     expect(screen.getByRole("checkbox", { name: "Hide empty fields" })).not.toBeChecked();
   });
@@ -1831,6 +1860,32 @@ const FULL_TEMPLATE: NotesCellsResponse = {
 };
 
 describe("NotesReviewTab — full-template projection (Phase 5)", () => {
+  test("numeric note highlights retain exact category, period and entity identity", async () => {
+    const ordinary = JSON.stringify({ ClassAxis: "OrdinaryMember" });
+    const preference = JSON.stringify({ ClassAxis: "PreferenceMember" });
+    const row = FULL_TEMPLATE.sheets[1].rows[0];
+    mockFetchOnce({ sheets: [{ ...FULL_TEMPLATE.sheets[1], rows: [{ ...row, concept_uuid: "capital",
+      categories: [
+        { dimension_key: ordinary, dimensions: { ClassAxis: "OrdinaryMember" }, label: "Ordinary", values: { cy: null, py: 10 }, evidence: null },
+        { dimension_key: preference, dimensions: { ClassAxis: "PreferenceMember" }, label: "Preference", values: { cy: 10, py: null }, evidence: null },
+      ],
+    }] }] });
+    const slots: HumanFigureSlot[] = [
+      { concept_uuid: "capital", period: "CY", entity_scope: "Company", dimension_key: ordinary, status: "missed", human_value: 5, ai_value: null },
+      { concept_uuid: "capital", period: "PY", entity_scope: "Company", dimension_key: ordinary, status: "agree", human_value: 10, ai_value: 10 },
+      { concept_uuid: "capital", period: "CY", entity_scope: "Company", dimension_key: preference, status: "agree", human_value: 10, ai_value: 10 },
+      { concept_uuid: "capital", period: "PY", entity_scope: "Company", dimension_key: preference, status: "missed", human_value: 3, ai_value: null },
+      { concept_uuid: "capital", period: "CY", entity_scope: "Group", dimension_key: ordinary, status: "missed", human_value: 99, ai_value: null },
+    ];
+    const humanFigures = new Map(slots.map((slot) => [humanSlotKey(slot.concept_uuid, slot.period, slot.entity_scope, slot.dimension_key), slot]));
+    render(<NotesReviewTab runId={7} humanFigures={humanFigures} comparisonHighlights={["missed"]} />);
+    expect(await screen.findByTestId(`numeric-human-${row.row}-${ordinary}-cy`)).toHaveAttribute("data-comparison-highlight", "true");
+    expect(screen.getByTestId(`numeric-human-${row.row}-${ordinary}-py`)).not.toHaveAttribute("data-comparison-highlight");
+    expect(screen.getByTestId(`numeric-human-${row.row}-${preference}-cy`)).not.toHaveAttribute("data-comparison-highlight");
+    expect(screen.getByTestId(`numeric-human-${row.row}-${preference}-py`)).toHaveAttribute("data-comparison-highlight", "true");
+    expect(screen.queryByText("99")).toBeNull();
+  });
+
   test.each([false, true])("field views retain human-only categories with AI categories present: %s", async (hasAiCategory) => {
     const dimensions = { ClassAxis: "OrdinaryMember" };
     const dimensionKey = JSON.stringify(dimensions);

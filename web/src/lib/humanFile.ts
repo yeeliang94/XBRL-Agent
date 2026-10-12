@@ -44,6 +44,16 @@ export interface HumanFileRecord {
 /** Agreement, difference, missed, AI-only, or an excluded human zero. */
 export type HumanSlotStatus = "agree" | "different" | "missed" | "ai_only" | "zero_blank";
 
+export type ComparisonHighlight = Exclude<HumanSlotStatus, "zero_blank"> | "not_counted";
+
+export function comparisonCategory(slot: HumanFigureSlot): ComparisonHighlight {
+  return slot.calculated || slot.status === "zero_blank" ? "not_counted" : slot.status;
+}
+
+export function isComparisonHighlighted(slot: HumanFigureSlot | undefined, selected: readonly ComparisonHighlight[]): boolean {
+  return slot != null && selected.includes(comparisonCategory(slot));
+}
+
 export interface HumanFigureSlot {
   concept_uuid: string;
   period: string;

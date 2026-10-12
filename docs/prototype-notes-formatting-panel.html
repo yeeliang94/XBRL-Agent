@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notes Formatting Panel</title>
+<style>
+  /* Tokens from docs/xbrl-design-system.html; sizes measured from the live
+     run page (History → run → Activity) so the prototype matches it. */
+  :root {
+    --orange-700: #d64000; --orange-500: #fd5108; --orange-50: #fff5ed;
+    --grey-700: #374151; --grey-500: #6b7280; --grey-300: #cbd1d6; --grey-200: #dfe3e6;
+    --grey-100: #eeeff1; --grey-50: #f5f7f8;
+    --text: #000; --text-secondary: rgba(0,0,0,.64); --text-tertiary: rgba(0,0,0,.46);
+    --font-sans: "Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #fff; color: var(--text); font: 14px/1.5 var(--font-sans); -webkit-font-smoothing: antialiased; }
+  button { font: inherit; color: inherit; }
+  button:focus-visible, input:focus-visible { outline: 2px solid #000; outline-offset: 2px; }
+
+  /* Prototype-only switch (not part of the product) */
+  .proto-bar { position: sticky; top: 0; z-index: 5; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 8px 16px; background: #111; color: #fff; font-size: 12px; }
+  .proto-bar button { height: 28px; padding: 0 12px; border: 1px solid #555; border-radius: 6px; background: transparent; color: #ccc; cursor: pointer; }
+  .proto-bar button[aria-pressed="true"] { background: #fff; color: #000; border-color: #fff; }
+
+  /* App shell */
+  .app { display: grid; grid-template-columns: 220px 1fr; min-height: calc(100vh - 44px); }
+  .side { background: var(--grey-50); border-right: 1px solid var(--grey-100); display: flex; flex-direction: column; padding: 20px 12px 16px; }
+  .brand { display: flex; align-items: center; gap: 8px; padding: 0 8px 24px; font-weight: 600; }
+  .brand svg { width: 22px; height: 22px; color: var(--orange-500); }
+  .nav a { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 8px; border-radius: 8px; color: #000; text-decoration: none; font-size: 14px; }
+  .nav a.cur { background: var(--grey-100); font-weight: 500; }
+  .nav .lbl { padding: 16px 8px 4px; font-size: 12px; color: var(--text-secondary); }
+  .nav svg, .foot svg { width: 18px; height: 18px; color: var(--grey-500); flex: none; }
+  .nav a .ico { width: 16px; height: 16px; }
+  .foot { margin-top: auto; }
+  .acct { display: flex; gap: 10px; align-items: center; padding: 12px 8px 0; margin-top: 8px; border-top: 1px solid var(--grey-200); font-size: 13px; }
+  .acct .av { width: 28px; height: 28px; border-radius: 50%; background: var(--grey-100); display: grid; place-items: center; font-size: 11px; font-weight: 600; }
+  .acct small { display: block; color: var(--text-secondary); font-size: 12px; }
+
+  .page { min-width: 0; }
+  .subhead { position: sticky; top: 44px; z-index: 3; height: 64px; display: flex; align-items: center; padding: 0 32px; border-bottom: 1px solid var(--grey-100); background: #fff; }
+  .subhead a { display: inline-flex; gap: 8px; align-items: center; color: #000; text-decoration: none; font-weight: 500; }
+  .subhead svg { width: 18px; height: 18px; }
+  .content { padding: 32px; }
+  .titlerow { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -.01em; }
+  .btn { height: 40px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--grey-300); background: #fff; font-weight: 500; cursor: pointer; white-space: nowrap; }
+  .btn:hover { background: var(--grey-50); }
+  .btn.sm { height: 32px; padding: 0 12px; font-size: 13px; }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  .pagetabs { display: flex; gap: 4px; margin: 24px 0 20px; flex-wrap: wrap; }
+  .pagetabs span { height: 40px; display: inline-flex; align-items: center; padding: 0 16px; border-radius: 8px; color: var(--text-secondary); font-weight: 500; }
+  .pagetabs span.cur { background: var(--grey-100); color: #000; }
+
+  /* Workspace: workstream list + detail panel */
+  .ws { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 38px; align-items: start; }
+  @media (max-width: 1000px) { .app { grid-template-columns: 1fr; } .side { display: none; } .ws { grid-template-columns: 1fr; } .content { padding: 24px 16px; } .subhead { padding: 0 16px; } }
+  .glabel { height: 40px; display: flex; align-items: flex-end; padding: 0 9px 8px; font-size: 12px; color: var(--text-secondary); }
+  .wsrow { width: 100%; display: flex; align-items: center; gap: 6px; padding: 8px 9px; border: 0; border-radius: 8px; background: transparent; text-align: left; cursor: pointer; }
+  .wsrow:hover { background: var(--grey-50); }
+  .wsrow.cur { background: var(--grey-50); }
+  .wsrow .stack { display: flex; flex-direction: column; min-width: 0; flex: 1; margin-left: 4px; }
+  .wsrow .nm { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+  .wsrow.cur .nm { color: #000; }
+  .wsrow .sub { font-size: 12px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wsrow .st { font-size: 12px; font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
+  .wsrow .st.live { color: var(--orange-700); }
+
+  .panel { border-left: 1px solid var(--grey-100); padding-left: 24px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .ptitle { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--grey-100); font-weight: 500; min-height: 33px; }
+
+  /* Same pill sub-tab bar as List of notes (NotesSubTabBar) */
+  .pills { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 12px; background: var(--grey-50); border-bottom: 1px solid var(--grey-200); }
+  .pill { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--grey-200); background: #fff; font-size: 12px; font-weight: 500; color: var(--text-secondary); cursor: pointer; white-space: nowrap; }
+  .pill[aria-selected="true"] { background: var(--grey-50); border-color: var(--grey-300); color: #000; font-weight: 600; }
+  .pill .ico { width: 14px; height: 14px; }
+
+  .err { display: flex; flex-direction: column; gap: 4px; }
+  .err .lbl { font-size: 12px; color: var(--text-secondary); }
+  .err .acts { display: flex; gap: 8px; margin-top: 8px; }
+
+  .acthead { display: flex; justify-content: space-between; align-items: center; font-weight: 500; }
+  .acthead label { display: inline-flex; gap: 8px; align-items: center; font-weight: 400; cursor: pointer; }
+  .acthead input { width: 18px; height: 18px; margin: 0; accent-color: #000; }
+
+  .tl { list-style: none; margin: 0; padding: 0; }
+  .tl li { display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: 8px; min-height: 48px; padding: 4px 0 12px; }
+  .tl .rail { position: relative; width: 10px; margin-left: 3px; border-left: 1px solid var(--grey-200); }
+  .tl li:last-child .rail { border-left-color: transparent; }
+  .tl .rail::after { content: ""; position: absolute; top: 6px; left: -4px; width: 7px; height: 7px; border-radius: 50%; background: var(--grey-300); }
+  .tl li.now .rail::after { background: var(--orange-500); }
+  .tl p { margin: 0; }
+  .tl .who { color: var(--text-secondary); }
+
+  .tech { font-size: 13px; color: var(--text-secondary); display: flex; flex-direction: column; gap: 12px; padding: 12px 0; border-top: 1px solid var(--grey-100); }
+  .tech table { border-collapse: collapse; width: 100%; }
+  .tech td, .tech th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--grey-100); font-weight: 400; }
+  .tech th { color: var(--text-tertiary); }
+  .tech .n { text-align: right; font-variant-numeric: tabular-nums; }
+  .mono { font-family: var(--font-mono); font-size: 12px; }
+
+  .ico { width: 16px; height: 16px; flex: none; }
+  .ico.working { color: var(--orange-500); animation: spin 1.2s linear infinite; }
+  .ico.done { color: #000; }
+  .ico.attn { color: var(--orange-500); }
+  .ico.rest { color: var(--grey-500); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .ico.working { animation: none; } }
+
+  .changes { margin-top: 48px; padding: 16px; border: 1px dashed var(--grey-300); border-radius: 8px; font-size: 13px; color: var(--text-secondary); }
+  .changes strong { color: #000; }
+  .changes ul { margin: 8px 0 0; padding-left: 18px; }
+</style>
+</head>
+<body>
+<div class="proto-bar" role="region" aria-label="Prototype controls">
+  <span>PROTOTYPE</span>
+  <button type="button" data-moment="live" aria-pressed="true">While formatting</button>
+  <button type="button" data-moment="done" aria-pressed="false">After formatting</button>
+  <span style="opacity:.7">Click the workstreams and the sheet pills.</span>
+</div>
+
+<div class="app">
+  <aside class="side">
+    <div class="brand"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M2 19 9 5l5 9 3-5 5 10h-3l-2-4-3 5-5-9-4 8z"/></svg>XBRL Agent</div>
+    <nav class="nav" aria-label="App">
+      <a href="#"><svg><use href="#i-doc"/></svg>Work queue</a>
+      <a href="#"><svg><use href="#i-doc"/></svg>Add documents</a>
+      <a href="#"><svg><use href="#i-doc"/></svg>History</a>
+      <div class="lbl">Recent</div>
+      <a href="#" class="cur" id="recent-cur"></a>
+      <a href="#"><svg class="ico attn"><use href="#i-attn"/></svg>VTech-2024-FS-fre…</a>
+      <a href="#"><svg class="ico attn"><use href="#i-attn"/></svg>VTech-2024-FS.pdf</a>
+      <a href="#"><svg><use href="#i-arrow"/></svg>View all</a>
+    </nav>
+    <div class="foot nav">
+      <a href="#"><svg><use href="#i-doc"/></svg>Settings</a>
+      <a href="#"><svg><use href="#i-doc"/></svg>Collapse sidebar</a>
+      <div class="acct"><span class="av">DE</span><span>Dev<small>Administrator</small></span></div>
+    </div>
+  </aside>
+
+  <div class="page">
+    <div class="subhead"><a href="#"><svg style="transform:scaleX(-1)"><use href="#i-arrow"/></svg>Back to history</a></div>
+    <div class="content">
+      <div class="titlerow">
+        <h1>VTech-2024-FS.pdf</h1>
+        <div class="btns"><button class="btn" type="button">Prepare mTool draft</button><button class="btn" type="button">Export diagnostics</button><button class="btn" type="button">Compare with human file</button></div>
+      </div>
+      <div class="pagetabs"><span>Overview</span><span>Figures</span><span>Notes</span><span>Cross-checks</span><span class="cur">Activity</span><span>AI review</span></div>
+
+      <div class="ws">
+        <div id="list" role="tablist" aria-orientation="vertical" aria-label="Run workstreams"></div>
+        <article class="panel" id="panel" role="tabpanel"></article>
+      </div>
+
+      <div class="changes">
+        <strong>What's different from today (Notes formatting only — every other workstream is unchanged)</strong>
+        <ul>
+          <li>The panel now has the same shape as the others: title, pill tabs, activity, and a <em>Technical detail</em> checkbox.</li>
+          <li>The pill tabs are one per sheet instead of one per internal part. Each pill carries a status icon and "5 of 7", and they wrap onto a second line instead of scrolling sideways.</li>
+          <li>Progress ("8 of 13 parts done · 4 running") sits in the workstream list on the left, where every other workstream shows its one-liner.</li>
+          <li>The unlabelled grey line under the title, the "Formatting calls" list and the extra bullet list are removed. Call names and token counts move into <em>Technical detail</em>.</li>
+          <li>A failed sheet uses the same <em>What went wrong</em> block as other failed workstreams, but with one plain sentence and a Retry button. The checker's full text sits in <em>Technical detail</em>.</li>
+          <li>Sheets that haven't started appear as <em>Waiting</em> pills, so you can see the queue.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <!-- Status glyphs: Material Symbols Rounded 300 from web/src/components/iconGlyphs.tsx -->
+  <symbol id="i-working" viewBox="0 -960 960 960"><path fill="currentColor" d="M331.32-129.4q-69.29-29.4-120.9-81.02-51.62-51.61-81.02-120.9-29.4-69.3-29.4-148.73 0-79.43 29.46-148.73 29.46-69.3 80.96-120.8 51.5-51.5 120.93-80.96Q400.78-860 480-860q9.29 0 15.99 6.71 6.7 6.7 6.7 16 0 9.29-6.7 15.98-6.7 6.7-15.99 6.7-138.69 0-236.65 97.96-97.96 97.96-97.96 236.65t97.96 236.65q97.96 97.96 236.65 97.96t236.65-97.96q97.96-97.96 97.96-236.65 0-9.31 6.71-16 6.71-6.69 16-6.69t15.99 6.7Q860-489.29 860-480q0 79.22-29.46 148.65t-80.96 120.93q-51.5 51.5-120.8 80.96Q559.48-100 480.05-100q-79.43 0-148.73-29.4Z"/></symbol>
+  <symbol id="i-done" viewBox="0 -960 960 960"><path fill="currentColor" d="M421-380.15 319.54-482q-7.08-6.69-16.81-6.88-9.73-.2-17.42 7.5-7.08 7.07-7.08 16.8t7.08 16.81l115.46 116.08q8.61 9 20.23 9 11.62 0 20.23-9l232.08-231.7q7.3-7.690 7.5-17.42.19-9.73-7.5-17.42-7.7-7.08-17.73-6.77-10.04.31-17.12 7.39L421-380.15ZM480.07-100q-78.22 0-147.4-29.92t-120.99-81.71q-51.81-51.79-81.75-120.94Q100-401.71 100-479.93q0-78.84 29.92-148.21t81.71-120.68q51.79-51.31 120.94-81.25Q401.71-860 479.93-860q78.84 0 148.21 29.92t120.68 81.21q51.31 51.29 81.25 120.63Q860-558.9 860-480.07q0 78.22-29.92 147.4t-81.21 120.99q-51.29 51.81-120.63 81.75Q558.9-100 480.07-100Zm-.07-45.39q139.69 0 237.15-97.76 97.46-97.77 97.46-236.85 0-139.69-97.46-237.15-97.46-97.46-237.15-97.46-139.08 0-236.85 97.46-97.76 97.46-97.76 237.15 0 139.08 97.76 236.85 97.77 97.76 236.85 97.76ZM480-480Z"/></symbol>
+  <symbol id="i-fail" viewBox="0 -960 960 960"><path fill="currentColor" d="m480-448 132.46 132.46q6.69 6.69 15.81 6.89 9.11.19 16.19-6.89 7.08-7.08 7.08-16t-7.08-16L512-480l132.46-132.46q6.69-6.69 6.89-15.81.19-9.11-6.89-16.19-7.08-7.08-16-7.08t-16 7.08L480-512 347.54-644.46q-6.69-6.69-15.81-6.89-9.11-.19-16.19 6.89-7.08 7.08-7.08 16t7.08 16L448-480 315.54-347.54q-6.69 6.69-6.89 15.81-.19 9.11 6.89 16.19 7.08 7.08 16 7.08t16-7.08L480-448Zm.07 348q-78.22 0-147.4-29.92t-120.99-81.71q-51.81-51.79-81.75-120.94Q100-401.71 100-479.93q0-78.84 29.92-148.21t81.71-120.68q51.79-51.31 120.94-81.25Q401.71-860 479.93-860q78.84 0 148.21 29.92t120.68 81.21q51.31 51.29 81.25 120.63Q860-558.9 860-480.07q0 78.22-29.92 147.4t-81.21 120.99q-51.29 51.81-120.63 81.75Q558.9-100 480.07-100Zm-.07-45.39q139.69 0 237.15-97.76 97.46-97.77 97.46-236.85 0-139.69-97.46-237.15-97.46-97.46-237.15-97.46-139.08 0-236.85 97.46-97.76 97.46-97.76 237.15 0 139.08 97.76 236.85 97.77 97.76 236.85 97.76ZM480-480Z"/></symbol>
+  <symbol id="i-attn" viewBox="0 -960 960 960"><path fill="currentColor" d="M499.46-298.52q7.77-7.75 7.77-19.46t-7.75-19.48q-7.75-7.77-19.46-7.77t-19.48 7.75q-7.77 7.75-7.77 19.46t7.75 19.48q7.75 7.77 19.46 7.77t19.48-7.75Zm-.92-139.85q6.38-6.51 6.38-16.17v-204.15q0-9.66-6.57-16.18-6.57-6.51-16.31-6.51-9.73 0-16.12 6.51-6.38 6.52-6.38 16.18v204.15q0 9.66 6.57 16.17 6.58 6.52 16.31 6.52 9.73 0 16.12-6.52ZM480.33-100q-78.95 0-147.89-29.92-68.95-29.92-120.76-81.71-51.81-51.79-81.75-120.78Q100-401.39 100-480.43q0-78.66 29.92-147.870 29.92-69.21 81.71-120.52 51.79-51.31 120.78-81.25Q401.39-860 480.43-860q78.66 0 147.87 29.92 69.21 29.92 120.52 81.21 51.31 51.29 81.25 120.63Q860-558.9 860-480.33q0 78.95-29.92 147.89-29.92 68.95-81.21 120.57-51.29 51.63-120.63 81.75Q558.9-100 480.33-100Zm.17-45.39q139.19 0 236.65-97.76 97.46-97.77 97.46-237.35 0-139.19-97.27-236.65-97.27-97.46-237.34-97.46-139.08 0-236.85 97.27-97.76 97.27-97.76 237.34 0 139.08 97.76 236.85 97.77 97.76 237.35 97.76ZM480-480Z"/></symbol>
+  <symbol id="i-wait" viewBox="0 -960 960 960"><path fill="currentColor" d="M312.69-459.54h334.62q9.65 0 16.17-6.57 6.52-6.58 6.52-16.31 0-9.73-6.52-16.12-6.52-6.38-16.17-6.38H312.69q-9.65 0-16.17 6.57-6.52 6.57-6.52 16.31 0 9.73 6.52 16.12 6.52 6.38 16.17 6.38ZM480.33-100q-78.95 0-147.89-29.92-68.95-29.92-120.76-81.71-51.81-51.79-81.75-120.78Q100-401.39 100-480.43q0-78.66 29.92-147.87 29.92-69.21 81.71-120.52 51.79-51.31 120.78-81.25Q401.39-860 480.43-860q78.66 0 147.87 29.92 69.21 29.92 120.52 81.21 51.31 51.29 81.25 120.63Q860-558.9 860-480.33q0 78.95-29.92 147.89-29.92 68.95-81.21 120.57-51.29 51.63-120.63 81.75Q558.9-100 480.33-100Zm.17-45.39q139.19 0 236.65-97.76 97.46-97.77 97.46-237.35 0-139.19-97.27-236.65-97.27-97.46-237.34-97.46-139.08 0-236.85 97.27-97.76 97.27-97.76 237.34 0 139.08 97.76 236.85 97.77 97.76 237.35 97.76ZM480-480Z"/></symbol>
+  <symbol id="i-doc" viewBox="0 -960 960 960"><path fill="currentColor" d="M330-250h300v-60H330v60Zm0-160h300v-60H330v60ZM262-100q-24 0-43-18t-19-44v-636q0-26 19-44t43-18h312l186 186v512q0 26-19 44t-43 18H262Zm282-546v-154H262v636h436v-482H544Z"/></symbol>
+  <symbol id="i-arrow" viewBox="0 -960 960 960"><path fill="currentColor" d="M686-450H160v-60h526L438-758l42-42 320 320-320 320-42-42 248-248Z"/></symbol>
+</svg>
+
+<script>
+const CHECKER_TEXT = 'Table 0: Note 26, table 0, row 2, both 2025 and 2024: "Sales of goods:" is bold in the prepared output, but the source page shows it in regular weight like "Purchases:" and "Royalties paid/payable:". Remove bold from the heading row spanning grid columns 1–3 (including the expanded blank cells); retain its left alignment.; Table 1: Note 26, table 1, row 3: the candidate combines "Post-employment benefits:" and "- Defined contribution plan" in one data row with 2025 amount 782 and 2024 amount 661. On source page 54, "Post-employment benefits:" is a separate label-only row, and the defined-contribution-plan row carries 782 and 661. This is a row-structure mismatch; recopy the table so the label-only row and data row are separate, with the amounts aligned to the defined-contribution-plan row. Appearance changes cannot repair this structure difference.';
+
+// Other workstreams are shown as they are today, for context.
+const OTHERS = [
+  ["Financial statements", [["Statement of financial position","Source pages 2–31","attn","Needs review"],["Profit or loss","Source pages 9–22","done","Complete"],["Comprehensive income","Source page 9","done","Complete"],["Changes in equity","Source page 10","attn","Needs review"],["Cash flows","Source pages 11–12","done","Complete"]]],
+  ["Notes", [["Accounting policies","Source pages 13–20","done","Complete"],["Corporate information","Source page 13","done","Complete"],["Issued capital","Source pages 8–21","done","Complete"],["List of notes","Source pages 13–31","done","Complete"],["Related parties","Source pages 8–24","done","Complete"]]],
+  ["Run checks", [["Notes review","Source pages 12–20","done","Complete"],["AI review","Source page 8","done","Complete"],["Notes cleanup","Note content finalized","done","Complete"],["Notes completeness","Source completeness checked","done","Complete"]]],
+];
+const OTHER_FEED = ["Starting extraction…","Reading the text of source page 8.","Reading template.","Reviewing source pages.","Adding extracted figures.","Workstream completed."];
+
+const LIVE = [
+  { name: "Corporate information", parts: ["done"], tokens: [7954],
+    feed: [["Started."],["Checking formatted notes against the source PDF page 3."],["Finished — 1 note formatted."]] },
+  { name: "Issued capital", parts: ["done"], tokens: [39885],
+    feed: [["Started."],["Zooming into source page 47 (bottom half)."],["Checking formatted notes against the source PDF."],["Finished — 2 notes formatted."]] },
+  { name: "Related party transactions", parts: ["failed"], tokens: [159291], failed: true,
+    feed: [["Started."],["Zooming into source page 53 (bottom half)."],["Checking against the source PDF — 2 differences found."],["Re-copying Note 26's table from page 54."],["Still differs from the PDF — stopped."]] },
+  { name: "List of notes", parts: ["done","done","done","done","done","working","working"], tokens: [102152,144382,197026,235575,284026,null,null],
+    feed: [["Started 7 parts of about 4 notes each."],["Parts 1–5 finished."],["Part 6: zooming into source page 61."],["Part 7: checking formatted notes against source pages 68–70."]], now: true },
+  { name: "Summary of accounting policies", parts: ["working","working"], tokens: [null,null],
+    feed: [["Started 2 parts."],["Part 1: zooming into source page 14."],["Part 2: checking formatted notes against source pages 15–17."]], now: true },
+  { name: "Property, plant and equipment", parts: ["waiting"], tokens: [null], feed: [] },
+];
+const DONE = LIVE.map((s) => (s.failed || s.parts.every((p) => p === "done")) ? s : {
+  ...s, parts: s.parts.map(() => "done"), tokens: s.tokens.map((t, i) => t ?? 90000 + i * 13000), now: false,
+  feed: [...(s.feed.length ? s.feed : [["Started."]]), [`Finished — all ${s.parts.length} part${s.parts.length > 1 ? "s" : ""} formatted.`]],
+});
+
+const ICON = { done: ["i-done","done","Complete"], working: ["i-working","working","Working"], failed: ["i-fail","attn","Failed"], waiting: ["i-wait","rest","Waiting"], attn: ["i-attn","attn","Needs review"] };
+const ico = (k) => `<svg class="ico ${ICON[k][1]}" aria-hidden="true"><use href="#${ICON[k][0]}"/></svg>`;
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" })[c]);
+const sheetState = (s) => s.failed ? "failed" : s.parts.every((p) => p === "waiting") ? "waiting"
+  : s.parts.some((p) => p !== "done") ? "working" : "done";
+const pillCount = (s) => s.parts.length > 1 && sheetState(s) === "working"
+  ? ` · ${s.parts.filter((p) => p === "done").length} of ${s.parts.length}` : "";
+
+let moment = "live", selected = "fmt", pill = null, technical = false;
+
+function fmtSummary(sheets) {
+  const parts = sheets.flatMap((s) => s.parts);
+  const done = parts.filter((p) => p === "done" || p === "failed").length;
+  const running = parts.filter((p) => p === "working").length;
+  const failed = sheets.filter((s) => s.failed).length;
+  const live = parts.some((p) => p === "working" || p === "waiting");
+  return {
+    live, failed,
+    sub: live ? `${done} of ${parts.length} parts done · ${running} running`
+      : `${sheets.length - failed} of ${sheets.length} sheets formatted · ${failed} needs a retry`,
+    icon: live ? "working" : failed ? "attn" : "done",
+    label: live ? "Working" : failed ? "Needs review" : "Complete",
+  };
+}
+
+function renderList(sheets) {
+  const f = fmtSummary(sheets);
+  const row = (id, name, sub, icon, label, live) =>
+    `<button class="wsrow ${selected === id ? "cur" : ""}" role="tab" aria-selected="${selected === id}" data-ws="${id}">
+      ${ico(icon)}<span class="stack"><span class="nm">${esc(name)}</span><span class="sub">${esc(sub)}</span></span>
+      <span class="st ${live ? "live" : ""}">${label}</span></button>`;
+  document.getElementById("list").innerHTML = OTHERS.map(([group, rows], gi) =>
+    `<div class="glabel">${group}</div>` + rows.map(([n, s, i, l], ri) => row(`o${gi}-${ri}`, n, s, i, l)).join("")
+    + (group === "Run checks" ? row("fmt", "Notes formatting", f.sub, f.icon, f.label, f.live) : "")).join("");
+  document.getElementById("recent-cur").innerHTML = `${ico(f.live ? "working" : "attn")}VTech-2024-FS.pdf`;
+}
+
+function renderOther(id) {
+  const [gi, ri] = id.slice(1).split("-").map(Number);
+  const name = OTHERS[gi][1][ri][0];
+  return `<div class="ptitle">${esc(name)}</div>
+    <div class="acthead">Recorded activity<label><input type="checkbox">Technical detail</label></div>
+    <ol class="tl">${OTHER_FEED.map((m) => `<li><span class="rail"></span><p>${esc(m)}</p></li>`).join("")}</ol>`;
+}
+
+function renderFormatting(sheets) {
+  const f = fmtSummary(sheets);
+  const sel = sheets.find((s) => s.name === pill) ?? null;
+  const pills = `<div class="pills" role="tablist" aria-label="Formatting by sheet">
+    <button class="pill" role="tab" aria-selected="${!sel}" data-pill="">All</button>
+    ${sheets.map((s) => `<button class="pill" role="tab" aria-selected="${sel === s}" data-pill="${esc(s.name)}">${ico(sheetState(s))}${esc(s.name)}${pillCount(s)}</button>`).join("")}
+  </div>`;
+
+  const failedSheet = sel ? (sel.failed ? sel : null) : (!f.live && sheets.find((s) => s.failed));
+  const wrong = failedSheet ? `<div class="err">
+      <span class="lbl">What went wrong</span>
+      <span>${sel ? "" : `<strong>${esc(failedSheet.name)}:</strong> `}A table in Note 26 is laid out differently from the PDF (page 54), and re-copying it didn't fix it. The other notes on this sheet were formatted.</span>
+      <div class="acts"><button class="btn sm" type="button">Retry ${esc(failedSheet.name)}</button><button class="btn sm" type="button">Open Note 26</button></div>
+    </div>` : "";
+
+  let feed;
+  if (sel) {
+    feed = sel.feed.map(([m], i) => ({ m, now: sel.now && i === sel.feed.length - 1 }));
+    if (!feed.length) feed = [{ m: "Waiting — starts when a slot frees up (up to 10 run at once)." }];
+  } else {
+    feed = [{ m: `Formatting ${sheets.length} sheets, up to 10 at a time.` }];
+    sheets.forEach((s) => s.feed.forEach(([m], i) => feed.push({ who: s.name, m, now: s.now && i === s.feed.length - 1 })));
+    if (sheets.some((s) => sheetState(s) === "waiting")) feed.push({ m: "Property, plant and equipment is waiting for a free slot." });
+  }
+  const tl = `<ol class="tl">${feed.map((x) => `<li class="${x.now ? "now" : ""}"><span class="rail"></span><p>${x.who ? `<span class="who">${esc(x.who)} · </span>` : ""}${esc(x.m)}</p></li>`).join("")}</ol>`;
+
+  const shown = sel ? [sel] : sheets;
+  const tech = technical ? `<div class="tech">
+      <div>${f.live ? "Running 6m 12s" : "10m 06s"} · GPT-6 Luna · ${shown.flatMap((s) => s.tokens).filter(Boolean).reduce((a, b) => a + b, 0).toLocaleString()} tokens</div>
+      <table><thead><tr><th>Call</th><th>Status</th><th class="n">Tokens</th></tr></thead><tbody>
+      ${shown.flatMap((s) => s.parts.map((p, i) => {
+        const slug = s.name.replace(/[^a-z]/gi, "");
+        const id = s.parts.length > 1 ? `notes_format_Notes-${slug}_part${i + 1}` : `Notes-${slug}`;
+        return `<tr><td class="mono">${id}</td><td>${ICON[p][2]}</td><td class="n">${s.tokens[i] != null ? s.tokens[i].toLocaleString() : "—"}</td></tr>`;
+      })).join("")}</tbody></table>
+      ${(sel ? sel.failed : sheets.some((s) => s.failed)) ? `<div><strong style="color:#000;font-weight:500">Checker finding (Related party transactions)</strong><br>${esc(CHECKER_TEXT)}</div>` : ""}
+    </div>` : "";
+
+  return `<div class="ptitle">Notes formatting</div>${pills}${wrong}
+    <div class="acthead">${f.live ? "Live activity" : "Recorded activity"}<label><input type="checkbox" id="techbox" ${technical ? "checked" : ""}>Technical detail</label></div>
+    ${tech}${tl}`;
+}
+
+function render() {
+  const sheets = moment === "live" ? LIVE : DONE;
+  renderList(sheets);
+  document.getElementById("panel").innerHTML = selected === "fmt" ? renderFormatting(sheets) : renderOther(selected);
+}
+
+document.getElementById("list").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-ws]"); if (!b) return;
+  selected = b.dataset.ws; render();
+});
+document.getElementById("panel").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-pill]"); if (!b) return;
+  pill = b.dataset.pill || null; render();
+});
+document.getElementById("panel").addEventListener("change", (e) => {
+  if (e.target.id === "techbox") { technical = e.target.checked; render(); }
+});
+document.querySelectorAll("[data-moment]").forEach((b) => b.addEventListener("click", () => {
+  moment = b.dataset.moment;
+  document.querySelectorAll("[data-moment]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+  render();
+}));
+render();
+</script>
+</body>
+</html>

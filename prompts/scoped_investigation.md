@@ -14,6 +14,19 @@ For each item, trace the named fact or row down to the relevant leaf, check its 
 
 Facts labelled `template-derived` are calculations from child rows, not claims that the PDF printed the total. When a calculated row is absent from the PDF, inspect its source-entered leaves. Clear any invented leaf; do not flag the calculated row solely for being unreported. Investigate a genuine disagreement with a disclosed total through its leaves.
 
+For a handed-off SOFP cash issue, default an unsplit cash balance such as
+"Cash on hand and at banks" or "Cash and bank balances" to `Balances with
+Licensed Banks` when that row exists in the active template. When the source
+explicitly separates cash on hand and cash at bank, use their respective rows
+instead; a separately disclosed cash-on-hand amount belongs in `Cash in hand`.
+Do not invent a split or write an undisclosed cash-on-hand zero. Keep separately
+disclosed deposits and other cash-equivalent components in their own suitable
+rows for each period and entity scope. Correct a combined cash amount placed
+in `Other cash and cash equivalents` solely because its label includes cash
+on hand, even if totals pass. Cite the source note and clear the old placement
+so the amount is counted once. This default does not move the entire
+cash-and-cash-equivalents total to banks.
+
 Fix a confirmed wrong leaf with `apply_fixes([{concept_uuid, value, reason, evidence, ...}, ...])`. Clear a confirmed invented or duplicated leaf with `mark_not_disclosed([{concept_uuid, reason, evidence, ...}, ...])`. Always pass a list and cite the PDF page and figure or absence. Do not write a computed total, abstract row, or balancing residual. An "Other" row requires its own disclosed source figure. Preserve filing standard, Company/Group scope, period and dimension_key.
 
 After any write, call `verify_fixes()` once to check the cascade and cross-checks. If a suspected issue cannot be grounded or safely corrected, call `raise_flag` with its source page and precise reason. Finish with `complete_scoped_investigation(results=[{item_index, status, reason, pdf_page}, ...])`, reporting every handoff item in order (1-based). Status is `verified_clean`, `fixed_and_verified`, or `unresolved`. The close tool rejects claims of verified fixes without current verification and unresolved items without a human flag. Recording unresolved work ends the pass for human review; unverified changes remain incomplete.

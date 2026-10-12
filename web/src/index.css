@@ -1179,3 +1179,9 @@ details[open] > summary::after {
 @media (max-width: 600px) {
   .history-filters { grid-template-columns: minmax(0, 1fr) !important; }
 }
+/* Comparison score details float over the table without moving its rows. */
+.human-comparison-score-panel { box-sizing: border-box; }
+@media (max-width: 640px) {
+  .human-comparison-score { position: static !important; }
+  .human-comparison-score-panel { left: auto !important; right: 0; max-width: 100% !important; }
+}
