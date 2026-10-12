@@ -498,14 +498,17 @@ def _apply_style(el: Tag, style: dict[str, Any]) -> None:
                 raise FormatPatchError("invalid table_width")
             current["width"] = value
         elif key == "bold":
-            if value:
-                _wrap_contents(el, "strong")
+            if value is not True:
+                raise FormatPatchError("Removing source emphasis requires source correction or human review.")
+            _wrap_contents(el, "strong")
         elif key == "italic":
-            if value:
-                _wrap_contents(el, "em")
+            if value is not True:
+                raise FormatPatchError("Removing source emphasis requires source correction or human review.")
+            _wrap_contents(el, "em")
         elif key == "underline":
-            if value:
-                _wrap_contents(el, "u")
+            if value is not True:
+                raise FormatPatchError("Removing source emphasis requires source correction or human review.")
+            _wrap_contents(el, "u")
         else:
             raise FormatPatchError(f"unsupported style key: {key}")
     if current:

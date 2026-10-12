@@ -936,6 +936,7 @@ class NotesDeps:
     # Mutable runtime state
     template_fields: list[TemplateField] = field(default_factory=list)
     pdf_page_count: int = 0
+    viewed_pdf_pages: set[int] = field(default_factory=set)
     filled_path: str = ""
     filled_filename: str = ""
     # True once this run has landed at least one successful write. Gates
@@ -3690,6 +3691,7 @@ def create_notes_agent(
             return results
 
         rendered = await _render_pages_async(ctx.deps.pdf_path, render_pages)
+        ctx.deps.viewed_pdf_pages.update(rendered)
 
         for pn in sorted(rendered):
             results.append(f"=== Page {pn} ===")
@@ -3731,6 +3733,9 @@ def create_notes_agent(
             ctx.deps.pdf_path, page, _NOTES_RENDER_DPI,
             policy=_NOTES_RENDER_POLICY, clip=clip,
         )
+        # A zoomed read is an inspection of the page, so it can ground a
+        # report_missing_mandatory_field citation like view_pdf_pages does.
+        ctx.deps.viewed_pdf_pages.add(page)
         label = "full page" if clip is None else region.strip().lower()
         return [
             f"=== Page {page} ({label}) ===",
@@ -3863,6 +3868,22 @@ def create_notes_agent(
             ctx.deps.source_gap_reported = True
             ctx.deps.write_skip_errors.append(f"Source capture requires human review: {reason}")
             return "Recorded for human review. Complete the other notes; this note remains unresolved."
+
+    if template_type == NotesTemplateType.ACC_POLICIES:
+        @agent.tool
+        def report_missing_mandatory_field(
+            ctx: RunContext[NotesDeps], row: int, target_label: str,
+            source_pages: list[int], reason: str, evidence: str,
+        ) -> str:
+            """Record an absent required policy disclosure for human review.
+
+            Inspect the source PDF pages first. Use the exact live row/label,
+            explain why no substantive disclosure supports it, and cite the
+            inspected content. This does not waive the requirement or write text.
+            """
+            from notes.mandatory_fields import record_missing_policy
+            return record_missing_policy(ctx.deps, row=row, target_label=target_label,
+                source_pages=source_pages, reason=reason, evidence=evidence)
 
     @agent.tool
     async def save_result(ctx: RunContext[NotesDeps]) -> str:

@@ -50,6 +50,22 @@ async def test_prepared_output_is_given_to_fresh_reviewer(review_harness):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["source_content", "source_provenance", "source_emphasis", "structure"])
+async def test_source_defect_never_enters_style_correction(review_harness, kind):
+    kwargs, decision, _ = review_harness
+    decision[0].update(issue_kind=kind, status="needs_correction", reason="Recorded page lacks this table.")
+    async def formatter_run(prompt):
+        raise AssertionError("Source defects cannot be repaired by style changes")
+    errors, review, corrected = await vr.review_and_correct_rows(
+        rows=kwargs["rows"], cells=kwargs["cells"], style=kwargs["style"], run_id=1,
+        db_path="unused", pdf_path="unused", sheet=kwargs["sheet"], model="unused",
+        usage=RunUsage(), formatter_run=formatter_run, output_dir="", trace_label="test",
+    )
+    assert "human review" in errors[112] and corrected == {}
+    assert review["tables"][0]["issue_kind"] == kind
+
+
+@pytest.mark.asyncio
 async def test_review_can_distinguish_double_intent_after_transport_normalization(review_harness, monkeypatch):
     from bs4 import BeautifulSoup
 

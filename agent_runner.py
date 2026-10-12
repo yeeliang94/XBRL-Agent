@@ -544,7 +544,11 @@ async def run_agent_loop(
         if spec.set_turn_counter:
             # Let the save-gate (extraction/agent.py) see the real budget.
             deps.turn_counter = iteration
-        if iteration > spec.max_iters:
+        iteration_grace = (
+            iteration == spec.max_iters + 1
+            and (Agent.is_call_tools_node(node) or Agent.is_end_node(node))
+        )
+        if iteration > spec.max_iters and not iteration_grace:
             raise IterationLimitReached(
                 f"Hit iteration limit ({spec.max_iters}). "
                 f"Agent appears stuck in a loop."
@@ -599,7 +603,7 @@ async def run_agent_loop(
                     f"{spec.call_tools_cap}-turn tool budget."
                 )
             async with node.stream(agent_run.ctx) as tool_stream:
-                async for event in _inner(tool_stream, force_bound=past_deadline):
+                async for event in _inner(tool_stream, force_bound=past_deadline or iteration_grace):
                     if isinstance(event, FunctionToolCallEvent):
                         tool_name = event.part.tool_name
                         node_tool_names.append(tool_name)
@@ -763,6 +767,18 @@ async def run_agent_loop(
                 f"the {spec.token_budget}-token budget after {iteration} "
                 f"turn(s)."
             )
+
+        if iteration_grace:
+            # Fetching the next graph node can start a non-streamed model
+            # request. Explicitly advance only the already-streamed tool node;
+            # AgentRun.next returns its successor without running that successor.
+            # Preserve terminal output, but never run a further model request.
+            if Agent.is_end_node(node):
+                break
+            next_node = await asyncio.wait_for(agent_run.next(node), spec.turn_timeout)
+            if Agent.is_end_node(next_node):
+                break
+            raise IterationLimitReached(f"Hit iteration limit ({spec.max_iters}).")
 
     _settle_last_record()
     return iteration

@@ -36,6 +36,8 @@ class TableAssessment(BaseModel):
     status: Literal["pass", "needs_correction", "unresolved"]
     source_pages: list[int]
     reason: str = Field(min_length=1)
+    issue_kind: Literal["style", "source_content", "source_provenance", "source_emphasis", "structure"] = Field(
+        default="style", description="Only style findings can use formatter correction. Source defects and structure require human review.")
 
 
 class VisualReview(BaseModel):
@@ -223,6 +225,8 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
             issue = "Visual assessment cited unseen source pages."
         elif not set(assessment.source_pages).issubset(by_row[assessment.row].source_pages):
             issue = "Visual assessment cited pages outside this note's source pages."
+        elif assessment.issue_kind != "style":
+            issue = "Source correction or human review required: " + assessment.reason
         elif assessment.status != "pass":
             issue = assessment.reason
         if issue:
@@ -263,8 +267,11 @@ async def review_and_correct_rows(
     try:
         phase("Checking formatted notes against the source PDF…")
         errors, review = await check(rows, "_visual")
+        blocked_rows = {item["row"] for item in review.get("tables", [])
+                        if item.get("issue_kind", "style") != "style"}
         correctable = {item["row"] for item in review.get("tables", [])
-                       if item["status"] == "needs_correction" and item["row"] in errors}
+                       if item["status"] == "needs_correction" and item["row"] in errors
+                       and item["row"] not in blocked_rows}
         if not correctable:
             return errors, review, {}
 
