@@ -46,7 +46,10 @@ Routing:
   The material/significant accounting-policy disclosure field needs substantive
   source content, not a title alone. Place the source introduction/overview
   there when supported; never duplicate the full policy note into it. If absent,
-  report the exact unfilled field and reason in save_result for human review.
+  call report_missing_mandatory_field with its exact row and target_label,
+  inspected source_pages, reason and source evidence for human review. Then
+  call save_result() without arguments. The report leaves the field unresolved;
+  it does not waive a mandatory disclosure or invent an overview.
 - List of Notes: keep each complete top-level disclosure in one field. Choose the
   best specific label; use the supplied catch-all if none fits the whole note.
   Distinct notes may share the catch-all field: write each note separately from

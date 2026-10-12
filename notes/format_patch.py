@@ -526,6 +526,8 @@ def _apply_style(el: Tag, style: dict[str, Any]) -> None:
             if value:
                 _wrap_contents(el, "em")
         elif key == "underline":
+            if value is False:
+                raise FormatPatchError("underline removal is unsupported; existing source emphasis must be preserved")
             if value:
                 _wrap_contents(el, "u")
         else:

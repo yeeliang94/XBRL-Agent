@@ -41,6 +41,11 @@ an amount under the wrong column, or a heading over the wrong column — set
 issue_kind to structure, mark it unresolved and describe the difference. That
 table is re-copied from the source; appearance corrections cannot fix it. Use
 issue_kind style for everything else.
+Wrong source-page identity is issue_kind source_provenance; added or missing
+words or figures are source_content; captured emphasis that must be removed
+is source_emphasis. These stay unresolved for source correction or human
+review; cite the recorded page and the exact note, table, row label and
+amounts. Do not request formatting changes to repair them.
 
 Apply the STANDARDISED MTOOL PROFILE: amount-column names, currency captions,
 period headers and figures are right-aligned, descriptions left-aligned. The

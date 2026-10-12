@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic_ai import RunContext
 
 import agent_runner
 from agent_runner import AgentLoopSpec, WallclockExceeded, run_agent_loop
@@ -95,6 +96,11 @@ class _ScriptedRun:
 
     def __aiter__(self):
         return self
+
+    async def next(self, node):
+        # Advancing a completed tool returns the next node; it does not run a
+        # new model request. Match AgentRun.next's public graph contract.
+        return self._nodes.pop(0) if self._nodes else _ModelNode()
 
     async def __anext__(self):
         if not self._nodes:
@@ -209,6 +215,111 @@ class _StallingToolsNode:
                 return False
 
         return _CM()
+
+
+@pytest.mark.asyncio
+async def test_issued_tool_node_executes_once_past_iteration_cap(monkeypatch):
+    monkeypatch.setattr(agent_runner, "Agent", _AgentShim)
+    tools_node = _ToolsNode()
+    run = _ScriptedRun([_ModelNode(), tools_node, _ModelNode()])
+    spec = AgentLoopSpec(
+        agent_role="FACE", model="test-model", turn_timeout=1,
+        phase_map={}, phase_message=lambda r, p: "", max_iters=1,
+        stream_model_nodes=False,
+    )
+
+    async def emit(_t, _d):
+        pass
+
+    with pytest.raises(agent_runner.IterationLimitReached):
+        await run_agent_loop(run, SimpleNamespace(), spec, emit, [])
+    assert tools_node.executed
+
+
+@pytest.mark.asyncio
+async def test_iteration_grace_stops_before_fetching_another_model(monkeypatch):
+    monkeypatch.setattr(agent_runner, "Agent", _AgentShim)
+    tools_node = _ToolsNode()
+
+    class Run(_ScriptedRun):
+        async def __anext__(self):
+            if tools_node.executed:
+                raise AssertionError("The next model request must never start")
+            return await super().__anext__()
+
+    spec = AgentLoopSpec(
+        agent_role="FACE", model="test-model", turn_timeout=1,
+        phase_map={}, phase_message=lambda r, p: "", max_iters=1,
+        stream_model_nodes=False, completion_predicate=lambda deps: tools_node.executed,
+    )
+
+    async def emit(_t, _d):
+        pass
+
+    await run_agent_loop(Run([_ModelNode(), tools_node]), SimpleNamespace(), spec, emit, [])
+    assert tools_node.executed
+
+
+@pytest.mark.asyncio
+async def test_iteration_grace_bounds_stalled_tool(monkeypatch):
+    monkeypatch.setattr(agent_runner, "Agent", _AgentShim)
+    spec = AgentLoopSpec(
+        agent_role="FACE", model="test-model", turn_timeout=0.1,
+        phase_map={}, phase_message=lambda r, p: "", max_iters=1,
+        stream_model_nodes=False, bound_inner_streams=False,
+    )
+
+    async def emit(_t, _d):
+        pass
+
+    with pytest.raises(asyncio.TimeoutError):
+        await run_agent_loop(_ScriptedRun([_ModelNode(), _StallingToolsNode()]),
+                             SimpleNamespace(), spec, emit, [])
+
+
+@pytest.mark.asyncio
+async def test_iteration_grace_preserves_real_terminal_output():
+    from pydantic_ai import Agent
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.messages import ModelResponse, TextPart
+    requests = []
+    def respond(messages, info):
+        requests.append(messages)
+        return ModelResponse(parts=[TextPart("Complete")])
+    agent = Agent(FunctionModel(respond), end_strategy="early")
+    spec = AgentLoopSpec(agent_role="REVIEWER", model="test-model", turn_timeout=1,
+        phase_map={}, phase_message=lambda r, p: "", max_iters=2, stream_model_nodes=False)
+    async def emit(_t, _d):
+        pass
+    async with agent.iter("Finish", deps=SimpleNamespace()) as run:
+        await run_agent_loop(run, SimpleNamespace(), spec, emit, [])
+        assert run.result.output == "Complete"
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_iteration_grace_executes_real_save_without_closing_request():
+    from pydantic_ai import Agent
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    deps = SimpleNamespace(saved=False)
+    requests = []
+    def respond(messages, info):
+        requests.append(messages)
+        return ModelResponse(parts=[ToolCallPart("save_result", {}, "save")])
+    agent = Agent(FunctionModel(respond), deps_type=SimpleNamespace, end_strategy="early")
+    @agent.tool
+    def save_result(ctx: RunContext[SimpleNamespace]) -> str:
+        ctx.deps.saved = True
+        return "Saved"
+    spec = AgentLoopSpec(agent_role="FACE", model="test-model", turn_timeout=1,
+        phase_map={}, phase_message=lambda r, p: "", max_iters=2, stream_model_nodes=False,
+        completion_predicate=lambda current: current.saved)
+    async def emit(_t, _d):
+        pass
+    async with agent.iter("Save", deps=deps) as run:
+        await run_agent_loop(run, deps, spec, emit, [])
+    assert deps.saved and len(requests) == 1
 
 
 @pytest.mark.asyncio

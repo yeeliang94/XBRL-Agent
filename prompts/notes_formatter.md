@@ -83,6 +83,9 @@ STANDARDISED MTOOL PROFILE:
   centres them; descriptions are left-aligned.
 - Word source-styled tables keep their own formatting and are not listed in
   `layout_tables`.
+- Content, source-page identity and captured-emphasis defects are not
+  layout problems. Leave them for source correction or human review rather
+  than repeating a layout.
 
 MTOOL EXPORT BOUNDARIES (docs/MTOOL-NOTES-AUTHORING.md):
 - Keep `double` where the source has a real double line. Export/copy code

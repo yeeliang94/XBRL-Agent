@@ -20,6 +20,7 @@ from pathlib import Path
 import tempfile
 import threading
 import time
+import unicodedata
 from typing import Any, Callable
 from typing import Annotated, Literal
 
@@ -34,7 +35,7 @@ from ingest.pdf_sidecar import (
 from notes._rate_limit import RATE_LIMIT_MAX_RETRIES, compute_backoff_delay, is_rate_limit_error
 from utils.atomic_io import replace_with_retry
 
-CONTRACT_VERSION = 15
+CONTRACT_VERSION = 17
 # Capture, verify and repair rounds per page. The third round runs only while
 # specific table findings remain and the previous repair changed the page.
 _MAX_PREPARATION_ROUNDS = 3
@@ -178,11 +179,20 @@ class SourceUncertainty(BaseModel):
     reconstructed_text: str = ""
 
 
+class CandidateCellEvidence(BaseModel):
+    table: int = Field(ge=0, strict=True, description="Zero-based candidate table index.")
+    row: int = Field(ge=0, strict=True, description="Zero-based direct row index within that table.")
+    cell: int = Field(ge=0, strict=True, description="Zero-based direct cell index within that row.")
+    text: str = Field(description="Exact candidate cell text from the supplied manifest, including blank cells.")
+
+
 class TableRelationship(BaseModel):
     source_relationship: str = Field(description="Read from the source image: table section, period, column headings and label/amount relationships.")
     candidate_relationship: str = Field(description="Corresponding relationships actually present in the supplied HTML; state missing content explicitly.")
     matches: bool | None = Field(default=None, description="True for agreement, false for a demonstrated mismatch, null for uncertain assessment.")
     repair_instruction: str = Field(default="", description="Specific source-supported correction for a mismatch, preserving unaffected content.")
+    candidate_cells: list[CandidateCellEvidence] = Field(default_factory=list,
+        description="Candidate heading/label/amount cells supporting this section's relationship. Cite exact coordinates and text; never describe absent cells as present.")
 
 
 class PreparationReceipt(BaseModel):
@@ -450,6 +460,12 @@ _PROMPTS = {
         "For each source table section, first inventory its period, exact column "
         "headings (including units), and label/amount relationships from the image. "
         "Then record the corresponding candidate relationships in table_relationships. "
+        "Bind each relationship to candidate_cells from the supplied manifest: exact "
+        "table/row/cell indices and text, including its headings, labels and amounts. "
+        "Every figure (amount or year) named in candidate_relationship must be cited "
+        "in that relationship's own candidate_cells, with at least one label or heading. "
+        "Cite evidence for every candidate table. If a source section is absent from "
+        "the candidate, report matches false rather than inventing candidate cells. "
         "Use one concise entry per section, covering all rows; create a separate "
         "entry for each mismatch with a specific repair_instruction. Sections with "
         "different years or maturity headings need separate entries even if adjacent. "
@@ -764,19 +780,94 @@ def _is_systemic_preparation_error(error: BaseException) -> bool:
         error, (PreparationError, UnexpectedModelBehavior))
 
 
+# Typographic look-alikes a model may substitute when quoting manifest text.
+_CELL_TEXT_FOLD = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
+                                 "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-",
+                                 "\u2014": "-", "\u2212": "-"})
+
+
+def _normalise_cell_text(text: str) -> str:
+    """Comparison form of cell text: the evidence check asks whether the model
+    cited a real cell, so spacing and quote/dash look-alikes must not fail it."""
+    return " ".join(unicodedata.normalize("NFKC", text).translate(_CELL_TEXT_FOLD).split())
+
+
+def _candidate_table_cells(html: str) -> list[dict]:
+    soup = BeautifulSoup(html, "html.parser")
+    return [
+        {"table": ti, "row": ri, "cell": ci, "text": " ".join(cell.get_text(" ").split())}
+        for ti, table in enumerate(soup.find_all("table"))
+        for ri, row in enumerate(tr for tr in table.find_all("tr") if tr.find_parent("table") is table)
+        for ci, cell in enumerate(row.find_all(["th", "td"], recursive=False))
+    ]
+
+
 def _table_verdict_unverified(*, has_tables: bool, verdict: bool | None,
-                              relationships: list[dict]) -> bool:
+                              relationships: list[dict], candidate_cells: list[dict]) -> bool:
     # A negative verdict may identify a source table missing from the HTML.
     # Neither a routine positive verdict nor an omitted verdict needs table
     # evidence on a prose-only page.
     if not has_tables and not relationships:
         return verdict is False
-    return verdict is not True or not relationships or any(
+    if verdict is not True or not relationships or any(
         relationship.get("matches") is not True
         or not relationship.get("source_relationship", "").strip()
         or not relationship.get("candidate_relationship", "").strip()
         for relationship in relationships
-    )
+    ):
+        return True
+    actual = {(c["table"], c["row"], c["cell"]): _normalise_cell_text(c["text"])
+              for c in candidate_cells}
+    covered_tables = set()
+    labelled_tables = {key[0] for key, text in actual.items() if _has_letters(text)}
+    for relationship in relationships:
+        evidence = relationship.get("candidate_cells") or []
+        cited_texts, cited_tables = [], set()
+        for raw in evidence:
+            try:
+                cell = CandidateCellEvidence.model_validate(raw)
+            except ValueError:
+                return True
+            key = (cell.table, cell.row, cell.cell)
+            if key not in actual or _normalise_cell_text(cell.text) != actual[key]:
+                return True
+            if actual[key]:
+                cited_texts.append(actual[key])
+                cited_tables.add(cell.table)
+        if not _relationship_backed_by_cells(
+                relationship["candidate_relationship"], cited_texts,
+                needs_label=bool(cited_tables & labelled_tables) or not cited_tables):
+            return True
+        covered_tables |= cited_tables
+    return covered_tables != {c["table"] for c in candidate_cells}
+
+
+# An amount, year or other figure as written in a cell or a relationship:
+# "13,949", "(1,234)", "12.5", "2024". Commas are dropped before comparing.
+_FIGURE_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _has_letters(text: str) -> bool:
+    return re.search(r"[^\W\d_]", text) is not None
+
+
+def _figures(text: str) -> set[str]:
+    return {m.replace(",", "").rstrip(".") for m in _FIGURE_RE.findall(text)}
+
+
+def _relationship_backed_by_cells(candidate_relationship: str, cited_texts: list[str],
+                                  *, needs_label: bool) -> bool:
+    """A positive relationship must be bound to the cells it describes.
+
+    It needs at least one cited label or heading cell (unless its table has
+    no text cells at all), and every figure the candidate_relationship
+    mentions (amounts, years) must appear in its own cited cells. Citing one
+    real heading for a whole table is not evidence for the amounts under it.
+    """
+    if needs_label and not any(_has_letters(text) for text in cited_texts):
+        return False
+    cited_figures = set().union(*(_figures(text) for text in cited_texts))
+    return _figures(_normalise_cell_text(candidate_relationship)) <= cited_figures
 
 
 def _write_checkpoint_with_evidence(path: Path, checkpoint: dict) -> None:
@@ -1228,8 +1319,10 @@ async def prepare_document(
                            for region in noise_regions) and not focused_images:
                         focused_images = await focused(number, rotation)
                     png = await render(number, rotation)
+                    candidate_cells = _candidate_table_cells(html)
                     check = await request("verifying", [png, *focused_images], {
                         "page": number, "html": html, "scope": "single supplied page only",
+                        "candidate_cells": candidate_cells,
                         "view_rotation": rotation,
                         "best_effort": bool(repair),
                         "previous_findings": previous_findings,
@@ -1247,6 +1340,7 @@ async def prepare_document(
                     table_structure_unverified = _table_verdict_unverified(
                         has_tables=has_tables, verdict=table_structure_verified,
                         relationships=table_relationships,
+                        candidate_cells=candidate_cells,
                     )
                     # Specific, repairable table findings: model-demonstrated
                     # mismatches plus deterministic row/column misalignment.

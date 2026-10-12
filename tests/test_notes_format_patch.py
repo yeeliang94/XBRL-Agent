@@ -10,7 +10,7 @@ from notes.format_patch import FormatPatchError, apply_sheet_patch
 from notes.html_sanitize import sanitize_notes_html
 
 
-@pytest.mark.parametrize("style", ["bold", "italic"])
+@pytest.mark.parametrize("style", ["bold", "italic", "underline"])
 def test_emphasis_removal_is_explicitly_refused(style):
     html = "<table><tr><td><strong>Capital</strong></td></tr></table>"
     with pytest.raises(FormatPatchError, match="removal"):

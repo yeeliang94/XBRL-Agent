@@ -102,6 +102,57 @@ def _deps(filled_path: str = "", verify=None):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("verified", [False, True])
+async def test_timeout_salvage_retains_work_with_explicit_incomplete_flag(tmp_path, verified):
+    import coordinator
+
+    deps = _deps(str(tmp_path / "filled.xlsx"), _clean_verify() if verified else None)
+    deps.face_line_refs = [{"label": "Cash", "note_num": 3, "section": "Assets"}]
+    deps.face_coverage_receipt = None
+    deps.face_coverage_errors = []
+    deps.face_coverage_warnings = []
+    agent = _make_slow_turning_agent(0)
+
+    async def stalled(*args, **kwargs):
+        raise asyncio.TimeoutError
+
+    events = asyncio.Queue()
+    with patch.object(coordinator, "create_extraction_agent", return_value=(agent, deps)), \
+         patch.object(coordinator, "run_agent_loop", stalled):
+        result = await coordinator._run_single_agent(
+            statement_type=StatementType.SOFP, variant="CuNonCu",
+            pdf_path="unused", template_path="unused", model="test-model",
+            output_dir=str(tmp_path), event_queue=events,
+        )
+    assert result.status == "succeeded" and result.workbook_path == deps.filled_path
+    assert result.flag and "Cash" in result.flag
+    assert result.warnings
+    complete = [events.get_nowait() for _ in range(events.qsize())]
+    assert any(e["event"] == "complete" and e["data"].get("flag") == result.flag for e in complete)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verification", ["missing", "pdf_mismatch"])
+async def test_timeout_without_coverage_hints_still_flags_unverified_figures(tmp_path, verification):
+    import coordinator
+    verify = _clean_verify() if verification == "pdf_mismatch" else None
+    if verify is not None:
+        verify.matches_pdf = False
+    deps = _deps(str(tmp_path / "filled.xlsx"), verify)
+    deps.face_line_refs = []
+    agent = _make_slow_turning_agent(0)
+    async def stalled(*args, **kwargs):
+        raise asyncio.TimeoutError
+    with patch.object(coordinator, "create_extraction_agent", return_value=(agent, deps)), \
+         patch.object(coordinator, "run_agent_loop", stalled):
+        result = await coordinator._run_single_agent(statement_type=StatementType.SOFP,
+            variant="CuNonCu", pdf_path="unused", template_path="unused", model="test-model",
+            output_dir=str(tmp_path))
+    assert result.status == "succeeded" and result.flag
+    assert result.warnings == []
+
+
+@pytest.mark.asyncio
 async def test_wallclock_cap_fails_run_without_workbook(tmp_path):
     from coordinator import run_extraction
 
