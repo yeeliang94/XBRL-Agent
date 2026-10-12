@@ -382,10 +382,16 @@ def _resolve_target(soup: BeautifulSoup, target: dict[str, Any]) -> Iterable[Tag
                 yield from _row_cells(tr, cols)
         return
     if target.get("range") == "numeric_cells":
-        for cell in (cell for tr in _table_rows(table)
-                     for cell in tr.find_all(["th", "td"], recursive=False)):
-            if _looks_numeric(cell.get_text(" ", strip=True)):
-                yield cell
+        # The first cell of a multi-cell row is the description column; a
+        # standalone "2024" there is a row label, not an amount (same rule as
+        # the decorator's should_right_align_cell).
+        for tr in _table_rows(table):
+            cells = tr.find_all(["th", "td"], recursive=False)
+            for index, cell in enumerate(cells):
+                if index == 0 and len(cells) > 1:
+                    continue
+                if _looks_numeric(cell.get_text(" ", strip=True)):
+                    yield cell
         return
     if "cell" in target:
         cell = target["cell"]
@@ -450,10 +456,22 @@ def _looks_numeric(text: str) -> bool:
     return bool(re.fullmatch(r"\(?-?\d[\d,]*(?:\.\d+)?\)?", s))
 
 
+# Table-cell properties a layout owns on PDF tables. Preparation emits no
+# presentation styles and person-styled notes never reach the formatter, so
+# these can only be an earlier formatter decision that a new layout replaces.
+LAYOUT_OWNED_PREFIXES = ("border", "text-align", "background", "padding")
+
+
 def _apply_style(el: Tag, style: dict[str, Any]) -> None:
     current = _parse_style(el.get("style") or "")
     for key, value in style.items():
-        if key in STYLE_TO_CSS:
+        if key == "reset_formatting":
+            # Compiler-only (notes/table_layout.py); not in the AI schema.
+            if value is not True or el.name not in ("td", "th"):
+                raise FormatPatchError("reset_formatting applies only to table cells")
+            current = {k: v for k, v in current.items()
+                       if not k.startswith(LAYOUT_OWNED_PREFIXES)}
+        elif key in STYLE_TO_CSS:
             current[STYLE_TO_CSS[key]] = _border_value(value)
         elif key == "clear_border":
             sides = value if isinstance(value, list) else SIDES
@@ -498,9 +516,13 @@ def _apply_style(el: Tag, style: dict[str, Any]) -> None:
                 raise FormatPatchError("invalid table_width")
             current["width"] = value
         elif key == "bold":
+            if value is False:
+                raise FormatPatchError("bold removal is unsupported; existing source emphasis must be preserved")
             if value:
                 _wrap_contents(el, "strong")
         elif key == "italic":
+            if value is False:
+                raise FormatPatchError("italic removal is unsupported; existing source emphasis must be preserved")
             if value:
                 _wrap_contents(el, "em")
         elif key == "underline":

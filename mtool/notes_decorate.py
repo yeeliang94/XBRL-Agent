@@ -34,13 +34,36 @@ def is_numeric_cell_text(text: str) -> bool:
     return bool(_NUMERIC_CELL_RE.match(text.strip()))
 
 
-def should_right_align_cell(text: str, index: int, cells_in_row: int) -> bool:
+def should_right_align_cell(text: str, index: int, cells_in_row: int,
+                            colspan: int = 1) -> bool:
     """Right-align accountant-numeric cells EXCEPT the first cell of a
     multi-column row (the row-label column stays left even if it reads like a
-    number, e.g. a "2024" period label). Mirrors tableAlign.ts."""
-    if index == 0 and cells_in_row > 1:
+    number, e.g. a "2024" period label). A first cell spanning several columns
+    is a section label too (a full-width "2024" row). Mirrors tableAlign.ts."""
+    if index == 0 and (cells_in_row > 1 or colspan > 1):
         return False
     return is_numeric_cell_text(text)
+
+
+def heading_rows(table: Tag) -> set[int]:
+    """``id()`` of the table's leading heading rows: thead rows, or all-``th``
+    rows before the first row holding a data cell.
+
+    Only these get heading styling. A ``th`` further down labels its row (a
+    row label or a total captured as heading cells) and renders like a data
+    cell, so bold appears only where the source or the formatter asks for it
+    (VTech notes 19 and 71). Mirrors headingRows in tableAlign.ts.
+    """
+    ids: set[int] = set()
+    for row in table.find_all("tr"):
+        if row.find_parent("table") is not table:
+            continue
+        cells = _cells(row)
+        if row.parent.name == "thead" or (cells and all(c.name == "th" for c in cells)):
+            ids.add(id(row))
+            continue
+        break
+    return ids
 
 
 def _amount_columns(table: Tag) -> set[int]:
@@ -252,6 +275,9 @@ def _list_marker_css(o: NotesTableStyle) -> str:
         return f" list-style-type: {o.list_marker};"
     return ""
 
+
+# A heading cell below the table's heading rows renders as a data cell.
+_BODY_TH = " font-weight: 400;"
 
 # The classic totals double rule — matches the editor toolbar's saved
 # "totals double underline" (3px double black).
@@ -945,6 +971,7 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     # stay left while numeric value columns go right.
     columns_by_table = {id(table): _amount_columns(table)
                         for table in soup.find_all("table")}
+    heading_row_ids = {row_id for table in soup.find_all("table") for row_id in heading_rows(table)}
     for row in soup.find_all("tr"):
         cells = _cells(row)
         parent_table = row.find_parent("table")
@@ -957,8 +984,7 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         amount_cols = columns_by_table.get(id(parent_table), set())
         has_spans = any(cell.has_attr("colspan") or cell.has_attr("rowspan")
                         for cell in cells)
-        header_row = (row.parent.name == "thead" or
-                      bool(cells) and all(cell.name == "th" for cell in cells))
+        header_row = id(row) in heading_row_ids
         # Stripped ONCE on the finished addition rather than on `cell_base`
         # alone: `_header_extra` contributes its own `border-bottom` (the house
         # header rule), so a base-only strip let that one edge through and made
@@ -975,7 +1001,8 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         totals_row = (style.totals_double_underline and not row_source_styled
                       and _is_totals_row(row))
         for idx, cell in enumerate(cells):
-            numeric = (should_right_align_cell(cell.get_text(), idx, len(cells))
+            numeric = (should_right_align_cell(cell.get_text(), idx, len(cells),
+                                               _span(cell, "colspan"))
                        or (header_row and not has_spans and idx > 0
                            and idx in amount_cols))
             align = " text-align: right;" if numeric else " text-align: left;"
@@ -985,8 +1012,11 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
                 # cannot express the default 0.75px line. Omit padding and
                 # other boilerplate, but retain the same borders as full output.
                 addition = _border_css(style)
-                if cell.name == "th":
+                if cell.name == "th" and header_row:
                     addition += _header_extra(style).lstrip() + align + extra
+                elif cell.name == "th":
+                    # <th> defaults to bold and centred; a row label must not.
+                    addition += _BODY_TH.lstrip() + align + extra
                 elif numeric:
                     addition += "text-align: right;" + extra
                 else:
@@ -994,10 +1024,12 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
                 addition = _themed(addition)
                 if addition:
                     _merge_cell_style(cell, addition)
-            elif cell.name == "th":
+            elif cell.name == "th" and header_row:
                 _merge_cell_style(
                     cell,
                     _themed(cell_base + _header_extra(style) + align + extra))
+            elif cell.name == "th":
+                _merge_cell_style(cell, _themed(cell_base + _BODY_TH + align + extra))
             else:
                 _merge_cell_style(cell, _themed(cell_base + align + extra))
 

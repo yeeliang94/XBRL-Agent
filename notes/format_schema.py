@@ -1,146 +1,64 @@
-"""Typed shape of the notes-formatter's style patch.
+"""Typed shape of the notes formatter's answer.
 
-The formatter used to return free-form text that `_parse_json_patch` cleaned
-up — stripping ```json fences, then hunting for the first balanced object when
-the model wrapped its answer in prose. That repair exists because the model
-was asked for JSON in the prompt and sometimes did not comply. Declaring the
-shape lets the provider enforce it instead.
-
-This uses the validator's style vocabulary except for text underline. The
-validator retains that legacy operation for stored payload compatibility, but
-the live formatter must use table borders for source-visible rules. A schema
-wider than the validator would only move failures downstream. `format_patch`
-stays the authority — every model answer is re-validated there.
-
-Keep the two in step. The vocabularies:
-
-    targets   all | table | header | total_rows | numeric_cells,
-              plus {"cell": {r, c}}, {"rows": [...]}, {"blocks": "all"}
-    styles    border_{top,right,bottom,left} | clear_border | fill |
-              text_align | bold | italic | indent | padding |
-              space_before | space_after | table_width
+Declaring the shape lets the provider enforce it instead of parsing free text.
+The formatter describes what each table IS (``TableLayout`` in
+``notes/table_layout.py``: column roles, row roles, lines) and code compiles
+that into formatting. Prose blocks keep a small style vocabulary. Every answer
+is still re-validated against the live note and the content-preservation gate.
 """
 from __future__ import annotations
 
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-# `format_patch.BORDER_WIDTHS` / `BORDER_STYLES` / `TEXT_ALIGN` / `SIDES`.
-BorderWidth = Literal["0.75px", "1px", "2px", "3px"]
-BorderStyle = Literal["solid", "double", "dashed", "dotted", "hidden"]
-Side = Literal["top", "right", "bottom", "left"]
+from notes.table_layout import TableLayout
+
 TextAlign = Literal["left", "center", "right", "justify"]
-TargetRange = Literal["all", "table", "header", "total_rows", "numeric_cells"]
 
 
-class BorderSpec(BaseModel):
-    """One edge. `_border_value` also accepts the bare string "hidden"."""
-    width: BorderWidth = "0.75px"
-    style: BorderStyle = "solid"
-    color: str = Field(
-        default="#000000",
-        description='#rrggbb, or a theme name: black, grey900, grey700, '
-                    'grey500, grey300, white, orange, header_fill.',
-    )
+class BlockTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    blocks: Literal["all"] = Field(description="Top-level paragraphs, headings and list items")
 
 
-# `_border_value` short-circuits on the literal "hidden" before the dict path.
-Border = Union[BorderSpec, Literal["hidden"]]
-
-
-class CellRef(BaseModel):
-    r: int = Field(ge=1, description="1-based row within the table")
-    c: int = Field(ge=1, description="1-based column within the table")
-
-
-class Target(BaseModel):
-    """What the operation applies to. Exactly one addressing mode is used;
-    `table` is required for every mode except `blocks`."""
-    table: Optional[int] = Field(
-        default=None, ge=0, description="Zero-based index of the table in the cell",
-    )
-    range: Optional[TargetRange] = Field(
-        default=None,
-        description='"all" every cell; "table" the table element itself '
-                    '(table_width only); "header" the first row; "total_rows" '
-                    'every row whose text contains "total"; "numeric_cells" '
-                    "cells that look like figures.",
-    )
-    cols: Optional[List[int]] = Field(
-        default=None,
-        description="1-based column restriction for total_rows / rows. A "
-                    "summation rule usually runs under the amount columns only.",
-    )
-    cell: Optional[CellRef] = None
-    rows: Optional[List[int]] = Field(
-        default=None, description="1-based row numbers within the table",
-    )
-    blocks: Optional[Literal["all"]] = Field(
-        default=None,
-        description="Top-level paragraphs / headings / list items. Used "
-                    "INSTEAD of `table`, never with it.",
-    )
-
-
-class Style(BaseModel):
-    """AI-authored style keys; legacy text underline is deliberately absent."""
-    border_top: Optional[Border] = None
-    border_right: Optional[Border] = None
-    border_bottom: Optional[Border] = None
-    border_left: Optional[Border] = None
-    clear_border: Optional[List[Side]] = Field(
-        default=None, description="Erase these edges.",
-    )
-    fill: Optional[str] = Field(
-        default=None,
-        description='#rrggbb, a theme name, or "transparent" to clear a fill.',
-    )
+class BlockStyle(BaseModel):
+    """Prose-block appearance; tables are described by TableLayout instead."""
+    model_config = ConfigDict(extra="forbid")
     text_align: Optional[TextAlign] = None
-    bold: Optional[bool] = None
-    italic: Optional[bool] = None
     indent: Optional[str] = Field(default=None, description='e.g. "1em"')
-    padding: Optional[str] = Field(
-        default=None, description='cell inner spacing, e.g. "4px 8px"',
-    )
-    space_before: Optional[str] = Field(
-        default=None, description='paragraph spacing above, e.g. "6px"',
-    )
-    space_after: Optional[str] = Field(
-        default=None, description='paragraph spacing below, e.g. "6px"',
-    )
-    table_width: Optional[str] = Field(
-        default=None,
-        description='e.g. "100%" — only with target {"table": N, "range": "table"}',
-    )
+    space_before: Optional[str] = Field(default=None, description='e.g. "6px"')
+    space_after: Optional[str] = Field(default=None, description='e.g. "6px"')
 
 
-class Operation(BaseModel):
-    target: Target
-    style: Style
+class BlockOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    target: BlockTarget
+    style: BlockStyle
 
 
-class CellPatch(BaseModel):
+class NoteLayout(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     row: int = Field(ge=1, description="The notes-sheet row number")
-    operations: List[Operation]
-
-
-class SheetFormatPatch(BaseModel):
-    """The formatter's whole answer."""
-    sheet: str = Field(description="Must equal the sheet you were given.")
-    cells: List[CellPatch] = Field(
+    tables: List[TableLayout] = Field(
         default_factory=list,
-        description="Empty when nothing needs restyling — that is a valid answer.",
+        description="Exactly one layout per table listed in this row's layout_tables.",
     )
-    format_summary: str = Field(description="Short user-facing description.")
+    blocks: List[BlockOperation] = Field(default_factory=list)
 
 
-def patch_to_dict(patch: SheetFormatPatch) -> dict:
-    """The plain dict `format_patch.apply_sheet_patch` expects.
+class SheetLayout(BaseModel):
+    """The formatter's whole answer: what each table is, not how to style it."""
+    sheet: str = Field(description="Must equal the sheet you were given.")
+    # Before `notes` so a long answer states it early; optional because a
+    # missing one-line summary must not discard every layout (live run 349).
+    format_summary: str = Field(default="", description="Short user-facing description.")
+    notes: List[NoteLayout] = Field(
+        default_factory=list,
+        description="One entry per note row to format; empty when nothing needs formatting.",
+    )
 
-    `exclude_none` is load-bearing, not tidiness: `_apply_style` iterates the
-    style keys it is given, so a serialised `"border_top": null` would reach
-    `_border_value(None)` and raise, and a `"table": null` would defeat the
-    `blocks` branch of `_resolve_target`.
-    """
-    return patch.model_dump(exclude_none=True)
+
+def layout_to_dict(layout: SheetLayout) -> dict:
+    """Plain dict for screening and retry prompts; drops unset optional keys."""
+    return layout.model_dump(exclude_none=True)

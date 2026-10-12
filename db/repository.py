@@ -2277,11 +2277,26 @@ def save_notes_format_snapshots(
         )
     else:
         now = pass_started_at
-        conn.execute(
-            "DELETE FROM notes_format_snapshots WHERE run_id = ? AND sheet = ? "
-            "AND COALESCE(julianday(created_at), 0) < julianday(?)",
-            (run_id, sheet, pass_started_at),
-        )
+        # SQLite julianday rounds fractional seconds to milliseconds. An older
+        # snapshot can therefore compare equal to a newly started pass. Parse
+        # the stored timestamps at full precision under the same write lock.
+        if not conn.in_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+        started = datetime.fromisoformat(pass_started_at)
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        older = []
+        for old in conn.execute("SELECT row,created_at FROM notes_format_snapshots WHERE run_id=? AND sheet=?",
+                                (run_id, sheet)):
+            try:
+                created = datetime.fromisoformat(old[1])
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                created = datetime.min.replace(tzinfo=timezone.utc)
+            if created < started:
+                older.append((run_id, sheet, old[0]))
+        conn.executemany("DELETE FROM notes_format_snapshots WHERE run_id=? AND sheet=? AND row=?", older)
     conn.executemany(
         "INSERT INTO notes_format_snapshots(run_id, sheet, row, html, created_at) "
         "VALUES (?, ?, ?, ?, ?) ON CONFLICT(run_id, sheet, row) DO UPDATE SET "

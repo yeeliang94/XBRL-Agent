@@ -370,10 +370,12 @@ async def test_auto_format_limits_model_requests_across_sheets(auto_format_db):
     assert result["formatted"] == 2
 
 
-def test_parts_of_one_pass_share_the_revert_snapshot(auto_format_db):
+def test_parts_of_one_pass_share_the_revert_snapshot(auto_format_db, monkeypatch):
     """Each part keeps the rows other parts of the same pass snapshotted and
     replaces only an older pass's snapshot."""
     db_path, run_id, _ = auto_format_db
+    monkeypatch.setattr(repo, "_now", lambda: "2026-10-11T00:00:00Z")
+    monkeypatch.setattr(auto_format, "_precise_now", lambda: "2026-10-11T00:00:00.000300Z")
     with repo.db_session(db_path) as conn:
         repo.save_notes_format_snapshots(conn, run_id, "S", {1: "old-1", 9: "old-9"})
         started = auto_format._precise_now()
