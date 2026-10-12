@@ -10,34 +10,26 @@ from notes.format_patch import FormatPatchError, apply_sheet_patch
 from notes.html_sanitize import sanitize_notes_html
 
 
-def test_prompt_instructs_amount_column_header_and_figure_alignment():
-    # Amount headers and figures must share right alignment even when the source
-    # differs, without applying that rule to the description column.
-    from pathlib import Path
-    prompt = (Path(__file__).resolve().parents[1]
-              / "prompts" / "notes_formatter.md").read_text(encoding="utf-8")
-    assert "currency-caption cell" in prompt
-    assert "actual row label and amounts" in prompt
-    assert "a subtotal rule belongs to its subtotal row" in prompt
-    assert "RM'000" in prompt
-    assert "text_align" in prompt
-    assert 'Right-align all amount-column headers and figures with `text_align: "right"`' in prompt
-    assert "column names, year/period headers" in prompt
-    assert "even when" in prompt
-    assert "source PDF shows those headers centred or left-aligned" in prompt
-    assert "row targets restricted to the amount columns" in prompt
-    assert "Keep description and row-label columns left-aligned" in prompt
-    assert "takes precedence over source alignment" in prompt
+@pytest.mark.parametrize("style", ["bold", "italic", "underline"])
+def test_emphasis_removal_is_explicitly_refused(style):
+    html = "<table><tr><td><strong>Capital</strong></td></tr></table>"
+    with pytest.raises(FormatPatchError, match="removal"):
+        apply_sheet_patch({4: html}, {"cells": [{"row": 4, "operations": [
+            {"target": {"table": 0, "cell": {"r": 1, "c": 1}}, "style": {style: False}},
+        ]}]})
 
 
-def test_prompt_pins_the_standardized_mtool_profile():
+def test_prompt_pins_the_layout_contract_and_profile():
+    # The formatter describes structure; code owns alignment and line styling.
     from pathlib import Path
     prompt = (Path(__file__).resolve().parents[1]
               / "prompts" / "notes_formatter.md").read_text(encoding="utf-8")
     assert "STANDARDISED MTOOL PROFILE" in prompt
-    assert "Do not copy decorative brand colours" in prompt
-    assert "shared theme supplies the ordinary grid" in prompt.lower()
-    assert "header_fill" in prompt
+    assert "RESOLVED OUTPUT APPEARANCE" in prompt
+    assert "house style is borderless with no header shading" in prompt
+    for role in ("`label`", "`amount`", "`date`", "`text`"):
+        assert role in prompt
+    assert "Line thickness is not reproduced" in prompt
 
 
 def test_formatter_request_budget_stays_below_pydantic_cap(monkeypatch):
@@ -74,9 +66,7 @@ def test_applies_one_coloured_top_border_to_one_cell(width):
         }],
     }
     out = apply_sheet_patch({1: html}, patch)
-    from notes.format_schema import BorderSpec
     expected_width = width or "0.75px"
-    assert BorderSpec(**({"width": width} if width else {})).width == expected_width
     assert f"border-top: {expected_width} solid #666666" in out.rows[1]
     assert "A" in out.rows[1] and ">1<" in out.rows[1]
 
@@ -304,6 +294,23 @@ def test_cols_filter_restricts_row_targets_to_amount_columns():
     assert "border-bottom: 3px double" in cells[5]  # amount col 3
 
 
+def test_numeric_cells_leave_description_column_year_labels_left():
+    """Runs 347-349: a standalone "2024" row label was right-aligned."""
+    html = ("<table><tr><td>2024</td><td></td></tr>"
+            "<tr><td>Lease liability</td><td>1,398,300</td></tr>"
+            "<tr><td>2,195</td></tr></table>")
+    patch = {"cells": [{"row": 1, "operations": [{
+        "target": {"table": 0, "range": "numeric_cells"},
+        "style": {"text_align": "right"},
+    }]}]}
+    out = apply_sheet_patch({1: html}, patch).rows[1]
+    cells = re.findall(r"<td[^>]*>[^<]*</td>", out)
+    assert "text-align" not in cells[0]
+    assert "text-align: right" in cells[3]
+    # A lone cell is not a description column; it stays eligible.
+    assert "text-align: right" in cells[4]
+
+
 def test_cols_filter_validates_shape():
     html = "<table><tr><td>Total</td><td>10</td></tr></table>"
     patch = {
@@ -441,17 +448,18 @@ def test_malformed_padding_and_spacing_are_rejected():
 
 _SHEET = "Notes-Listofnotes"
 _TABLE_HTML = "<table><tr><td>Total</td><td>10</td></tr></table>"
-_GOOD_PATCH = json.dumps({
-    "sheet": _SHEET,
-    "cells": [{
-        "row": 112,
-        "operations": [{
-            "target": {"table": 0, "range": "all"},
-            "style": {"text_align": "right"},
-        }],
-    }],
-    "format_summary": "Right-aligned numeric columns.",
-})
+
+
+def _note(row=112, columns=("label", "amount"), lines=()):
+    """One note row's layout: a single two-column table by default."""
+    return {"row": row, "tables": [{"table": 0, "columns": list(columns), "lines": list(lines)}]}
+
+
+def _layout(*notes, sheet=_SHEET, summary="Described the amount column."):
+    return json.dumps({"sheet": sheet, "notes": list(notes), "format_summary": summary})
+
+
+_GOOD_PATCH = _layout(_note())
 
 
 @pytest.mark.asyncio
@@ -552,7 +560,7 @@ def formatter_db(tmp_path):
 
 async def _run_formatter_with_fake_agent(
     monkeypatch, formatter_db, fake_agent, *, style_sources=None, sheet=_SHEET,
-    visual_check=None,
+    visual_check=None, rows=None,
 ):
     from pathlib import Path
 
@@ -571,7 +579,7 @@ async def _run_formatter_with_fake_agent(
         run_id=run_id, db_path=str(db_path), pdf_path=pdf_path,
         sheet=sheet, model="fake-model",
         output_dir=str(Path(pdf_path).parent),
-        style_sources=style_sources,
+        style_sources=style_sources, rows=rows,
     )
 
 
@@ -589,11 +597,9 @@ async def test_visual_failure_is_corrected_once_before_saving(monkeypatch, forma
         assert kwargs["usage"] is checks[0]["usage"]
         assert kwargs["limits"] is checks[0]["limits"]
         return {}, {"tables": [{"row": 112, "table": 0, "status": "pass"}]}
-    correction = {"sheet": _SHEET, "cells": [{"row": 112, "operations": [{
-        "target": {"table": 0, "rows": [1], "cols": [2]},
-        "style": {"border_bottom": {"style": "double", "width": "3px"}},
-    }]}], "format_summary": "Closing rule corrected."}
-    fake = _FakeAgent([_GOOD_PATCH, json.dumps(correction)])
+    correction = _layout(_note(lines=[{"after_row": 1, "from_col": 2, "to_col": 2, "kind": "double"}]),
+                         summary="Closing rule corrected.")
+    fake = _FakeAgent([_GOOD_PATCH, correction])
     result = await _run_formatter_with_fake_agent(
         monkeypatch, formatter_db, fake, visual_check=check,
     )
@@ -618,8 +624,7 @@ async def test_real_visual_check_saves_only_verified_notes(monkeypatch, formatte
     with repo.db_session(db) as conn:
         repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113,
                                label="Other", html=_TABLE_HTML, source_pages=[4])
-    good = json.loads(_GOOD_PATCH)
-    patch = {**good, "cells": [*good["cells"], {**good["cells"][0], "row": 113}]}
+    patch = json.loads(_layout(_note(), _note(113)))
 
     async def render(_path, page, _dpi, **_kwargs):
         if failure == "missing_image" and page == 4:
@@ -662,8 +667,7 @@ async def test_failed_visual_recheck_saves_only_unrelated_passed_note(monkeypatc
     with repo.db_session(db) as conn:
         repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113,
                                label="Other", html=_TABLE_HTML, source_pages=[3])
-    good = json.loads(_GOOD_PATCH)
-    patch = {**good, "cells": [*good["cells"], {**good["cells"][0], "row": 113}]}
+    patch = json.loads(_layout(_note(), _note(113)))
     calls = []
     async def check(**kwargs):
         calls.append(set(kwargs["rows"]))
@@ -671,7 +675,7 @@ async def test_failed_visual_recheck_saves_only_unrelated_passed_note(monkeypatc
         return {112: finding}, {"tables": [
             {"row": 112, "table": 0, "status": "needs_correction", "reason": finding},
         ]}
-    fake = _FakeAgent([json.dumps(patch), json.dumps({"sheet": _SHEET, "cells": []})])
+    fake = _FakeAgent([json.dumps(patch), _layout()])
     result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
     assert not result["ok"] and result["changed_rows"] == 1
     assert result["error_type"] == "visual_review_failed"
@@ -699,8 +703,7 @@ async def test_visual_budgets_preserve_verified_rows(monkeypatch, formatter_db, 
     with repo.db_session(db) as conn:
         repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113,
                                label="Other", html=_TABLE_HTML, source_pages=[3])
-    good = json.loads(_GOOD_PATCH)
-    patch = {**good, "cells": [*good["cells"], {**good["cells"][0], "row": 113}]}
+    patch = json.loads(_layout(_note(), _note(113)))
     formatter_usages = []
 
     class BudgetAgent(_FakeAgent):
@@ -737,7 +740,7 @@ async def test_visual_budgets_preserve_verified_rows(monkeypatch, formatter_db, 
             "tables": [], "error_type": "turn_budget",
         }
 
-    fake = BudgetAgent([json.dumps(patch), json.dumps({"sheet": _SHEET, "cells": []})])
+    fake = BudgetAgent([json.dumps(patch), _layout()])
     result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
     expected_saved = {112, 113} if stage == "formatter_full" else set() if stage == "initial_check" else {113}
     assert result["changed_rows"] == len(expected_saved)
@@ -764,7 +767,7 @@ async def test_noop_proposal_requires_visual_evidence(monkeypatch, formatter_db)
     async def unavailable(**kwargs):
         assert kwargs["rows"][112] == _TABLE_HTML
         return {112: "Visual renderer unavailable."}, {"tables": []}
-    fake = _FakeAgent([json.dumps({"sheet": _SHEET, "cells": []})])
+    fake = _FakeAgent([_layout()])
     result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=unavailable)
     assert result["error_type"] == "visual_review_failed"
     assert result["changed_rows"] == 0 and result["failed_rows"] == [112]
@@ -780,7 +783,7 @@ async def test_noop_visual_decision_does_not_certify_concurrent_edit(monkeypatch
             conn.execute("UPDATE notes_cells SET html = ? WHERE run_id = ? AND row = 112",
                          ("<p>Human edited this note during review.</p>", run_id))
         return {}, {"tables": []}
-    fake = _FakeAgent([json.dumps({"sheet": _SHEET, "cells": []})])
+    fake = _FakeAgent([_layout()])
     result = await _run_formatter_with_fake_agent(
         monkeypatch, formatter_db, fake, visual_check=edited_during_check,
     )
@@ -795,9 +798,7 @@ async def test_visual_correction_cannot_target_another_note(monkeypatch, formatt
         return {112: "Wrong rule."}, {"tables": [
             {"row": 112, "table": 0, "status": "needs_correction"},
         ]}
-    good = json.loads(_GOOD_PATCH)
-    correction = {**good, "cells": [{**good["cells"][0], "row": 999}]}
-    fake = _FakeAgent([_GOOD_PATCH, json.dumps(correction)])
+    fake = _FakeAgent([_GOOD_PATCH, _layout(_note(999))])
     result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
     assert not result["ok"] and result["changed_rows"] == 0
     assert result["failed_rows"] == [112]
@@ -832,11 +833,8 @@ async def test_mixed_sheet_formatter_writes_and_snapshots_only_html(
         assert {cell.row for cell in eligible if cell.sheet == target.sheet} == {target.row}
         # One manifest scan protects selection cost as mixed-sheet cells grow.
         assert sum("FROM template_slots" in query for query in queries) == 1
-    operation = {"target": {"table": 0, "range": "numeric_cells"}, "style": {"text_align": "right"}}
-    patch = {"sheet": target.sheet, "cells": [{"row": target.row, "operations": [operation]}]}
-    if include_numeric:
-        patch["cells"].append({"row": numeric.row, "operations": [operation]})
-    fake = _FakeAgent([json.dumps(patch), json.dumps({"sheet": target.sheet, "cells": []})])
+    notes = [_note(target.row)] + ([_note(numeric.row)] if include_numeric else [])
+    fake = _FakeAgent([_layout(*notes, sheet=target.sheet), _layout(sheet=target.sheet)])
     result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, sheet=target.sheet)
     assert result["changed_rows"] == 1
     assert result["ok"] is (not include_numeric)
@@ -972,9 +970,7 @@ async def test_retry_formats_unfinished_note_without_restyling_finished_note(
             label="Unfinished note", html=_TABLE_HTML,
             evidence="Page 3", source_pages=[3], style_source=unfinished_source,
         )
-    patch = json.loads(_GOOD_PATCH)
-    patch["cells"][0]["row"] = 113
-    fake = _FakeAgent([json.dumps(patch)])
+    fake = _FakeAgent([_layout(_note(113))])
 
     result = await _run_formatter_with_fake_agent(
         monkeypatch, formatter_db, fake,
@@ -1036,16 +1032,8 @@ async def test_formatter_noop_repair_preserves_original_validation_failure(
     """An empty repair after an invalid target is a safe content no-op, but
     it is not evidence that formatting was unnecessary or successful.
     """
-    invalid = json.loads(_GOOD_PATCH)
-    invalid["cells"][0]["operations"][0]["target"] = {
-        "table": 7, "range": "all",
-    }
-    no_op = {
-        "sheet": _SHEET,
-        "cells": [],
-        "format_summary": "No safe existing target could be selected.",
-    }
-    fake = _FakeAgent([json.dumps(invalid), json.dumps(no_op)])
+    invalid = {"row": 112, "tables": [{"table": 7, "columns": ["label", "amount"]}]}
+    fake = _FakeAgent([_layout(invalid), _layout(summary="No safe layout could be described.")])
 
     result = await _run_formatter_with_fake_agent(
         monkeypatch, formatter_db, fake,
@@ -1054,7 +1042,7 @@ async def test_formatter_noop_repair_preserves_original_validation_failure(
     assert result["ok"] is False
     assert "degraded" not in result
     assert result["error_type"] == "validation_failed"
-    assert "table 7 does not exist" in result["error"]
+    assert "exactly one layout for each table [0]" in result["error"]
     assert result["changed_rows"] == 0
     assert fake.calls == 2
 
@@ -1088,27 +1076,15 @@ async def test_formatter_preserves_valid_note_when_other_note_repair_is_empty(
             label="Another note", html=other_html,
             evidence="Page 3", source_pages=[3], style_source="unstyled",
         )
-    mixed = json.loads(_GOOD_PATCH)
-    mixed["cells"].append({
-        "row": 113, "operations": [{
-            "target": {"table": 0, "range": "numeric_cells"},
-            "style": {"text_align": "right"},
-        }],
-    })
-    fixed = {**mixed, "cells": [{
-        "row": 113, "operations": [{
-            "target": {"table": 0, "range": "all"},
-            "style": {"text_align": "right"},
-        }],
-    }]}
+    wrong_width = _note(113, columns=["label"])
     repair_output = {
-        "empty": json.dumps({**mixed, "cells": []}),
-        "invalid": json.dumps({**mixed, "cells": mixed["cells"][1:]}),
+        "empty": _layout(),
+        "invalid": _layout(wrong_width),
         "malformed": "not json",
         "outside_failed_rows": _GOOD_PATCH,
-        "success": json.dumps(fixed),
+        "success": _layout(_note(113)),
     }[repair]
-    fake = _FakeAgent([json.dumps(mixed), repair_output])
+    fake = _FakeAgent([_layout(_note(), wrong_width), repair_output])
     result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
 
     assert result["changed_rows"] == (2 if repair == "success" else 1)
@@ -1134,20 +1110,203 @@ async def test_formatter_preserves_valid_note_when_other_note_repair_is_empty(
         assert 113 not in snapshots
 
 
-def test_partition_rejects_entire_note_including_duplicate_entries():
-    from notes.formatting_agent import _partition_valid_patch
+@pytest.mark.asyncio
+async def test_retry_never_overwrites_a_person_edited_note(monkeypatch, formatter_db):
+    from db import repository as repo
+    db_path, _, run_id = formatter_db
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113, label="Edited",
+                               html=_TABLE_HTML, source_pages=[3], style_source="human")
+    fake = _FakeAgent([_layout(_note())])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert result["ok"] and result["person_edited_rows"] == [113]
+    assert '"row": 113' not in json.dumps(fake.prompts[0], default=str)
+    with repo.db_session(db_path) as conn:
+        rows = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
+    assert rows[113].html == _TABLE_HTML and rows[113].style_source == "human"
+    assert rows[112].style_source == "formatter"
 
-    good = json.loads(_GOOD_PATCH)["cells"][0]
-    bad = {"row": 112, "operations": [{
-        "target": {"table": 7, "range": "all"},
-        "style": {"text_align": "right"},
-    }]}
-    accepted, rejected, errors = _partition_valid_patch(
+    only_person = _FakeAgent([])
+    result = await _run_formatter_with_fake_agent(
+        monkeypatch, formatter_db, only_person, rows=[113])
+    assert not result["ok"] and result["person_edited_rows"] == [113]
+    assert only_person.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_visual_correction_replaces_the_first_layout_entirely(monkeypatch, formatter_db):
+    """The correction compiles onto the pass's original HTML, so bold and lines
+    from the rejected first layout cannot survive into the saved note."""
+    from db import repository as repo
+    checks = []
+
+    async def check(**kwargs):
+        checks.append(kwargs["rows"][112])
+        if len(checks) == 1:
+            return {112: "Row 1 is not bold in the source."}, {"tables": [
+                {"row": 112, "table": 0, "status": "needs_correction"}]}
+        return {}, {"tables": [{"row": 112, "table": 0, "status": "pass"}]}
+
+    first = {**_note(lines=[{"after_row": 1, "from_col": 2, "to_col": 2}]),
+             "tables": [{"table": 0, "columns": ["label", "amount"],
+                         "rows": [{"row": 1, "bold": True}],
+                         "lines": [{"after_row": 1, "from_col": 2, "to_col": 2}]}]}
+    fake = _FakeAgent([_layout(first), _layout(_note())])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
+    assert result["ok"]
+    assert "<strong>" in checks[0] and "border-bottom" in checks[0]
+    db, _, run_id = formatter_db
+    with repo.db_session(db) as conn:
+        saved = repo.list_notes_cells_for_run(conn, run_id)[0].html
+    assert "<strong>" not in saved and "border-bottom" not in saved
+    assert "text-align: right" in saved
+    assert result["layouts"]["112"]["tables"][0].get("rows", []) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recopied", [True, False])
+async def test_structure_finding_is_recopied_then_reformatted(monkeypatch, formatter_db, recopied):
+    """A wrongly copied table skips the style correction, goes back to
+    preparation, and the rebuilt note gets one ordinary formatting pass."""
+    import notes.table_recopy as tr
+    checks = []
+
+    async def check(**kwargs):
+        checks.append(set(kwargs["rows"]))
+        if len(checks) == 1:
+            return {112: "Total captured as heading cells."}, {"tables": [
+                {"row": 112, "table": 0, "status": "unresolved", "issue_kind": "structure",
+                 "reason": "Total captured as heading cells."}]}
+        return {}, {"tables": [{"row": 112, "table": 0, "status": "pass"}]}
+
+    calls = []
+
+    async def recopy(**kwargs):
+        calls.append(kwargs["findings"])
+        if not recopied:
+            return {"rebuilt_rows": [], "errors": {112: "Table 0 could not be re-copied: x"},
+                    "corrected": [], "usage": {"prompt_tokens": 0, "completion_tokens": 0}}
+        return {"rebuilt_rows": [112], "errors": {}, "corrected": [{"row": 112}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 1}}
+
+    monkeypatch.setattr(tr, "recopy_tables", recopy)
+    fake = _FakeAgent([_GOOD_PATCH, _GOOD_PATCH])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
+    assert calls == [{112: [(0, "Total captured as heading cells.")]}]
+    if recopied:
+        # No style correction for a structural finding; one fresh formatting pass.
+        assert fake.calls == 2 and checks == [{112}, {112}]
+        assert result["ok"] and "Re-copied 1 table" in result["summary"]
+    else:
+        assert fake.calls == 1 and not result["ok"]
+        assert "could not be re-copied" in result["row_errors"][112]
+
+
+@pytest.mark.asyncio
+async def test_failed_reformat_after_recopy_keeps_saved_rows_and_receipts(monkeypatch, formatter_db):
+    """A provider error after the re-copy must not discard the first pass's
+    saved rows; only the re-copied row stays unresolved."""
+    import notes.table_recopy as tr
+    from db import repository as repo
+    db_path, _, run_id = formatter_db
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113, label="Other",
+                               html=_TABLE_HTML, source_pages=[3])
+
+    async def check(**kwargs):
+        return {112: "Total captured as heading cells."}, {"tables": [
+            {"row": 112, "table": 0, "status": "unresolved", "issue_kind": "structure",
+             "reason": "Total captured as heading cells."}]}
+
+    async def recopy(**_kwargs):
+        return {"rebuilt_rows": [112], "errors": {}, "corrected": [{"row": 112}],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0}}
+
+    monkeypatch.setattr(tr, "recopy_tables", recopy)
+
+    class _Down(_FakeAgent):
+        async def run(self, prompt, **kwargs):
+            if self.calls:
+                raise RuntimeError("provider unavailable")
+            return await super().run(prompt, **kwargs)
+
+    fake = _Down([_layout(_note(), _note(113))])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
+    assert not result["ok"] and result["changed_rows"] == 1
+    assert list(result["verified_rows"]) == ["113"]
+    assert result["failed_rows"] == [112] and "provider unavailable" in result["row_errors"][112]
+    with repo.db_session(db_path) as conn:
+        rows = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
+    assert rows[113].style_source == "formatter"
+
+
+@pytest.mark.asyncio
+async def test_recopy_pass_keeps_first_pass_revert_and_save_warning(monkeypatch, formatter_db):
+    """The post-re-copy pass must not wipe the first pass's revert snapshot,
+    and a failed save to the prepared document is reported, not hidden."""
+    import notes.table_recopy as tr
+    from db import repository as repo
+    db_path, _, run_id = formatter_db
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113, label="Other",
+                               html=_TABLE_HTML, source_pages=[3])
+    checks = []
+
+    async def check(**kwargs):
+        checks.append(kwargs)
+        if len(checks) == 1:
+            return {112: "Total captured as heading cells."}, {"tables": [
+                {"row": 112, "table": 0, "status": "unresolved", "issue_kind": "structure",
+                 "reason": "Total captured as heading cells."}]}
+        return {}, {"tables": [{"row": 112, "table": 0, "status": "pass"}]}
+
+    async def recopy(**_kwargs):
+        return {"rebuilt_rows": [112], "errors": {}, "corrected": [{"row": 112}],
+                "warnings": {112: "Table re-copied for this run only."},
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0}}
+
+    monkeypatch.setattr(tr, "recopy_tables", recopy)
+    fake = _FakeAgent([_layout(_note(), _note(113)), _GOOD_PATCH])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
+    assert result["ok"] and result["changed_rows"] == 2
+    assert "Row 112: Table re-copied for this run only." in result["summary"]
+    with repo.db_session(db_path) as conn:
+        assert set(repo.fetch_notes_format_snapshots(conn, run_id, _SHEET)) == {112, 113}
+
+
+@pytest.mark.asyncio
+async def test_person_save_during_formatting_keeps_ownership(monkeypatch, formatter_db):
+    """A person saving identical HTML mid-pass still owns the note: the final
+    write re-checks ownership, not only the HTML."""
+    from db import repository as repo
+    db_path, _, run_id = formatter_db
+
+    def person_saves(_call):
+        with repo.db_session(db_path) as conn:
+            repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=112,
+                                   label="Disclosure of other notes", html=_TABLE_HTML,
+                                   source_pages=[3], style_source="human")
+
+    fake = _FakeAgent([_layout(_note())], on_call=person_saves)
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert result["changed_rows"] == 0 and result["person_edited_rows"] == [112]
+    assert "112" not in result["verified_rows"]
+    with repo.db_session(db_path) as conn:
+        cell = repo.list_notes_cells_for_run(conn, run_id)[0]
+    assert cell.style_source == "human" and cell.html == _TABLE_HTML
+
+
+def test_partition_rejects_entire_note_including_duplicate_entries():
+    from notes.formatting_agent import _partition_layout
+
+    good = _note()
+    bad = {"row": 112, "tables": [{"table": 7, "columns": ["label", "amount"]}]}
+    accepted, rejected, errors = _partition_layout(
         {112: _TABLE_HTML, 113: _TABLE_HTML},
-        {"cells": [good, {**good, "row": 113}, bad]},
+        {"notes": [good, _note(113), bad]},
     )
     assert [cell["row"] for cell in accepted["cells"]] == [113]
-    assert rejected["cells"] == [good, bad]
+    assert rejected["notes"] == [good, bad]
     assert list(errors) == [112]
 
 
@@ -1207,12 +1366,8 @@ async def test_formatter_rejects_text_underline_with_table_border(
 ):
     from db import repository as repo
 
-    patch = json.loads(_GOOD_PATCH)
-    patch["cells"][0]["operations"] = [{
-        "target": {"table": 0, "cell": {"r": 1, "c": 2}},
-        "style": {"border_bottom": "hidden", "underline": True},
-    }]
-    fake = _FakeAgent([json.dumps(patch), json.dumps({**patch, "cells": []})])
+    note = {**_note(), "blocks": [{"target": {"blocks": "all"}, "style": {"underline": True}}]}
+    fake = _FakeAgent([_layout(note), _layout()])
     result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
     assert result["ok"] is False
     assert result["error_type"] == "validation_failed"
@@ -1368,16 +1523,6 @@ def test_bold_is_idempotent_across_repeated_patches():
     assert second.count("<strong>") == 1
 
 
-@pytest.mark.parametrize("key", ["bold", "italic", "underline"])
-def test_emphasis_removal_is_explicitly_refused(key):
-    patch = {"cells": [{"row": 1, "operations": [{
-        "target": {"table": 0, "cell": {"r": 1, "c": 1}},
-        "style": {key: False},
-    }]}]}
-    with pytest.raises(FormatPatchError, match="source.*human review"):
-        apply_sheet_patch({1: "<table><tr><td><strong>100</strong></td></tr></table>"}, patch)
-
-
 def test_formatter_agent_and_server_resolve_the_same_firm_theme(monkeypatch):
     """These drifted: the agent fell back to {} while the app fell back to the
     house style, so it reasoned about a boxed grid over a ruled display."""
@@ -1391,11 +1536,10 @@ def test_formatter_agent_and_server_resolve_the_same_firm_theme(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("repair_ok", [True, False])
 async def test_formatter_malformed_row_gets_one_repair(monkeypatch, formatter_db, repair_ok):
-    invalid = json.loads(_GOOD_PATCH)
-    invalid["cells"][0]["row"] = "112"
+    invalid = json.loads(_layout({**_note(), "row": "112"}))
     fake = _FakeAgent([
         json.dumps(invalid),
-        _GOOD_PATCH if repair_ok else json.dumps({**invalid, "cells": []}),
+        _GOOD_PATCH if repair_ok else _layout(),
     ])
     result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
     assert result["ok"] is repair_ok
@@ -1412,10 +1556,10 @@ async def test_formatter_malformed_row_gets_one_repair(monkeypatch, formatter_db
 async def test_formatter_one_cell_row_repair_receives_only_existing_target(
     monkeypatch, formatter_db,
 ):
-    """Run-128 regression: a one-cell row cannot accept ``cols: [2]``.
+    """Run-128 regression: a one-column table cannot take two column roles.
 
-    The repair turn receives the closed target catalog and can correct the
-    patch to column 1 without weakening deterministic validation.
+    The repair turn receives the grid coordinates and can correct the layout
+    without weakening deterministic validation.
     """
     from db import repository as repo
 
@@ -1427,42 +1571,30 @@ async def test_formatter_one_cell_row_repair_receives_only_existing_target(
             label="Disclosure", html=one_cell,
             evidence="Page 3", source_pages=[3], style_source="unstyled",
         )
-    invalid = {
-        "sheet": _SHEET,
-        "cells": [{"row": 112, "operations": [{
-            "target": {"table": 0, "rows": [1], "cols": [2]},
-            "style": {"text_align": "right"},
-        }]}],
-        "format_summary": "Align currency caption",
-    }
-    corrected = json.loads(json.dumps(invalid))
-    corrected["cells"][0]["operations"][0]["target"]["cols"] = [1]
     fake = _FakeAgent([
-        json.dumps(invalid), json.dumps(corrected),
+        _layout(_note(columns=["label", "amount"])), _layout(_note(columns=["amount"])),
     ])
 
     result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
 
     assert result["ok"] is True
     assert result["changed_rows"] == 1
-    assert '"c": 1' in fake.prompts[1]
-    assert '"c": 2' not in fake.prompts[1]
+    assert '"grid_columns": 1' in fake.prompts[1]
+    assert "2 roles but the table has 1" in fake.prompts[1]
     with repo.db_session(db_path) as conn:
         row = next(c for c in repo.list_notes_cells_for_run(conn, run_id) if c.row == 112)
     assert "text-align: right" in row.html
 
 
-def test_partition_validates_merged_operations():
-    from notes.formatting_agent import _partition_valid_patch
+def test_partition_rejects_a_note_described_twice():
+    # Two layouts for one note are ambiguous; neither is applied.
+    from notes.formatting_agent import _partition_layout
 
-    good = json.loads(_GOOD_PATCH)["cells"][0]
-    accepted, rejected, errors = _partition_valid_patch(
-        {112: _TABLE_HTML}, {"cells": [good, good]},
+    accepted, rejected, errors = _partition_layout(
+        {112: _TABLE_HTML}, {"notes": [_note(), _note()]},
     )
-    assert not errors
-    assert not rejected["cells"]
-    assert accepted["cells"] == [{**good, "operations": good["operations"] * 2}]
-    assert apply_sheet_patch({112: _TABLE_HTML}, accepted).changed_rows == 1
+    assert not accepted["cells"] and len(rejected["notes"]) == 2
+    assert "more than once" in errors[112]
 
 
 def test_spacing_patch_preserves_and_styles_nested_source_heading_levels():

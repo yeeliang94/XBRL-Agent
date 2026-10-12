@@ -1425,6 +1425,59 @@ Key invariants:
     and sides retained. Missing or misplaced intent and degraded output still
     fail; the substitution alone does not. The evidence boundary is pinned by
     `tests/test_notes_visual_review.py::test_review_can_distinguish_double_intent_after_transport_normalization`.
+    Formatter and reviewer read lines from `notes/rule_map.py`: one entry per
+    physical horizontal line, resolved from both cells by the border-collapse
+    winner and named by the row it sits below (runs 347-349 read mirrored edges
+    as two rules). Single-rule thickness is not reproduced or judged; every
+    single rule is 0.75px. Both prompts receive the resolved appearance (house
+    default borderless, no fill). `numeric_cells` skips the description column.
+    Pinned by `tests/test_notes_rule_map.py` and `tests/test_notes_format_patch.py`.
+    **Table layouts (2026-10-11):** the formatter returns a `SheetLayout`
+    (`notes/format_schema.py`): per table, one role per GRID column
+    (label/amount/date/text), optional row roles (bold, indent, shaded) and
+    lines `{after_row, from_col, to_col, kind}`. `notes/table_layout.py`
+    validates each note row against its live tables (table count, grid width,
+    row/column bounds, overlapping lines, override targets; a line must meet
+    whole cell edges on at least one side, which carries it, and never cross a
+    rowspan; `frame: grid` boxes every cell) and compiles it
+    into patch operations, starting with a `reset_formatting` of owned cell
+    properties (border, text-align, background, padding). Code owns alignment:
+    right only when every covered column is amount/date. Invalid rows enter
+    the bounded repair; valid rows proceed. A visual correction compiles onto
+    the pass's ORIGINAL HTML, so it replaces the first layout entirely; bold
+    is additive (source and earlier-pass emphasis are indistinguishable). The
+    reviewer keeps every evidence input and receives the layout as context.
+    Person ownership: the editor PATCH route saves `style_source = "human"`;
+    `content_origin = human_modified` cannot identify a person because the
+    notes reviewer AI also stamps it. The formatter skips `human` rows even on
+    retry (`person_edited_rows`). Earlier person edits carry no marker. Pinned
+    by `tests/test_notes_table_layout.py`, `tests/test_notes_format_patch.py`,
+    `tests/test_notes_visual_review.py` and `tests/test_server_notes_cells_api.py`.
+    **Table re-copy (schema v52):** a visual assessment with
+    `issue_kind = structure` (the copied table differs from the PDF: heading vs
+    data cells, rows, columns, merges) is never a pass and never enters the
+    style correction round. `notes/table_recopy.py` maps it to exactly one
+    source table block and re-copies it with preparation's own capture and
+    verification prompts (`ingest/document_preparation.recapture_table`).
+    Gates: nothing else on the page changes, identical word/figure multiset,
+    a real structural change, `_table_shape_issues` clean, and an independent
+    verified page with `table_structure_verified` true. The block and every
+    cell placed from it are corrected in one transaction (compare-and-swap on
+    content revision; history in `notes_source_block_revisions`), so cells
+    still equal the render of their blocks. Refused, leaving the finding:
+    person- or AI-edited cells (`human`/`human_modified`), cells that no longer
+    equal their render (including cleanup receipts), Word or non-prepared
+    sources, continued/grouped tables, and blocks used on another sheet. The
+    prepared document on disk is updated (`record_table_correction`) so a rerun
+    of the upload keeps the fix. Rebuilt rows get one ordinary formatting pass.
+    Heading styling (bold, fill, header rule) applies only to a table's
+    leading heading rows (thead, or all-`th` rows before the first data row);
+    a `th` lower down is a row label or a captured total and renders as a data
+    cell (`heading_rows` in `mtool/notes_decorate.py`, `headingRows` in
+    `web/src/lib/tableAlign.ts`). Pinned by
+    `tests/test_mtool_notes_decorate.py` and `tableAlign.test.ts`.
+    Pinned by `tests/test_table_recopy.py`, `tests/test_db_schema_v52.py`,
+    `tests/test_notes_format_patch.py` and `tests/test_notes_visual_review.py`.
     Partial saves retain
     `ok=false`, `validation_failed` or `visual_review_failed`, `failed_rows`, and per-row errors, alongside
     the actual `changed_rows`. Snapshots include only saved rows. The review
@@ -3192,7 +3245,11 @@ row whose occupied column count differs from its table
 exempt; a label followed only by blank cells is also exempt when the
 complete independent assessment and table relationships confirm source
 agreement without uncertainties. Missing evidence or a demonstrated mismatch
-keeps that row subject to repair. A lone amount or dash is never exempt),
+keeps that row subject to repair. A lone amount or dash is never exempt, nor
+is a lone header cell ending in a currency/unit caption such as RM or RM'000:
+that is an amount-column heading captured over the description column; an
+all-heading-cell row holding amounts below the first data row is a total
+captured as headings and is repaired too),
 overrides a positive Boolean verdict and triggers focused repair.
 Malformed row nesting, including an empty row wrapping further rows, also
 triggers repair even when all amounts and column counts survive. Unrepaired
