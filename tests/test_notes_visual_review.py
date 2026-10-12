@@ -298,3 +298,15 @@ async def test_rejected_citation_never_reaches_recopy(review_harness, pages):
     assert 112 in errors
     assert result["tables"][0]["status"] == "unresolved"
     assert vr.structure_findings({"failed_rows": [112], "visual_review": result}) == {}
+
+
+@pytest.mark.asyncio
+async def test_duplicate_assessment_never_reaches_recopy(review_harness):
+    """Greptile PR #34: a duplicate structure assessment skipped the evidence
+    checks and, as the last entry for its table, still requested a re-copy."""
+    kwargs, decision, _ = review_harness
+    decision.append({"row": 112, "table": 0, "status": "unresolved", "issue_kind": "structure",
+                     "source_pages": [], "reason": "Total row is heading cells."})
+    errors, result = await vr.check_visual_rows(**kwargs)
+    assert "duplicate" in errors[112]
+    assert vr.structure_findings({"failed_rows": [112], "visual_review": result}) == {}

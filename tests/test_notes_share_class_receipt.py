@@ -145,3 +145,13 @@ def test_receipt_accepted_after_an_unconfirmed_exit_clears_that_warning():
     _submit_share_classes_impl(deps, [_entry("Ordinary shares", ORDINARY, 32)])
     share_class_exit_check(deps)
     assert SHARE_CLASS_UNCONFIRMED not in deps.write_skip_errors
+
+
+def test_receipt_goes_stale_when_capital_cells_change_within_the_same_category():
+    """Greptile PR #34: a second unresolved class overwrote the first class's
+    empty-dimension cells and the old receipt still counted as confirmed."""
+    deps = _deps("")
+    _submit_share_classes_impl(deps, [_entry("Ordinary shares", "", 32)])
+    assert _share_class_save_gate(deps) is None
+    deps.numeric_cells[0] = {**deps.numeric_cells[0], "value": 5_000_000}
+    assert "changed after the share-class receipt" in _share_class_save_gate(deps)
