@@ -8,6 +8,7 @@ function makeRuns(): RunSummaryJson[] {
     {
       id: 1,
       created_at: "2026-04-10T09:30:00Z",
+      updated_at: "2026-04-10T09:30:00Z",
       pdf_filename: "FINCO-Audited-2021.pdf",
       status: "completed",
       session_id: "sess-1",
@@ -20,6 +21,7 @@ function makeRuns(): RunSummaryJson[] {
     {
       id: 2,
       created_at: "2026-04-09T15:00:00Z",
+      updated_at: "2026-04-09T15:00:00Z",
       pdf_filename: "ACME-2023.pdf",
       status: "failed",
       session_id: "sess-2",
@@ -70,6 +72,15 @@ describe("HistoryList", () => {
     expect(screen.getByText(/server exploded/i)).toBeTruthy();
   });
 
+  test("shows the last saved update alongside running documents", () => {
+    const runs = makeRuns();
+    runs[0] = { ...runs[0], status: "running", updated_at: "2026-10-12T10:30:00Z" };
+    render(<HistoryList runs={runs} onRunSelected={() => {}} />);
+    expect(screen.getByRole("columnheader", { name: "Last updated" })).toBeTruthy();
+    expect(screen.getByText(new Date(runs[0].updated_at!).toLocaleString())).toBeTruthy();
+    expect(screen.getByText("Working")).toBeTruthy();
+  });
+
   test("clicking a row fires onRunSelected with the id", () => {
     const onRunSelected = vi.fn<(id: number) => void>();
     render(<HistoryList runs={makeRuns()} onRunSelected={onRunSelected} />);
@@ -100,6 +111,7 @@ describe("HistoryList", () => {
       {
         id: 7,
         created_at: "2026-04-26T12:00:00Z",
+        updated_at: "2026-04-26T12:00:00Z",
         pdf_filename: "Draft.pdf",
         status: "draft",
         session_id: "sess-7",
@@ -120,6 +132,7 @@ describe("HistoryList", () => {
       {
         id: 7,
         created_at: "2026-04-26T12:00:00Z",
+        updated_at: "2026-04-26T12:00:00Z",
         pdf_filename: "Draft.pdf",
         status: "draft",
         session_id: "sess-7",

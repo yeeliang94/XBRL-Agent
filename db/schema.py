@@ -241,7 +241,8 @@ from pathlib import Path
 # v52 keeps the history of source tables re-copied from the PDF after a
 # structural visual-review finding. The block is corrected in place; this
 # table retains the earlier capture, the finding and the verifier's receipt.
-CURRENT_SCHEMA_VERSION = 52
+# v53 tracks saved document activity for History and Recent.
+CURRENT_SCHEMA_VERSION = 53
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -279,6 +280,7 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
     CREATE TABLE IF NOT EXISTS runs (
         id                    INTEGER PRIMARY KEY AUTOINCREMENT,
         created_at            TEXT NOT NULL,           -- ISO 8601 UTC
+        updated_at            TEXT NOT NULL DEFAULT '', -- latest saved document activity
         pdf_filename          TEXT NOT NULL,
         status                TEXT NOT NULL,           -- 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'aborted'
         notes                 TEXT,
@@ -2109,6 +2111,93 @@ _V33_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 )
 
 
+# Document activity is persisted at the database boundary so every writer,
+# including direct SQL edits and deletion of saved content, uses the same clock.
+_RUN_ACTIVITY_TABLES = (
+    "run_agents", "run_events", "run_incidents", "model_usage_calls",
+    "cross_checks", "run_concept_facts", "concept_fact_events",
+    "run_concept_conflicts", "notes_cells", "notes_cell_tombstones",
+    "reviewer_flags", "run_review_tasks", "run_notes_review_state",
+    "notes_review_flags", "notes_review_tasks", "notes_format_tasks",
+    "notes_cleanup_receipts", "notes_coverage_rows", "notes_source_generations",
+    "notes_disposition_events", "notes_integrity_tasks", "notes_integrity_runs",
+    "human_files", "mtool_fill_receipts", "notes_source_block_revisions",
+)
+
+
+# These document-owned records are derived, historical or accompanied by an
+# authoritative write above. Keep exclusions explicit as the schema grows.
+_RUN_ACTIVITY_EXCLUDED_TABLES = {
+    "fact_source_receipts": "Source evidence is replaced with the canonical fact write.",
+    "human_file_facts": "Comparison input is replaced alongside human_files.",
+    "human_file_notes": "Comparison input is replaced alongside human_files.",
+    "run_fact_snapshots": "Immutable reviewer input; review tasks own activity.",
+    "eval_scores": "Evaluation metadata does not change the filing document.",
+    "notes_cell_provenance": "Source lineage accompanies notes_cells writes.",
+    "run_notes_inventory": "Frozen extraction input; agent activity owns updates.",
+    "run_notes_cell_snapshots": "Immutable reviewer input; review tasks own activity.",
+    "notes_format_snapshots": "Immutable formatter input; formatter tasks own activity.",
+    "run_lineage": "Run ancestry is recorded alongside creation of the child run.",
+    "notes_block_usages": "Source usage accompanies canonical facts or notes writes.",
+    "notes_block_placements": "Source placement accompanies notes_cells writes.",
+}
+
+
+def _install_run_activity_tracking(conn: sqlite3.Connection) -> None:
+    clock = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+    conn.execute("""CREATE TRIGGER IF NOT EXISTS runs_activity_insert
+        AFTER INSERT ON runs WHEN NEW.updated_at = '' BEGIN
+        UPDATE runs SET updated_at = COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at), NEW.created_at)
+        WHERE id = NEW.id; END""")
+    conn.execute(f"""CREATE TRIGGER IF NOT EXISTS runs_activity_update
+        AFTER UPDATE ON runs
+        WHEN NEW.updated_at = OLD.updated_at AND NEW.updated_at != {clock} BEGIN
+        UPDATE runs SET updated_at = {clock} WHERE id = NEW.id; END""")
+    owners = {table: "{{row}}.run_id" for table in _RUN_ACTIVITY_TABLES}
+    for table in ("agent_events", "run_agent_turns", "extracted_fields"):
+        owners[table] = "(SELECT run_id FROM run_agents WHERE id = {{row}}.run_agent_id)"
+    # Refresh the special-case trigger for databases already using this migration.
+    conn.execute("DROP TRIGGER IF EXISTS mtool_fill_receipts_run_activity_update")
+    for table, owner in owners.items():
+        for action in ("INSERT", "UPDATE", "DELETE"):
+            row = "OLD" if action == "DELETE" else "NEW"
+            run_id = owner.replace("{{row}}", row)
+            event = action
+            if table == "mtool_fill_receipts" and action == "UPDATE":
+                # Taking an existing file and acknowledging its report are reads.
+                columns = [column[1] for column in conn.execute(f"PRAGMA table_info({table})")
+                           if column[1] not in {"downloaded_at", "degraded_ack"}]
+                event = "UPDATE OF " + ", ".join(columns)
+            conn.execute(f"""CREATE TRIGGER IF NOT EXISTS {table}_run_activity_{action.lower()}
+                AFTER {event} ON {table} BEGIN
+                UPDATE runs SET updated_at = {clock} WHERE id = {run_id}; END""")
+
+
+def _backfill_run_activity(conn: sqlite3.Connection) -> None:
+    # Historical data has no universal clock. Retain its newest recorded
+    # lifecycle, content or activity timestamp, never the migration time.
+    sources = ["SELECT id AS run_id, created_at AS ts FROM runs"]
+    run_columns = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+    for column in ("started_at", "ended_at"):
+        if column in run_columns:
+            sources.append(f"SELECT id, {column} FROM runs")
+    for table in _RUN_ACTIVITY_TABLES:
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column in ("updated_at", "created_at", "started_at", "ended_at", "resolved_at", "ts", "uploaded_at"):
+            if column in columns:
+                sources.append(f"SELECT run_id, {column} FROM {table}")
+    sources.append("SELECT ra.run_id, ae.ts FROM agent_events ae "
+                   "JOIN run_agents ra ON ra.id = ae.run_agent_id")
+    sources.append("SELECT ra.run_id, rt.ts FROM run_agent_turns rt "
+                   "JOIN run_agents ra ON ra.id = rt.run_agent_id")
+    conn.execute("WITH activity AS (" + " UNION ALL ".join(sources) + "), "
+                 "latest AS (SELECT run_id, MAX(julianday(ts)) AS ts FROM activity GROUP BY run_id) "
+                 "UPDATE runs SET updated_at = COALESCE(("
+                 "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', ts) "
+                 "FROM latest WHERE run_id = runs.id), created_at) "
+                 "WHERE updated_at = ''")
+
+
 def init_db(path: str | Path) -> None:
     """Create (or open) the SQLite database and ensure all tables exist.
 
@@ -3709,6 +3798,26 @@ def init_db(path: str | Path) -> None:
             except Exception:
                 conn.rollback()
                 raise
+
+        # v52 -> v53: one document clock shared by History and Recent.
+        if current_version is not None and current_version < 53:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                latest = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+                if latest < 53:
+                    columns = {r[1] for r in conn.execute("PRAGMA table_info(runs)")}
+                    if "updated_at" not in columns:
+                        conn.execute("ALTER TABLE runs ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
+                    _backfill_run_activity(conn)
+                    _install_run_activity_tracking(conn)
+                    conn.execute("UPDATE schema_version SET version = 53")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        _install_run_activity_tracking(conn)
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_runs_updated_at ON runs(updated_at DESC)")
 
         for sql in _CREATE_INDEXES:
             conn.execute(sql)

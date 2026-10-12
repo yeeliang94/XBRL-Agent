@@ -116,7 +116,7 @@ export function HistoryList({
         <thead>
           <tr>
             <th style={styles.th}>Filename</th>
-            <th style={styles.th}>Uploaded</th>
+            <th style={styles.th}>Last updated</th>
             <th style={styles.th}>Status</th>
             {/* The filter has a Standard control but the list had no matching
                 column; this carries the run's standard + level (E2). */}
@@ -144,7 +144,7 @@ export function HistoryList({
             // docs/PLAN-design-qa-fixes.md R4. Drafts resume at /run/{id};
             // finished runs open their detail at /history/{id}.
             const runHref = isDraft ? `/run/${run.id}` : `/history/${run.id}`;
-            const date = formatUploadTime(run.created_at);
+            const date = formatUploadTime(run.updated_at);
             const actionLabel = isDraft
               ? "Continue setup"
               : run.status === "completed" ||

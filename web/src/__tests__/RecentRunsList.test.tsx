@@ -8,6 +8,7 @@ function makeRuns(): RunSummaryJson[] {
     {
       id: 10,
       created_at: "2026-05-20T09:30:00Z",
+      updated_at: "2026-05-20T09:30:00Z",
       pdf_filename: "DRAFT-2024.pdf",
       status: "draft",
       session_id: "sess-10",
@@ -20,6 +21,7 @@ function makeRuns(): RunSummaryJson[] {
     {
       id: 11,
       created_at: "2026-05-19T15:00:00Z",
+      updated_at: "2026-05-19T15:00:00Z",
       pdf_filename: "FINCO-2023.pdf",
       status: "completed",
       session_id: "sess-11",

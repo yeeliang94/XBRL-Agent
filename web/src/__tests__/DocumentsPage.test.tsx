@@ -27,8 +27,10 @@ describe("Documents workspace", () => {
     try {
       await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
       expect(fetchRuns).toHaveBeenCalledTimes(2);
+      expect(hook.result.current.historyRefreshKey).toBe(0);
       await act(async () => { await vi.advanceTimersByTimeAsync(28_000); });
       expect(fetchRuns).toHaveBeenCalledTimes(4);
+      expect(hook.result.current.historyRefreshKey).toBe(1);
       act(() => { visibility = "hidden"; document.dispatchEvent(new Event("visibilitychange")); });
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
       expect(fetchRuns).toHaveBeenCalledTimes(4);
@@ -41,6 +43,24 @@ describe("Documents workspace", () => {
       vi.useRealTimers();
     }
   });
+  test("active document polling refreshes History sorting only every 30 seconds", async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchRuns).mockClear();
+    vi.mocked(fetchRuns).mockResolvedValue({ runs: [runs[2]], total: 1, limit: 50, offset: 0 });
+    const hook = renderHook(() => useDocuments(true));
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(28_000); });
+      expect(hook.result.current.historyRefreshKey).toBe(0);
+      expect(fetchRuns).toHaveBeenCalledTimes(30);
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(hook.result.current.historyRefreshKey).toBe(1);
+      expect(fetchRuns).toHaveBeenCalledTimes(32);
+    } finally {
+      hook.unmount();
+      vi.useRealTimers();
+    }
+  });
+
   test("History updates preparation stages for the same document without reloading unchanged polls", async () => {
     let current = { ...runs[0] };
     vi.mocked(fetchRuns).mockImplementation(async () => ({ runs: [current], total: 1, limit: 50, offset: 0 }));
@@ -63,6 +83,15 @@ describe("Documents workspace", () => {
     current = { ...current, status: "running" };
     view.rerender(<DocumentsPage documents={{ ...documents, runs: [current] }} {...props} />);
     await screen.findByText("Working");
+    const beforeProgressSave = vi.mocked(fetchRuns).mock.calls.length;
+    current = { ...current, updated_at: "2026-10-12T10:30:00Z" };
+    view.rerender(<DocumentsPage documents={{ ...documents, runs: [current] }} {...props} />);
+    expect(fetchRuns).toHaveBeenCalledTimes(beforeProgressSave);
+    const beforeRefresh = vi.mocked(fetchRuns).mock.calls.length;
+    view.rerender(<DocumentsPage documents={{ ...documents, runs: [current], historyRefreshKey: 1 }} {...props} />);
+    await screen.findByText(new Date(current.updated_at!).toLocaleString());
+    expect(fetchRuns).toHaveBeenCalledTimes(beforeRefresh + 1);
+
   });
   test("confirms queue deletion, refreshes after success, and protects active work", async () => {
     vi.mocked(deleteRun).mockResolvedValue({ deleted: 2 });

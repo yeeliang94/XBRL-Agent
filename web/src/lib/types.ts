@@ -827,6 +827,7 @@ export interface AgentState {
 export interface RunSummaryJson {
   id: number;
   created_at: string;
+  updated_at: string;
   pdf_filename: string;
   status: string;                 // 'running' | 'completed' | 'failed' | 'aborted'
   session_id: string;
@@ -1033,7 +1034,7 @@ export interface RunEventJson {
 }
 
 export interface RunsFilterParams {
-  documentGroup?: "progress" | "history";
+  documentGroup?: "progress" | "history" | "results";
   q?: string;
   status?: string;
   model?: string;

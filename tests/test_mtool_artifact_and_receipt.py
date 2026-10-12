@@ -122,7 +122,12 @@ def test_clean_fill_downloads_without_ceremony(client):
     run_id = _make_run(db)
     _seed(db, run_id)
     body = _patch(tc, run_id).json()
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE runs SET updated_at = ? WHERE id = ?",
+                     ("2026-04-01T10:00:00.000Z", run_id))
     resp = tc.get(body["download_url"])
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT updated_at FROM runs WHERE id = ?", (run_id,)).fetchone()[0] == "2026-04-01T10:00:00.000Z"
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith(
         "application/vnd.openxmlformats")
@@ -177,12 +182,17 @@ def test_degraded_acknowledgement_lands_on_the_receipt(client):
     run_id = _make_run(db)
     _seed(db, run_id)
     body = _degraded(tc, db, run_id).json()
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE runs SET updated_at = ? WHERE id = ?",
+                     ("2026-04-01T10:00:00.000Z", run_id))
     tc.get(body["download_url"],
            params={"acknowledge_degraded": "aware of 4 unplaced rows"})
     receipt = tc.get(
         f"/api/runs/{run_id}/mtool-fill/receipts").json()["receipts"][0]
     assert receipt["degraded_ack"] == "aware of 4 unplaced rows"
     assert receipt["downloaded_at"]
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT updated_at FROM runs WHERE id = ?", (run_id,)).fetchone()[0] == "2026-04-01T10:00:00.000Z"
 
 
 def test_artifact_is_scoped_to_its_run(client):

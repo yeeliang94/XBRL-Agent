@@ -89,7 +89,7 @@ def test_list_runs_basic_ordering(db_path: Path) -> None:
 
 
 @pytest.mark.parametrize("completion_status", ["completed", "completed_with_errors", "correction_exhausted"])
-def test_list_runs_recent_completion_precedes_newer_uploads(db_path: Path, completion_status: str) -> None:
+def test_list_runs_latest_update_precedes_newer_uploads(db_path: Path, completion_status: str) -> None:
     """An older upload finished today leads Recent and History before pagination."""
     with repo.db_session(db_path) as conn:
         older = _seed_run(conn, session_id="older", pdf_filename="older.pdf",
@@ -98,19 +98,31 @@ def test_list_runs_recent_completion_precedes_newer_uploads(db_path: Path, compl
                   created_at="2026-04-05T10:00:00Z")
         _seed_run(conn, session_id="new", pdf_filename="new.pdf",
                   status="running", created_at="2026-04-10T10:00:00Z")
-        assert repo.list_runs(conn, limit=1)[0].pdf_filename == "completed.pdf"
+        assert repo.list_runs(conn, limit=1)[0].pdf_filename == "new.pdf"
         conn.execute("UPDATE runs SET status = ?, ended_at = ? WHERE id = ?",
                      (completion_status, "2026-04-11T10:00:00Z", older))
         conn.commit()
         assert [row.pdf_filename for row in repo.list_runs(conn)] == [
-            "older.pdf", "completed.pdf", "new.pdf",
+            "older.pdf", "new.pdf", "completed.pdf",
         ]
         assert repo.list_runs(conn, limit=1)[0].id == older
         assert repo.list_runs(conn, document_group="history", limit=1)[0].id == older
         assert repo.list_runs(conn, document_group="progress")[0].pdf_filename == "new.pdf"
-        # Historical completions without a recorded finish time remain readable.
+        # Status priority and missing completion times do not override updates.
         conn.execute("UPDATE runs SET ended_at = NULL WHERE id = ?", (older,))
-        assert repo.list_runs(conn, limit=1)[0].pdf_filename == "completed.pdf"
+        assert repo.list_runs(conn, limit=1)[0].id == older
+        conn.execute("UPDATE runs SET updated_at = '2026-04-11T10:00:00.000Z' WHERE id = ?", (older,))
+        new = repo.list_runs(conn, document_group="progress")[0].id
+        repo.upsert_notes_cell(conn, run_id=new, sheet="Notes", row=10,
+                               label="Note", html="<p>Edited.</p>")
+        assert repo.list_runs(conn, document_group="history", limit=1)[0].id == new
+        conn.execute("UPDATE runs SET updated_at = '2026-04-11T10:00:00.000Z' WHERE id = ?", (new,))
+        conn.execute("DELETE FROM notes_cells WHERE run_id = ?", (new,))
+        rows = repo.list_runs(conn, document_group="history")
+        assert rows[0].id == new
+        assert repo.count_runs(conn, document_group="history") == 3
+        assert repo.count_runs(conn, document_group="results") == 2
+        assert repo.list_runs(conn)[0].updated_at == rows[0].updated_at
 
 
 def test_list_runs_filter_by_filename_substring(db_path: Path) -> None:

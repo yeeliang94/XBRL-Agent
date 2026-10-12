@@ -3,11 +3,10 @@ import { apiFetch } from "../lib/api";
 import type { PreparationSnapshot } from "../lib/types";
 import { ApiError, userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
-import { ui } from "../lib/uiStyles";
+import { activityWorkspaceStyle, ui } from "../lib/uiStyles";
 import { formatElapsedMs } from "../lib/time";
 import { ElapsedTimer } from "./ElapsedTimer";
 import { PipelineStages } from "./PipelineStages";
-import { DisclosureChevron } from "./icons";
 import { StatusIcon } from "./StatusIcon";
 import { STATUS_SYMBOLS, type StatusSymbol } from "../lib/runStatus";
 
@@ -44,7 +43,6 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
   const [busy, setBusy] = useState(false);
   const [retriedFailure, setRetriedFailure] = useState<{ message: string; attemptId: string | null } | null>(null);
   const [refresh, setRefresh] = useState(0);
-  const [detailsChoice, setDetailsChoice] = useState<boolean | null>(null);
   // Live activity is the sequence of progress messages seen while this view
   // is open. It is not persisted, so it appears only during preparation.
   // Each entry keeps a stable id so trimming the list never re-renders the
@@ -134,7 +132,6 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
   const checkComplete = pagesComplete;
   const missingDocument = snapshot == null && connectionError?.startsWith("Document not found.");
   const succeeded = snapshot?.status === "succeeded";
-  const detailsOpen = detailsChoice ?? !succeeded;
   // The status line announces only the current message. While work is live
   // the activity list shows it, so the line stays visually hidden.
   const statusText = connectionError
@@ -142,50 +139,46 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
   const steps = [
     {
       label: "Read source pages",
-      detail: total > 0 ? `Pages captured: ${captured} of ${total}` : "",
       state: detailStatus({ complete: readComplete, active: active && phase === "preparing_pages" && !readComplete, stopped: stopped && !readComplete, failed }),
     },
     {
       label: "Check page readings and continuations",
-      detail: total > 0 ? `Pages checked: ${checked} of ${total}` : "",
-      state: detailStatus({ complete: checkComplete, active: active && phase === "preparing_pages" && checked > 0 && !checkComplete, stopped: stopped && !checkComplete, failed }),
+      state: detailStatus({ complete: checkComplete, active: active && phase === "preparing_pages" && (checked > 0 || readComplete || snapshot?.stage === "verifying" || snapshot?.stage === "joining") && !checkComplete, stopped: stopped && !checkComplete, failed }),
     },
     {
       label: "Build document map",
-      detail: phase === "reconciling_map" ? "Reconciling statement and note ownership" : "",
       state: detailStatus({ complete: mapComplete, active: active && mapActive, stopped: stopped && pagesComplete, failed }),
     },
   ];
   const stepList = (
-    <ol id="preparation-steps" hidden={!detailsOpen} aria-label="Document preparation steps" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+    <ol aria-label="Document preparation steps" style={{ listStyle: "none", margin: 0, padding: 0 }}>
       {steps.map((step) => (
-        <li key={step.label} className="preparation-step-row" style={{ display: "grid", gridTemplateColumns: "16px minmax(0, 1fr) auto", gap: pwc.space.md, alignItems: "center", minHeight: 48, padding: `${pwc.space.sm}px 0`, borderTop: `1px solid ${pwc.grey100}` }}>
+        <li key={step.label} style={{ display: "grid", gridTemplateColumns: "16px minmax(0, 1fr)", gap: pwc.space.md, alignItems: "center", minHeight: 48, padding: `${pwc.space.sm}px 0`, borderTop: `1px solid ${pwc.grey100}` }}>
           <StatusIcon symbol={stateSymbols[step.state]} />
           <span style={{ minWidth: 0 }}>
-            <span style={{ ...ui.bodyText, display: "block" }}>{step.label}</span>
-            {step.detail && <span style={{ ...ui.metadata, display: "block" }}>{step.detail}</span>}
+            <span style={{ ...ui.bodyText, display: "block", fontWeight: step.state === "Working" ? pwc.weight.medium : pwc.weight.regular }}>{step.label}</span>
           </span>
-          <span style={{ ...ui.metadata, color: step.state === "Failed" ? pwc.orange700 : pwc.grey700, fontWeight: step.state === "Working" ? pwc.weight.medium : pwc.weight.regular }}>
+          <span style={visuallyHidden}>
             {step.state}
           </span>
         </li>
       ))}
     </ol>
   );
-  const showPages = !succeeded && total > 0 && total <= PAGE_STRIP_LIMIT;
+  const showPages = total > 0 && total <= PAGE_STRIP_LIMIT;
+  const mapping = active && mapActive && !connectionError;
+  const progressSummary = stopped || connectionError ? "" : succeeded ? "Ready to confirm filing setup"
+    : phase === "reconciling_map" ? "Checking statement and note ownership"
+    : mapActive ? "Organizing statements and notes"
+    : total > 0 ? readComplete
+      ? checked >= total ? `${checked} of ${total} pages checked · checking continuations` : `${checked} of ${total} pages checked`
+      : `${captured} of ${total} pages captured${checked > 0 ? ` · ${checked} checked` : ""}`
+    : "";
+  const activityLabel = active ? "Live activity" : "Recorded activity";
+  const newestActivity = [...activity].reverse();
   // Same rhythm as Filing setup: a 40px header row, 8 to its content, 16
   // between blocks; the page puts 32 before the next section.
   return <section aria-label="Document preparation" style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
-    <div style={{ display: "flex", alignItems: "center", gap: pwc.space.md, flexWrap: "wrap", minHeight: 40 }}>
-      <h2 style={{ ...ui.sectionTitle, margin: 0 }}>Document preparation</h2>
-      <span data-testid="preparation-status">{snapshot ? labels[snapshot.status] : missingDocument ? "Unavailable" : "Connecting"}</span>
-      {snapshot?.started_at != null && (active
-        ? <ElapsedTimer startTime={snapshot.started_at * 1000} isRunning />
-        : snapshot.updated_at != null ? <span>{formatElapsedMs(Math.max(0, snapshot.updated_at - snapshot.started_at) * 1000)}</span> : null)}
-      {active && <button style={ui.buttonSecondary} disabled={busy} onClick={() => void act("cancel")}>Stop preparation</button>}
-      {snapshot?.status === "not_started" && <button style={ui.buttonSecondary} disabled={busy} onClick={() => void act("retry")}>Start preparation</button>}
-      {(snapshot?.status === "failed" || snapshot?.status === "cancelled") && <button style={ui.buttonSecondary} disabled={busy} onClick={() => void act("retry")}>Retry preparation</button>}
-    </div>
     <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.lg }}>
     {!missingDocument && <div>
       <PipelineStages
@@ -201,66 +194,77 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
     {statusText != null && (
       <p role="status" aria-live="polite" style={(succeeded || active) && !connectionError ? visuallyHidden : { margin: 0 }}>{statusText}</p>
     )}
-    {snapshot?.prepared && !succeeded && (
-      <p style={{ margin: 0 }}>Document prepared. {active && mapActive ? "Document map and notes inventory are being built." : "Notes inventory is not ready."}</p>
-    )}
-    {actionRequired === "retry" || snapshot?.status === "not_started" ? (
+    {actionRequired === "retry" ? (
       <p style={{ margin: 0, color: pwc.grey700 }}>
-        {actionRequired === "retry"
-          ? repeatedFailure
+        {repeatedFailure
             ? "The same step failed after retry. Upload a revised source document to continue."
-            : "Retry resumes saved progress. If the same step fails again, upload a revised source document."
-          : "Start document preparation."}
+            : "Retry resumes saved progress."}
       </p>
     ) : null}
-    {!missingDocument && (succeeded ? (
-      <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
-        {/* Once setup opens, the preparation record folds behind one control. */}
-        <button
-          type="button"
-          aria-expanded={detailsOpen}
-          aria-controls="preparation-steps"
-          onClick={() => setDetailsChoice(!detailsOpen)}
-          style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, minHeight: 40, padding: 0, background: "transparent", border: "none", cursor: "pointer", alignSelf: "flex-start", ...ui.bodyText, fontWeight: pwc.weight.medium }}
-        >
-          Preparation details
-          <DisclosureChevron open={detailsOpen} />
-        </button>
-        {stepList}
-      </div>
-    ) : (
+    <div className="preparation-workspace" style={{ ...activityWorkspaceStyle, gridTemplateColumns: "minmax(0, 1.55fr) minmax(0, 1fr)" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.lg }}>
-        {stepList}
-        {showPages && (
-          <div aria-hidden="true" data-testid="preparation-page-strip" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(9px, 1fr))", gap: 3 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: pwc.space.md, flexWrap: "wrap", minHeight: 40 }}>
+          <h2 style={{ ...ui.sectionTitle, margin: 0 }}>Document preparation</h2>
+          <span data-testid="preparation-status" style={ui.metadata}>{snapshot ? labels[snapshot.status] : missingDocument ? "Unavailable" : "Connecting"}</span>
+          {snapshot?.started_at != null && <span style={ui.metadata}>{active
+            ? <ElapsedTimer startTime={snapshot.started_at * 1000} isRunning />
+            : snapshot.updated_at != null ? formatElapsedMs(Math.max(0, snapshot.updated_at - snapshot.started_at) * 1000) : null}</span>}
+          <div style={{ marginLeft: "auto" }}>
+            {active && <button style={ui.buttonSecondary} disabled={busy} onClick={() => void act("cancel")}>Stop preparation</button>}
+            {snapshot?.status === "not_started" && <button style={ui.buttonSecondary} disabled={busy} onClick={() => void act("retry")}>Start preparation</button>}
+            {stopped && <button style={ui.buttonSecondary} disabled={busy} onClick={() => void act("retry")}>Retry preparation</button>}
+          </div>
+        </div>
+        {!missingDocument && <>
+        {progressSummary && <p style={{ ...ui.bodyText, margin: 0 }}>{progressSummary}</p>}
+        {showPages && <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
+          <div role="img" aria-label={mapActive
+            ? `${total} source pages. Document mapping ${mapping ? "in progress; animation does not indicate a percentage" : "not active"}.`
+            : `${captured} of ${total} pages captured; ${checked} checked. Blocks show totals, not individual page identities.`}
+            className={mapping ? "preparation-page-strip is-mapping" : "preparation-page-strip"}
+            data-testid="preparation-page-strip" style={{ display: "grid", gridTemplateColumns: "repeat(29, minmax(0, 1fr))", gap: 3 }}>
             {Array.from({ length: total }, (_, i) => (
               <span key={i} style={{
                 aspectRatio: "3 / 4",
                 borderRadius: 2,
+                position: "relative", overflow: "hidden",
                 // Pages are read in parallel, so the strip shows proportions only.
                 background: i < checked ? pwc.black : i < captured ? pwc.grey300 : pwc.grey100,
-              }} />
+              }}><span className="preparation-map-wave" style={{ position: "absolute", inset: 0, background: pwc.grey300, opacity: 0, animationDelay: `${i / total * 1400}ms` }} /></span>
             ))}
           </div>
-        )}
+          {!mapActive && !succeeded && <div style={{ ...ui.metadata, display: "flex", gap: pwc.space.lg, flexWrap: "wrap" }}>
+            {[["Checked", pwc.black], ["Captured", pwc.grey300], ["Waiting", pwc.grey100]].map(([label, color]) => (
+              <span key={label} style={{ display: "inline-flex", alignItems: "center", gap: pwc.space.xs }}><span aria-hidden="true" style={{ width: 8, height: 10, borderRadius: 1, background: color }} />{label}</span>
+            ))}
+          </div>}
+        </div>}
+        {stepList}
+        </>}
+      </div>
         {activity.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
-            <h3 style={{ ...ui.subsectionTitle, margin: 0, minHeight: 40, display: "flex", alignItems: "center" }}>Live activity</h3>
-            <ol aria-label="Live activity" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+          <div className="preparation-activity" style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm, borderLeft: `1px solid ${pwc.grey200}`, paddingLeft: pwc.space.xl, minWidth: 0 }}>
+            <h3 style={{ ...ui.subsectionTitle, margin: 0, minHeight: 40, display: "flex", alignItems: "center" }}>{activityLabel}</h3>
+            <ol aria-label={activityLabel} style={{ listStyle: "none", margin: 0, padding: 0 }}>
               {/* Newest first, matching the run Activity stream. */}
-              {[...activity].reverse().map(({ id, text }, i) => (
+              {newestActivity.slice(0, 3).map(({ id, text }, i) => (
                 <li key={id} className="activity-sentence-enter" style={{ display: "grid", gridTemplateColumns: "10px minmax(0, 1fr)", gap: pwc.space.sm, minHeight: 40, padding: `${pwc.space.xs}px 0 ${pwc.space.sm}px` }}>
                   <span aria-hidden="true" style={{ position: "relative", width: 10, marginLeft: 3, borderLeft: `1px solid ${pwc.grey200}` }}>
                     <span style={{ position: "absolute", top: 6, left: -4, width: 7, height: 7, borderRadius: "50%", background: active && i === 0 ? pwc.orange500 : pwc.grey300 }} />
                   </span>
-                  <span style={ui.bodyText}>{text}</span>
+                  <span style={{ ...ui.bodyText, overflowWrap: "anywhere" }}>{text}</span>
                 </li>
               ))}
             </ol>
+            {activity.length > 3 && <details>
+              <summary style={{ ...ui.metadata, cursor: "pointer", padding: `${pwc.space.sm}px 0` }}>Earlier updates</summary>
+              <ol aria-label="Earlier preparation activity" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                {newestActivity.slice(3).map(({ id, text }) => <li key={id} style={{ ...ui.bodyText, overflowWrap: "anywhere", padding: `${pwc.space.sm}px 0` }}>{text}</li>)}
+              </ol>
+            </details>}
           </div>
         )}
-      </div>
-    ))}
+    </div>
     </div>
   </section>;
 }
