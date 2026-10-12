@@ -7861,6 +7861,15 @@ async def run_multi_agent_stream(
                     "formatting_notes",
                     message="Preparing note formatting.",
                 )
+
+                # One live tab for every formatter sub-agent; each event
+                # carries its sub_agent_id. The formatter saves these events
+                # on its own run_agents rows, so persist_event (no mapping
+                # for this id) does not store them twice.
+                from notes.formatter_activity import queue_event_sink
+                _emit_formatter_event = queue_event_sink(
+                    event_queue, "notes-formatting", "NOTES_FORMATTING",
+                )
                 _format_model_name = _notes_formatter_model_name() or model_name
 
                 async def _auto_format_pdf_notes():
@@ -7880,6 +7889,7 @@ async def run_multi_agent_stream(
                         on_phase=lambda sheet, message: _emit_stage(
                             "formatting_notes", message=message, item=sheet,
                         ),
+                        on_event=_emit_formatter_event,
                         on_progress=lambda completed, total, sheet: _emit_stage(
                             "formatting_notes",
                             message=(

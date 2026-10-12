@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -283,7 +284,11 @@ async def test_large_sheet_is_formatted_in_concurrent_row_groups(auto_format_db)
     started: list[list[int]] = []
     all_started = asyncio.Event()
 
+    sink = []
+
     async def fake_formatter(**kwargs):
+        assert kwargs["on_event"] == sink.append
+        assert kwargs["deadline"] > time.monotonic()
         started.append(list(kwargs["rows"]))
         if len(started) == 3:
             all_started.set()
@@ -301,6 +306,7 @@ async def test_large_sheet_is_formatted_in_concurrent_row_groups(auto_format_db)
         run_id=run_id, db_path=db_path, pdf_path=str(tmp_path / "uploaded.pdf"),
         sheets=["Notes-Listofnotes"], model_name="model-a", model_factory=object,
         output_dir=str(tmp_path), timeout_s=30, formatter=fake_formatter,
+        on_event=sink.append,
     )
 
     assert sorted(row for group in started for row in group) == rows

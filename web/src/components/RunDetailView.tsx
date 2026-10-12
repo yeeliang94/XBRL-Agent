@@ -30,6 +30,8 @@ import { workstreamTitle } from "./AgentTabs";
 import type { AgentTabStatus } from "../lib/types";
 import { AgentTimeline } from "./AgentTimeline";
 import { NotesSubTabBar } from "./NotesSubTabBar";
+import { FormatterSubAgentActivity } from "./FormatterSubAgentActivity";
+import { deriveFormatterSubAgents } from "../lib/formatterSubAgents";
 import { TabPanelFade } from "./TabPanelFade";
 import { NotesReviewerPanel } from "./NotesReviewerPanel";
 import { NotesTablesPanel } from "./NotesTablesPanel";
@@ -340,6 +342,14 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
     };
   }, [agent.events, notes12SubId, showSubTabs, technicalOpen]);
 
+  // Formatter passes saved their own steps (one run_agents row per sheet or
+  // table group). Older runs have none and keep the stage-message stream.
+  const formatterEvents = useMemo(() => latestFormattingCalls(formattingCalls)
+    .flatMap((call) => call.events)
+    .sort((left, right) => left.timestamp - right.timestamp), [formattingCalls]);
+  const showFormatterSubAgents = agent.statement_type === "NOTES_FORMATTING"
+    && deriveFormatterSubAgents(formatterEvents).length > 0;
+
   const showErrorDetail = Boolean(agent.error_message)
     && (agent.statement_type !== "CORRECTION" || agent.error_message !== updates[0]);
   const agentEnded = ["failed", "cancelled", "aborted"].includes(agent.status);
@@ -389,11 +399,12 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
           {call.error_message ? ` · ${call.error_message}` : ""}
         </li>)}</ul>
       </details>}
-      {formattingSheets.size > 0 && <ul aria-label="Notes formatting by sheet">
+      {!showFormatterSubAgents && formattingSheets.size > 0 && <ul aria-label="Notes formatting by sheet">
         {[...formattingSheets].map(([sheet, message]) => <li key={sheet}>{notesSheetDisplayName(sheet)} · {message}</li>)}
       </ul>}
       {showSubTabs && <NotesSubTabBar subAgents={subAgents} activeSubId={notes12SubId} onSelect={setNotes12SubId} />}
-      <ActivityStream events={events} toolTimeline={toolTimeline} reasoningBlocks={[]}
+      {showFormatterSubAgents ? <FormatterSubAgentActivity events={formatterEvents}
+        status={savedAgentStatus(agent.status)} recorded={agent.status !== "running"} /> : <ActivityStream events={events} toolTimeline={toolTimeline} reasoningBlocks={[]}
         isRunning={agent.status === "running"} status={savedAgentStatus(agent.status)}
         recorded={agent.status !== "running"} streamKey={`${agent.id}:${notes12SubId ?? "all"}`}
         onTechnicalChange={setTechnicalOpen}
@@ -421,7 +432,7 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
             reasoningBlocks={reasoningBlocks}
             isRunning={false}
           />
-        </div> : <span />} />
+        </div> : <span />} />}
     </article>
   );
 }

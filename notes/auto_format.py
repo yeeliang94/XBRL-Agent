@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -182,8 +183,12 @@ async def run_pdf_auto_format(
     formatter=run_notes_formatter,
     on_progress: Callable[[int, int, str | None], None] | None = None,
     on_phase: Callable[[str, str], None] | None = None,
+    on_event: Callable[[str, dict], None] | None = None,
 ) -> dict[str, Any]:
     """Format eligible PDF-note sheets and return an advisory summary.
+
+    ``on_event`` receives each formatter sub-agent's activity events (see
+    ``notes/formatter_activity.py``).
 
     Sheet failures are isolated and persisted. Cancellation is propagated so
     Stop All retains its run-level meaning.
@@ -205,9 +210,15 @@ async def run_pdf_auto_format(
         async with model_slots:
             if on_phase is not None:
                 kwargs["on_phase"] = lambda message: on_phase(kwargs["sheet"], message)
-            coro = formatter(model=model_factory(), **kwargs)
+            if on_event is not None:
+                kwargs["on_event"] = on_event
             if timeout_s and timeout_s != float("inf"):
-                return await asyncio.wait_for(coro, timeout=timeout_s)
+                # Lets the pass tell its time limit from a deliberate stop.
+                kwargs["deadline"] = time.monotonic() + timeout_s
+                return await asyncio.wait_for(
+                    formatter(model=model_factory(), **kwargs), timeout=timeout_s,
+                )
+            coro = formatter(model=model_factory(), **kwargs)
             return await coro
 
     async def one(sheet: str) -> tuple[str, dict[str, Any]]:

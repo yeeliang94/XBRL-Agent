@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -174,6 +175,8 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
             style_sources=None if retry_rows else PDF_FORMAT_CANDIDATE_SOURCES | {None},
             rows=retry_rows or None,
             on_phase=on_phase,
+            deadline=(time.monotonic() + timeout
+                      if timeout and timeout != float("inf") else None),
         )
         # Bound the whole pass the way the reviewer / notes-validator passes are
         # bounded — without this a hung LLM call leaves the task 'running'
