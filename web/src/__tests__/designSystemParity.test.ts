@@ -219,6 +219,10 @@ describe("Direction A shell and responsive composition", () => {
       "Animate a loaded list or table once as a region, not every row",
       "Reserve repeating motion for an active wait",
       "never delay focus, navigation or a result",
+      "page blocks above three continuously visible stages",
+      "Desktop Live activity sits on the right",
+      "never a mapping percentage or individual page ownership",
+      "Stop the wave on completion, failure, cancellation or a progress connection interruption",
     ]) {
       expect(designSystem).toContain(requirement);
     }

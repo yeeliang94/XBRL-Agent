@@ -471,7 +471,9 @@ export function ExtractPage({
       )}
 
       {state.sessionId && !state.isRunning && !state.isComplete && !state.hasError && (
+        <div style={preparationSucceeded && !setupHandoff ? { display: "none" } : undefined}>
         <DocumentPreparation key={state.sessionId} sessionId={state.sessionId} onSnapshot={acceptPreparation} />
+        </div>
       )}
 
       {/* Pre-run configuration panel — shown after upload, hidden once running.
