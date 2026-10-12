@@ -154,6 +154,27 @@ def test_candidate_cell_evidence_covers_each_nested_table(tmp_path, cover_both):
     assert prepared.pages[0]["verified"] is cover_both
 
 
+@pytest.mark.parametrize("quoted, verified", [
+    ("Trade  receivables \u2013 RM\u2019000", True),
+    ("Other receivables - RM'000", False),
+])
+def test_candidate_cell_evidence_ignores_spacing_and_lookalikes(tmp_path, quoted, verified):
+    html = "<table><tr><td>Trade receivables - RM'000</td><td>100</td></tr></table>"
+    async def call(stage, images, context):
+        result = response(context)
+        if stage == "capturing":
+            result["html"] = html
+        elif stage == "verifying":
+            result.update(table_structure_verified=True, table_relationships=[{
+                "source_relationship": "Trade receivables 100",
+                "candidate_relationship": "Trade receivables 100", "matches": True,
+                "candidate_cells": [{"table": 0, "row": 0, "cell": 0, "text": quoted}],
+            }])
+        return result
+    prepared = run(source(tmp_path, 1), call)
+    assert prepared.pages[0]["verified"] is verified
+
+
 @pytest.mark.parametrize("defect", ["missing", "duplicate", "invalid", "foreign"])
 def test_bad_capture_receipt_retries_only_affected_page(tmp_path, defect):
     singles, batch_responses = [], []
