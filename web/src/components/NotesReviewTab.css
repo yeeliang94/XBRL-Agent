@@ -86,6 +86,13 @@
   max-width: 100% !important;
 }
 
+/* A source table's own minimum width (Word, mTool or TipTap) must not push a
+ * read-only table past its pane; a wide schedule keeps its own scrolling
+ * region below. */
+.notes-review-tab [data-testid="notes-readonly-content"] table:not([data-wide-preview="true"]) {
+  min-width: 0 !important;
+}
+
 .notes-review-tab [data-testid="notes-readonly-content"] :is(th, td),
 .notes-review-tab [data-testid="notes-review-editor"][data-editable="false"] :is(th, td) {
   white-space: normal !important;
@@ -353,6 +360,16 @@
 .notes-review-tab .notes-human-content :is(th, td) {
   padding: var(--nt-cell-padding, 4px 8px) !important;
   font-size: var(--nt-cell-font-size, 13px) !important;
+}
+
+/* Empty spacer columns from mTool or Word take no room in the comparison, and
+ * figures and headings such as RM'000 are never split mid-word. */
+.notes-review-tab .notes-human-content :is(th, td):empty {
+  padding: 0 !important;
+}
+
+.notes-review-tab .notes-human-content :is(th, td) {
+  overflow-wrap: break-word !important;
 }
 
 .notes-review-tab .notes-human-content :is(h1, h2, h3, h4, h5, h6) {

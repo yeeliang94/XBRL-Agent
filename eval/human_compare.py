@@ -175,11 +175,30 @@ def load_comparison(conn: sqlite3.Connection, run_id: int) -> dict[str, Any] | N
     for parent, child, coefficient in conn.execute(
             "SELECT parent_uuid, child_uuid, coefficient FROM concept_edges"):
         edges.setdefault(parent, []).append((child, float(coefficient)))
+    # A total can appear on a sheet more than once (Total comprehensive income
+    # under profit and again under "attributable to"; cash at end of period in
+    # the cash-flow details). mTool gives the element one cell, so only one
+    # copy has a human slot. Derive every calculated total on a compared
+    # statement from the human's inputs so no copy shows blank.
+    scopes_by_template: dict[str, set[tuple[str, str]]] = {}
+    for r in conn.execute(
+            "SELECT DISTINCT n.template_id, h.period, h.entity_scope "
+            "FROM human_file_facts h JOIN concept_nodes n "
+            "ON n.concept_uuid = h.concept_uuid WHERE h.run_id = ?", (run_id,)):
+        if r[1] in periods and r[0] not in not_compared:
+            scopes_by_template.setdefault(r[0], set()).add((r[1], r[2]))
+    unaddressed = [
+        (uuid, period, scope, "")
+        for uuid, template_id in conn.execute(
+            "SELECT concept_uuid, template_id FROM concept_nodes WHERE kind = 'COMPUTED'")
+        for period, scope in scopes_by_template.get(template_id, ())
+        if (uuid, period, scope, "") not in human
+    ]
     derived = derive_totals(
         {k: h["value"] for k, h in human.items() if h["value"] is not None},
-        edges, [k for k, h in human.items() if h["calculated"]])
+        edges, [k for k, h in human.items() if h["calculated"]] + unaddressed)
     for key, total in derived.items():
-        human[key]["value"] = total
+        human.setdefault(key, {"value": None, "calculated": True})["value"] = total
     ai: dict[SlotKey, float] = {}
     ai_totals: dict[SlotKey, float] = {}
     for r in conn.execute(
