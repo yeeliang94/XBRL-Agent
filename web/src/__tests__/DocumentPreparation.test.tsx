@@ -30,8 +30,7 @@ test("a missing document stops polling and requests a new upload", async () => {
 test("restores separate captured and checked counts without claiming completion", async () => {
   request.mockResolvedValue(base);
   render(<DocumentPreparation sessionId="one" />);
-  expect(await screen.findByText("Pages captured: 12 of 30")).toBeInTheDocument();
-  expect(screen.getByText("Pages checked: 9 of 30")).toBeInTheDocument();
+  expect(await screen.findByText("12 of 30 pages captured · 9 checked")).toBeInTheDocument();
   expect(screen.getByText("Read source pages").closest("li")).toHaveTextContent("Working");
   expect(screen.getByText("Check page readings and continuations").closest("li")).toHaveTextContent("Working");
   expect(screen.getByLabelText("Workflow progress")).toBeInTheDocument();
@@ -41,8 +40,8 @@ test("restores separate captured and checked counts without claiming completion"
   expect(screen.queryByText(/reasoning/i)).toBeNull();
 });
 
-test("marks page capture complete while independent page checks continue", async () => {
-  request.mockResolvedValue({ ...base, captured: 30, checked: 9 });
+test.each([0, 9])("marks page capture complete while independent page checks continue (%s checked)", async (checked) => {
+  request.mockResolvedValue({ ...base, captured: 30, checked });
   render(<DocumentPreparation sessionId="one" />);
   expect((await screen.findByText("Read source pages")).closest("li")).toHaveTextContent("Complete");
   expect(screen.getByText("Check page readings and continuations").closest("li")).toHaveTextContent("Working");
@@ -69,7 +68,9 @@ test("failed inventory retains preparation success and provides a single retry a
   render(<DocumentPreparation sessionId="one" />);
   expect((await screen.findAllByText("Failed")).length).toBeGreaterThan(0);
   expect(screen.getByTestId("step-stopped")).toBeInTheDocument();
-  expect(screen.getByText("Document prepared. Notes inventory is not ready.")).toBeInTheDocument();
+  expect(screen.getByText("Read source pages").closest("li")).toHaveTextContent("Complete");
+  expect(screen.getByText("Build document map").closest("li")).toHaveTextContent("Failed");
+  expect(screen.getByTestId("preparation-page-strip")).not.toHaveClass("is-mapping");
   request.mockResolvedValue({ ...base, attempt_id: "a2", status: "queued", phase: "preparing_pages", action_required: "none" });
   fireEvent.click(screen.getByRole("button", { name: "Retry preparation" }));
   await waitFor(() => expect(request).toHaveBeenCalledWith("/api/preparation/one", { method: "POST" }));
@@ -88,14 +89,18 @@ test("a repeated preparation failure points to replacing the source", async () =
 });
 
 test("cancel is explicit and does not render complete", async () => {
-  request.mockResolvedValue(base);
+  const mapping = { ...base, prepared: true, phase: "building_map" as const, captured: 30, checked: 30 };
+  request.mockResolvedValue(mapping);
   render(<DocumentPreparation sessionId="one" />);
   const stop = await screen.findByRole("button", { name: "Stop preparation" });
-  request.mockResolvedValue({ ...base, status: "cancelled", action_required: "retry", message: "Preparation cancelled" });
+  expect(screen.getByTestId("preparation-page-strip")).toHaveClass("is-mapping");
+  request.mockResolvedValue({ ...mapping, status: "cancelled", action_required: "retry", message: "Preparation cancelled" });
   fireEvent.click(stop);
   expect(await screen.findAllByText("Stopped")).not.toHaveLength(0);
   expect(request).toHaveBeenCalledWith("/api/preparation/one/cancel", { method: "POST" });
   expect(screen.queryByTestId("preparation-status")).not.toHaveTextContent("Complete");
+  expect(screen.getByTestId("preparation-page-strip")).not.toHaveClass("is-mapping");
+  expect(screen.getByRole("list", { name: "Document preparation steps" })).toBeVisible();
 });
 
 test("a response from an unmounted document cannot replace the new document", async () => {
@@ -113,14 +118,20 @@ test("a response from an unmounted document cannot replace the new document", as
 
 test("a disconnected poll stays unresolved and restores the durable outcome on reconnect", async () => {
   vi.useFakeTimers();
-  request.mockRejectedValueOnce(new Error("offline")).mockResolvedValue({ ...base, status: "succeeded", phase: "awaiting_confirmation", action_required: "confirm_setup", message: "Document and inventory ready" });
+  request.mockResolvedValueOnce({ ...base, prepared: true, phase: "building_map", captured: 30, checked: 30 })
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValue({ ...base, status: "succeeded", phase: "awaiting_confirmation", action_required: "confirm_setup", message: "Document and inventory ready" });
   render(<DocumentPreparation sessionId="one" />);
   await act(async () => { await Promise.resolve(); });
+  expect(screen.getByTestId("preparation-page-strip")).toHaveClass("is-mapping");
+  await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
   expect(screen.getByRole("status")).toHaveTextContent(/reconnecting/i);
+  expect(screen.getByTestId("preparation-page-strip")).not.toHaveClass("is-mapping");
   expect(screen.queryByTestId("preparation-status")).not.toHaveTextContent("Complete");
   await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
   expect(screen.getByText("Document and inventory ready")).toBeInTheDocument();
   expect(screen.getByTestId("preparation-status")).toHaveTextContent("Complete");
+  expect(screen.getByTestId("preparation-page-strip")).not.toHaveClass("is-mapping");
 });
 
 
@@ -128,19 +139,23 @@ test("counts inferred pages as checked without claiming exact verification or ad
   request.mockResolvedValue({ ...base, captured: 30, checked: 30, verified: 27,
     status: "succeeded", phase: "awaiting_confirmation", action_required: "confirm_setup", message: "Document and inventory ready" });
   render(<DocumentPreparation sessionId="one" />);
-  expect(await screen.findByText("Pages checked: 30 of 30")).toBeInTheDocument();
+  expect(await screen.findByText("Ready to confirm filing setup")).toBeInTheDocument();
+  expect(screen.getByRole("img", { name: /30 of 30 pages captured; 30 checked/ })).toBeVisible();
   expect(screen.queryByText(/pages verified/i)).toBeNull();
   expect(screen.queryByRole("alert")).toBeNull();
   expect(screen.queryByRole("button", { name: /retry|confirm/i })).toBeNull();
 });
 
 
-test("shows the unified document map in the existing preparation panel", async () => {
-  request.mockResolvedValue({ ...base, prepared: true, stage: "scouting", phase: "building_map", checked: 30,
+test.each(["building_map", "reconciling_map"] as const)("keeps the blocks and three stages visible during %s", async (phase) => {
+  request.mockResolvedValue({ ...base, prepared: true, stage: "scouting", phase, captured: 30, checked: 30,
     message: "Building document map and notes inventory" });
   render(<DocumentPreparation sessionId="one" />);
   expect(await screen.findByRole("status")).toHaveTextContent("Building document map and notes inventory");
-  expect(screen.getByText("Document prepared. Document map and notes inventory are being built.")).toBeInTheDocument();
+  expect(screen.queryByText(/^Document prepared\./)).toBeNull();
+  expect(screen.getByRole("img", { name: /Document mapping in progress/ })).toBeVisible();
+  expect(screen.getByTestId("preparation-page-strip")).toHaveClass("is-mapping");
+  expect(screen.getByRole("list", { name: "Document preparation steps" })).toBeVisible();
   expect(screen.getByText("Build document map").closest("li")).toHaveTextContent("Working");
   expect(screen.getAllByRole("region", { name: "Document preparation" })).toHaveLength(1);
   expect(screen.queryByTestId("preparation-status")).not.toHaveTextContent("Complete");
@@ -152,7 +167,7 @@ test("distinguishes captured pages from page checks and can start a historical p
     action_required: "none", captured: 0, checked: 0, message: "Document preparation has not started.",
   }).mockResolvedValueOnce({ ...base, status: "queued", captured: 0, checked: 0 });
   render(<DocumentPreparation sessionId="one" />);
-  expect(await screen.findByText("Start document preparation.")).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "Start preparation" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Start preparation" }));
   await waitFor(() => expect(request).toHaveBeenCalledWith("/api/preparation/one", { method: "POST" }));
 });
@@ -180,17 +195,19 @@ test("past the activity limit, rows already shown stay the same rows", async () 
   render(<DocumentPreparation sessionId="one" />);
   await act(async () => { await Promise.resolve(); });
   for (let i = 0; i < 49; i++) await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
-  const list = screen.getByRole("list", { name: "Live activity" });
-  expect(list.querySelectorAll("li")).toHaveLength(50);
+  expect(screen.getByRole("list", { name: "Live activity" }).querySelectorAll("li")).toHaveLength(3);
+  fireEvent.click(screen.getByText("Earlier updates"));
+  const list = screen.getByRole("list", { name: "Earlier preparation activity" });
+  expect(list.querySelectorAll("li")).toHaveLength(47);
   const kept = Array.from(list.querySelectorAll("li")).find((item) => item.textContent === "Update 10");
 
   await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
-  expect(list.querySelectorAll("li")).toHaveLength(50);
+  expect(list.querySelectorAll("li")).toHaveLength(47);
   expect(Array.from(list.querySelectorAll("li")).find((item) => item.textContent === "Update 10")).toBe(kept);
   expect(list).not.toHaveTextContent(/^Update 1$/m);
 });
 
-test("hands off to setup: the track asks for confirmation and the preparation record folds away", async () => {
+test("completes the three stages and stops the block animation before setup", async () => {
   request.mockResolvedValue({
     ...base,
     status: "succeeded",
@@ -207,9 +224,10 @@ test("hands off to setup: the track asks for confirmation and the preparation re
   // Setup itself is the next view, so preparation shows no confirm step or prompt.
   expect(screen.queryByText("Confirm detected setup")).toBeNull();
   expect(screen.queryByText(/review the detected filing details/i)).toBeNull();
-  expect(screen.getByRole("button", { name: "Preparation details" })).toHaveAttribute("aria-expanded", "false");
-  expect(screen.getByLabelText("Document preparation steps")).not.toBeVisible();
+  expect(screen.queryByRole("button", { name: "Preparation details" })).toBeNull();
+  expect(screen.getByLabelText("Document preparation steps")).toBeVisible();
   expect(screen.queryByRole("list", { name: "Live activity" })).toBeNull();
-  expect(screen.queryByTestId("preparation-page-strip")).toBeNull();
+  expect(screen.getByTestId("preparation-page-strip")).toBeVisible();
+  expect(screen.getByTestId("preparation-page-strip")).not.toHaveClass("is-mapping");
   expect(screen.queryByRole("button", { name: "Stop preparation" })).toBeNull();
 });
