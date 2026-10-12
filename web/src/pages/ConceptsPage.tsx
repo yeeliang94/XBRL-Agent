@@ -5,7 +5,7 @@ import { ExpandMore, LeftPanelClose } from "../components/iconGlyphs";
 import { ui, uiClass } from "../lib/uiStyles";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { StatusIcon } from "../components/StatusIcon";
-import { NotesReviewTab } from "../components/NotesReviewTab";
+import { NotesReviewTab, type NotesComparisonView } from "../components/NotesReviewTab";
 import { ResizableDivider } from "../components/ResizableDivider";
 import { ReconciliationQueue } from "../components/ReconciliationQueue";
 import { PdfSourcePane } from "../components/PdfSourcePane";
@@ -501,7 +501,7 @@ export function ConceptsPage({
   const [onlyHighlighted, setOnlyHighlighted] = useState(false);
   const [comparisonBlocked, setComparisonBlocked] = useState(false);
   const comparisonControlsBlocked = comparisonBlocked || Object.values(editStatus).some((status) => status === "saving" || status === "error");
-  const [notesComparisonKind, setNotesComparisonKind] = useState<"figures" | "notes">("notes");
+  const [notesComparisonView, setNotesComparisonView] = useState<NotesComparisonView>({ kind: "notes", slots: [] });
   const handleNotesPreparationBlocked = useCallback((blocked: boolean) => {
     setComparisonBlocked(blocked);
     onPreparationBlocked?.(blocked);
@@ -976,7 +976,7 @@ export function ConceptsPage({
   }
 
   // Scores use inputs only; visible calculated values remain a separate exclusion.
-  const comparingProse = notesActive && notesComparisonKind === "notes";
+  const comparingProse = notesActive && notesComparisonView.kind === "notes";
   let comparisonSummary: ComparisonSummary = { kind: comparingProse ? "notes" : "figures", scope: activeScope,
     humanFilled: 0, bothFilled: 0, matched: 0, aiOnly: 0, notCounted: 0 };
   let comparisonExcludes: string | null = null;
@@ -990,14 +990,21 @@ export function ConceptsPage({
       // Unmatched notes have no field to highlight, so they are named, not counted.
       comparisonExcludes = unmatched ? `${plural(unmatched, "unmatched note")} across the run, listed separately.` : null;
     } else {
-      // Numeric notes show every applicable entity column together.
-      const t = notesActive ? Object.values(comparison.figures.totals).reduce((total, scope) => ({
-        human_filled: total.human_filled + scope.human_filled, both_filled: total.both_filled + scope.both_filled,
-        same_value: total.same_value + scope.same_value, ai_only: total.ai_only + scope.ai_only,
-        zero_blank_excluded: total.zero_blank_excluded + scope.zero_blank_excluded,
-      }), { human_filled: 0, both_filled: 0, same_value: 0, ai_only: 0, zero_blank_excluded: 0 }) : comparison.figures.totals[activeScope];
-      const calculated = comparison.figures.slots.filter((slot) => (notesActive || slot.entity_scope === activeScope) && slot.calculated).length;
-      comparisonSummary = { kind: "figures", scope: notesActive ? Object.keys(comparison.figures.totals).join(" and ") : activeScope, humanFilled: t?.human_filled ?? 0,
+      // Numeric notes score the exact slots rendered by the current worksheet.
+      const slots = notesActive ? notesComparisonView.slots : comparison.figures.slots.filter((slot) => slot.entity_scope === activeScope);
+      const t = notesActive ? slots.reduce((total, slot) => {
+        if (slot.calculated) return total;
+        if (slot.status === "zero_blank") total.zero_blank_excluded++;
+        else if (slot.status === "ai_only") total.ai_only++;
+        else {
+          total.human_filled++;
+          if (slot.status !== "missed") total.both_filled++;
+          if (slot.status === "agree") total.same_value++;
+        }
+        return total;
+      }, { human_filled: 0, both_filled: 0, same_value: 0, ai_only: 0, zero_blank_excluded: 0 }) : comparison.figures.totals[activeScope];
+      const calculated = slots.filter((slot) => slot.calculated).length;
+      comparisonSummary = { kind: "figures", scope: notesActive ? [...new Set(slots.map((slot) => slot.entity_scope))].join(" and ") : activeScope, humanFilled: t?.human_filled ?? 0,
         bothFilled: t?.both_filled ?? 0, matched: t?.same_value ?? 0, aiOnly: t?.ai_only ?? 0,
         notCounted: (t?.zero_blank_excluded ?? 0) + calculated };
       // The count covers only cells the "Not counted" highlight can show;
@@ -1334,7 +1341,7 @@ export function ConceptsPage({
               comparisonHighlights={humanActive ? comparisonHighlights : undefined}
               onlyHighlighted={humanActive && onlyHighlighted}
               onShowAllComparisonFields={showAllComparisonFields}
-              onComparisonKindChange={setNotesComparisonKind}
+              onComparisonViewChange={setNotesComparisonView}
               onComparisonChange={() => setConflictReloadKey((key) => key + 1)}
               humanFigures={humanActive ? humanView?.slots : null}
               human={humanActive && comparison ? {

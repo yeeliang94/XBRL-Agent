@@ -204,20 +204,44 @@ describe("figures view with a human file", () => {
     expect(screen.getByTestId("matrix-cell-10-B-CY")).not.toHaveAttribute("data-comparison-highlight");
   });
 
-  test("numeric notes use figure agreement and figure highlight categories", async () => {
-    mockApi();
+  test("numeric notes score only their displayed concepts, categories, periods and entities", async () => {
+    const ordinary = JSON.stringify({ share: "ordinary" });
+    const preference = JSON.stringify({ share: "preference" });
+    mockApi({ ...comparison, figures: { ...comparison.figures, slots: [...comparison.figures.slots,
+      { concept_uuid: "cash", period: "CY", entity_scope: "Group", dimension_key: "", status: "different", human_value: 500, ai_value: 100 },
+      { concept_uuid: "capital", period: "CY", entity_scope: "Company", dimension_key: ordinary, status: "agree", human_value: 10, ai_value: 10 },
+      { concept_uuid: "capital", period: "CY", entity_scope: "Company", dimension_key: preference, status: "missed", human_value: 5, ai_value: null },
+      { concept_uuid: "capital", period: "PY", entity_scope: "Company", dimension_key: preference, status: "different", human_value: 50, ai_value: 40 },
+      { concept_uuid: "other-total", period: "CY", entity_scope: "Group", dimension_key: "", calculated: true, status: "different", human_value: 900, ai_value: 800 },
+    ] } });
     const original = vi.mocked(globalThis.fetch).getMockImplementation()!;
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(async (url: string, init?: RequestInit) => {
       if (url.endsWith("/notes_cells")) return new Response(JSON.stringify({ sheets: [{ sheet: "Notes-Issuedcapital", rows: [{
-        row: 6, label: "Share capital", kind: "numeric", concept_uuid: "cash", html: "", values: { cy: 100, py: 90 },
+        row: 6, label: "Cash", kind: "numeric", concept_uuid: "cash", html: "", values: { cy: 100 },
+        source_pages: [], evidence: null, updated_at: null,
+      }, {
+        row: 7, label: "Share capital", kind: "numeric", concept_uuid: "capital", html: "", values: { cy: null },
+        categories: [{ dimension_key: ordinary, dimensions: { share: "ordinary" }, label: "Ordinary", values: { cy: 10 }, evidence: null }],
+        source_pages: [], evidence: null, updated_at: null,
+      }, {
+        row: 8, label: "Total", kind: "numeric", concept_uuid: "total", html: "", values: { cy: 300 },
+        source_pages: [], evidence: null, updated_at: null,
+      }, {
+        row: 9, label: "Other", kind: "numeric", concept_uuid: "zero", html: "", values: { cy: null },
         source_pages: [], evidence: null, updated_at: null,
       }] }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       return original(url, init);
     });
     render(<ConceptsPage runId={7} humanFile={file} initialView="notes" />);
     await screen.findByTestId("numeric-input-6-cy");
-    await waitFor(() => expect(screen.getByText("33.3%")).toBeVisible());
-    expect(screen.getByRole("button", { name: "Different 1" })).toBeVisible();
+    await waitFor(() => expect(screen.getByText(/figure agreement/)).toHaveTextContent("66.7%"));
+    expect(screen.getByRole("button", { name: "Match 2" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Different 0" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Missed by AI 1" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "AI-only 0" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Not counted 2" })).toBeVisible();
+    expect(screen.getByTestId(`numeric-human-7-${preference}-cy`)).toHaveTextContent("5");
+    expect(screen.queryByText("Company and Group")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Placed / })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "Only missed by AI" })).not.toBeInTheDocument();
   });

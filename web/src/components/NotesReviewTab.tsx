@@ -120,7 +120,12 @@ export interface NotesReviewTabProps {
   comparisonHighlights?: readonly ComparisonHighlight[];
   onlyHighlighted?: boolean;
   onShowAllComparisonFields?: () => void;
-  onComparisonKindChange?: (kind: "figures" | "notes") => void;
+  onComparisonViewChange?: (view: NotesComparisonView) => void;
+}
+
+export interface NotesComparisonView {
+  kind: "figures" | "notes";
+  slots: HumanFigureSlot[];
 }
 
 export interface HumanNotesView {
@@ -391,7 +396,7 @@ export function NotesReviewTab({
   comparisonHighlights,
   onlyHighlighted = false,
   onShowAllComparisonFields,
-  onComparisonKindChange,
+  onComparisonViewChange,
 }: NotesReviewTabProps) {
   // sheets / loading / error are the basic fetch lifecycle. We keep them
   // at the tab level (not in the individual cell editor) so one network
@@ -686,9 +691,25 @@ export function NotesReviewTab({
     () => sheets?.find((sheet) => sheet.sheet === active.sheet) ?? sheets?.[0] ?? null,
     [active.sheet, sheets],
   );
+  const comparisonView = useMemo<NotesComparisonView>(() => {
+    const slots = new Map<string, HumanFigureSlot>();
+    for (const cell of activeSheet?.rows ?? []) {
+      if (cell.kind !== "numeric" || !cell.concept_uuid) continue;
+      for (const category of numericNoteCategories(cell, humanFigures)) {
+        for (const key of Object.keys(category.values)) {
+          const column = NUMERIC_VALUE_COLUMNS[key];
+          if (!column) continue;
+          const identity = humanSlotKey(cell.concept_uuid, column.period, column.entity_scope, category.dimension_key);
+          const slot = humanFigures?.get(identity);
+          if (slot) slots.set(identity, slot);
+        }
+      }
+    }
+    return { kind: activeSheet?.rows.some((cell) => cell.kind === "numeric") ? "figures" : "notes", slots: [...slots.values()] };
+  }, [activeSheet, humanFigures]);
   useEffect(() => {
-    onComparisonKindChange?.(activeSheet?.rows.some((cell) => cell.kind === "numeric") ? "figures" : "notes");
-  }, [activeSheet, onComparisonKindChange]);
+    onComparisonViewChange?.(comparisonView);
+  }, [comparisonView, onComparisonViewChange]);
 
   useEffect(() => {
     if (!focusCell || sourceNotes == null || saveBlocked || moveBusy) return;
