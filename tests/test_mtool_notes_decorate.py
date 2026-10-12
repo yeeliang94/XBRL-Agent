@@ -133,6 +133,13 @@ def test_emphasis_inherits_bold_ancestor_written_in_any_case_or_important():
     assert "font-weight: 800" in soup.find("b", string="important")["style"]
 
 
+def test_emphasis_inherits_heading_weight_between_round_values():
+    soup = BeautifulSoup(decorate_notes_html(
+        "<h3><strong>Title</strong></h3>", style=NotesTableStyle(heading_weight=650)),
+        "html.parser")
+    assert "font-weight: 650" in soup.h3.strong["style"]
+
+
 def test_subnote_section_indents_its_table_and_prose_together():
     html = ('<h3>8 Revenue</h3><div data-note-section="1">'
             '<h3>8.1 Services</h3><p>Service revenue.</p>'
