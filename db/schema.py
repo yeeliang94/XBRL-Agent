@@ -238,7 +238,10 @@ from pathlib import Path
 # typed figures by canonical fact key, and the human's notes by field. The
 # comparison with the run's current facts is computed on read, never stored.
 # v50 stores shared content guidance and a frozen per-run guidance snapshot.
-CURRENT_SCHEMA_VERSION = 51
+# v52 keeps the history of source tables re-copied from the PDF after a
+# structural visual-review finding. The block is corrected in place; this
+# table retains the earlier capture, the finding and the verifier's receipt.
+CURRENT_SCHEMA_VERSION = 52
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -1389,6 +1392,23 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         html        TEXT NOT NULL,
         created_at  TEXT NOT NULL DEFAULT '',
         UNIQUE(run_id, sheet, row)
+    )
+    """,
+
+    # v52: source tables re-copied from the PDF after a structural finding.
+    """
+    CREATE TABLE IF NOT EXISTS notes_source_block_revisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        generation_id INTEGER NOT NULL,
+        block_id TEXT NOT NULL,
+        before_html TEXT NOT NULL,
+        after_html TEXT NOT NULL,
+        finding TEXT NOT NULL,
+        verification_json TEXT NOT NULL,
+        rebuilt_cells_json TEXT NOT NULL,
+        model TEXT NOT NULL,
+        created_at TEXT NOT NULL
     )
     """,
 
@@ -3673,6 +3693,18 @@ def init_db(path: str | Path) -> None:
                 latest = conn.execute("SELECT version FROM schema_version").fetchone()[0]
                 if latest < 51:
                     conn.execute("UPDATE schema_version SET version = 51")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v51 -> v52: table re-copy history, created by the guarded statements above.
+        if current_version is not None and current_version < 52:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                latest = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+                if latest < 52:
+                    conn.execute("UPDATE schema_version SET version = 52")
                 conn.commit()
             except Exception:
                 conn.rollback()

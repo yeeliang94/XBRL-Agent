@@ -607,6 +607,9 @@ async def patch_notes_cell_endpoint(
                 evidence=upsert_evidence,
                 source_pages=upsert_pages,
                 concept_uuid=upsert_concept_uuid,
+                # A person now owns this note's styling. content_origin cannot
+                # say so: the notes reviewer AI also stamps human_modified.
+                style_source="human",
             )
             # Same transaction as the content write, deliberately: a lineage
             # update that ran afterwards would leave a window in which the

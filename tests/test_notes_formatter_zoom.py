@@ -108,5 +108,5 @@ def test_the_formatter_has_no_tool_that_re_reads_the_prompt(tmp_path):
     # The payload must still carry everything the tool used to serve.
     src = inspect.getsource(formatting_agent._build_user_prompt)
     for field in ("row", "label", "html", "evidence", "source_pages",
-                  "allowed_targets"):
+                  "layout_tables"):
         assert field in src, field
