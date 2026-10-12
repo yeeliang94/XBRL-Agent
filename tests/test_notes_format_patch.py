@@ -657,7 +657,10 @@ async def test_formatter_time_limit_is_reported_as_failed(monkeypatch, formatter
             deadline=time.monotonic() + 0.05,
         ), timeout=0.05)
     assert _final_phase(live)["phase"] == "failed"
-    assert _final_phase(live)["message"] == "Formatting reached its time limit."
+    # Activity leads with a plain sentence; the recorded reason stays as detail.
+    assert _final_phase(live)["message"] == "Formatting reached its time limit. Retry it from the Notes tab."
+    assert _final_phase(live)["detail"] == "Formatting reached its time limit."
+    assert _final_phase(live)["error_type"] == "timeout"
     db, _, run_id = formatter_db
     with repo.db_session(db) as conn:
         status, error_type = conn.execute(
@@ -665,6 +668,19 @@ async def test_formatter_time_limit_is_reported_as_failed(monkeypatch, formatter
             (run_id,),
         ).fetchone()
     assert (status, error_type) == ("failed", "timeout")
+
+
+def test_failed_pass_leads_with_a_plain_sentence():
+    from notes.formatting_agent import _plain_failure
+
+    finding = "Table 1: Note 26, row 3: the candidate combines two rows ..."
+    assert _plain_failure({"error_type": "visual_review_failed", "error": finding,
+                           "failed_rows": [12], "table_recopy": {}}) == (
+        "1 note still looks different from the source PDF after re-copying its "
+        "tables. Retry it from the Notes tab.")
+    assert _plain_failure({"error_type": "visual_review_failed", "failed_rows": [12, 14]}) == (
+        "2 notes still look different from the source PDF. Retry it from the Notes tab.")
+    assert finding not in _plain_failure({"error_type": "model_error", "error": finding})
 
 
 @pytest.mark.asyncio

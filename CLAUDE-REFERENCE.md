@@ -712,6 +712,13 @@ MPERS (private-entity) run inherited. Pinned by
 
 ### 13. Scout page hints are soft guidance only
 
+Prepared source text uses ordinary spaces in place of em/en, non-breaking,
+thin and other special spacing characters, including HTML entity forms.
+Normalization applies while preserving semantic headings and emphasis;
+indentation belongs to the existing structural/style controls. Preparation
+contract versioning invalidates older cached captures. Pinned by
+`tests/test_pdf_sidecar.py::test_normalize_strips_code_fences_and_exotic_whitespace`.
+
 New web uploads start durable document preparation automatically, then a unified
 Scout document map. Capture combines orientation and transcription, keeps independent
 page checks, and uses up to fifteen concurrent requests under the shared
@@ -2250,7 +2257,12 @@ Load-bearing invariants:
   compared, calculated slots and AI values the file cannot address are
   excluded and counted. A calculated slot is still shown: the human's total is
   derived from the human's inputs through `concept_edges` (a typed total is
-  kept) and marked only when it differs from the run's total. Only a
+  kept) and marked only when it differs from the run's total. Addressable blank
+  human inputs contribute zero to displayed formula totals, including entirely
+  empty sections; the input fields remain blank and totals remain unscored.
+  Missing addresses and totals without formula relationships are not invented.
+  Pinned by `tests/test_human_file_ingest.py::test_empty_input_sections_show_zero_human_totals`.
+  Only a
   `different_variant` or `not_in_file` statement drops the run's values; a
   `not_in_run` entry names a notes template the run did not extract, and a
   footnote on a statement figure is never recorded as one. A statement is
@@ -2258,16 +2270,31 @@ Load-bearing invariants:
   `zero_blank` but is excluded from the Found denominator and reported per scope;
   it is not treated as proof that the zero was a filing placeholder. Other
   human zeros remain in the comparison.
+- **Notes filtering uses current content.** A read-only selected note obeys
+  the active comparison filter. An active edit remains visible with an explicit
+  outside-filter label; finishing the edit reapplies the filter. Pinned by
+  `web/src/__tests__/NotesReviewTab.test.tsx`.
 - **Frontend.** The Figures and Notes views get a `[ Human file | Source PDF ]`
   switch. Human values are extra columns on the SAME rows as the AI values;
   only differences carry a marker (`!` different, `○` missed by the AI, `◇`
   AI-only); an excluded human zero is shown muted with no marker, per the
   design guide's exception-only indicator rule. The Rows filter options show
-  per-worksheet counts, and the unmatched list shows only the worksheet being
+  per-worksheet counts outside human mode, and the unmatched list shows only the worksheet being
   read. Numeric
   category members appear beside their exact AI row. Successful notes edits
   refresh the comparison. Unmatched rows sit in a closed disclosure below the
   table.
+- **Comparison controls and score.** Status buttons toggle per-slot highlights;
+  Only highlighted filters their union. Period, scope and category identity
+  never spread a highlight to another cell. Calculated slots and excluded
+  human zeros use Not counted; unmatched rows remain in their worksheet report.
+  Figure agreement is exact input matches divided by human-filled inputs
+  (coverage × correctness). No denominator yields no score. AI-only values and
+  totals never lower it. Prose notes measure placement, never content correctness. Numeric notes use
+  figure agreement across the displayed entities.
+  Score details floats without moving the table and closes on Escape or an
+  outside click. Pinned by `web/src/__tests__/HumanFileComparison.test.tsx`,
+  `web/src/__tests__/NotesReviewTab.test.tsx` and design-system parity tests.
 - **The gold-benchmark flow is retired.** The Benchmarks page, the
   extract-page grading toggle, run-completion grading, the Eval tab, the
   History score column and the benchmark routes are removed.

@@ -59,10 +59,16 @@ def caller(*, fail_verify=False, rotation=0, link=False):
     return call, calls
 
 
-def test_complete_capture_preserves_emphasis_and_links_and_reuses(tmp_path):
+@pytest.mark.parametrize("space", [" ", "\u2003", "&emsp;"])
+def test_complete_capture_preserves_emphasis_and_links_and_reuses(tmp_path, space):
     path = pdf(tmp_path)
     original = path.read_bytes()
-    call, calls = caller(link=True, rotation=90)
+    base, calls = caller(link=True, rotation=90)
+    async def call(stage, images, context):
+        result = await base(stage, images, context)
+        if stage == "capturing":
+            result["html"] = result["html"].replace("Text ", f"Text{space}")
+        return result
     events = []
     result = asyncio.run(prepare_document(path, None, model_name="fake", _caller=call, on_progress=events.append))
     assert '<strong>Text 1</strong>' in result.source_html_path.read_text()

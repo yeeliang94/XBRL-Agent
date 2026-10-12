@@ -20,6 +20,8 @@ import type { AgentTabState } from "../components/AgentTabs";
 import { ValidatorTab } from "../components/ValidatorTab";
 import { NotesSubTabBar } from "../components/NotesSubTabBar";
 import { FormatterSubAgentActivity } from "../components/FormatterSubAgentActivity";
+import { deriveFormatterSheets, formatterProgressSummary, formatterRunningParts, formatterSubAgentLabel } from "../lib/formatterSubAgents";
+import { notesSheetDisplayName } from "../lib/sheetLabels";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { buildToolTimeline, filterEventsBySubAgent } from "../lib/buildToolTimeline";
 import { buildReasoningTimeline } from "../lib/buildReasoningTimeline";
@@ -305,15 +307,20 @@ export function ExtractPage({
       );
       const formatting = notesFormattingActivity(state);
       if (formatting) {
+        // Sheet and part progress, rather than whichever sheet reported last.
+        const formatterEvents = state.agents["notes-formatting"]?.events ?? [];
+        const progress = formatterProgressSummary(deriveFormatterSheets(formatterEvents));
+        const running = formatterRunningParts(formatterEvents);
         agents["notes-formatting"] = {
           agentId: "notes-formatting",
           label: "Notes formatting",
           role: "NOTES_FORMATTING",
           status: formatting.status,
-          task: formatting.message,
-          taskDetail: formatting.progress?.total
-            ? `${formatting.progress.completed ?? 0} of ${formatting.progress.total}`
-            : null,
+          task: progress ?? formatting.message,
+          taskDetail: progress ? (running ? `${running} running` : null)
+            : formatting.progress?.total
+              ? `${formatting.progress.completed ?? 0} of ${formatting.progress.total}`
+              : null,
           subLabel: null,
           flag: null,
         } as AgentTabState;
@@ -833,12 +840,30 @@ export function ActiveTabPanel({
     const completed = formatting.progress?.completed ?? 0;
     const total = formatting.progress?.total ?? 0;
     const message = formatting.message;
+    // Once formatter passes report, Notes formatting reads like every other
+    // workstream: chips per sheet and the activity stream. The stage line is
+    // kept only before then, or for problems not explained by a failed sheet.
+    const formatterEvents = state.activeTab === "notes-formatting" ? state.agents["notes-formatting"]?.events ?? [] : [];
+    const formatterSheets = deriveFormatterSheets(formatterEvents);
+    const bySheet = formatterSheets.length > 0;
+    const incomplete = [...state.events].reverse().find((event) =>
+      event.event === "error" && event.data.type === "notes_formatting_incomplete");
+    const outcomes = incomplete?.event === "error" ? incomplete.data.sheets : undefined;
+    let stageMessages: string[] = [];
+    if (!bySheet) stageMessages = [message];
+    else if (formatting.status === "failed") {
+      stageMessages = outcomes && Object.keys(outcomes).length > 0
+        ? Object.entries(outcomes)
+          .filter(([sheet, outcome]) => !outcome.ok && !formatterSheets.some((item) => item.sheet === sheet && item.status === "failed"))
+          .map(([sheet, outcome]) => `${notesSheetDisplayName(sheet)}: ${outcome.error || outcome.summary || "Appearance checking did not finish."}`)
+        : [message];
+    }
     return (
       <div role="tabpanel" aria-label={`${label} activity`} style={styles.activityCardAttached}>
         <div style={styles.activityHeader}>
           <div style={styles.activityHeaderLeft}>
             <div>
-              <div style={styles.activityEyebrow}>Current stage</div>
+              <div style={styles.activityEyebrow}>{bySheet ? "Selected workstream" : "Current stage"}</div>
               <div style={styles.activityTitle}>{label}</div>
             </div>
             <span style={styles.activeAgentStatus}>{workstreamStatusLabel(formatting.status)}</span>
@@ -851,11 +876,11 @@ export function ActiveTabPanel({
             )}
           </div>
         </div>
-        <div style={{ padding: pwc.space.lg }}>
+        {stageMessages.length > 0 && <div style={{ padding: pwc.space.lg }}>
           <div role="status" aria-live="polite" style={{ color: pwc.grey900, fontSize: 14 }}>
-            {message}
+            {stageMessages.map((reason) => <div key={reason}>{reason}</div>)}
           </div>
-          {total > 0 && (
+          {total > 0 && !bySheet && (
             <div
               role="progressbar"
               aria-label={`${label} progress`}
@@ -867,9 +892,18 @@ export function ActiveTabPanel({
               <span style={{ ...styles.stageProgressFill, width: `${Math.min(100, completed / total * 100)}%` }} />
             </div>
           )}
-        </div>
-        {state.activeTab === "notes-formatting" && state.agents["notes-formatting"] && (
-          <FormatterSubAgentActivity events={state.agents["notes-formatting"].events} status={formatting.status} />
+        </div>}
+        {bySheet && (
+          <FormatterSubAgentActivity events={formatterEvents} status={formatting.status}
+            technical={<>
+              {formatterEvents.map((event, index) => event.event === "status" && event.data.phase === "failed" && event.data.detail
+                ? <div key={index} style={{ padding: pwc.space.md, whiteSpace: "pre-wrap" }}>
+                  <strong>{formatterSubAgentLabel(event.data.sub_agent_id ?? "Notes formatting")}</strong>
+                  <div>{event.data.detail}</div>
+                </div> : null)}
+              <AgentTimeline events={formatterEvents} toolTimeline={buildToolTimeline(formatterEvents)}
+                reasoningBlocks={[]} isRunning={formatting.status === "running"} />
+            </>} />
         )}
       </div>
     );

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { StrictMode } from "react";
 import { describe, expect, test, vi } from "vitest";
 import { ActivityStream } from "../components/ActivityStream";
@@ -13,37 +13,23 @@ function status(message: string, timestamp: number): SSEEvent {
 }
 
 describe("ActivityStream", () => {
-  test.each([true, false])("follows new page updates only from the bottom (initially at bottom: %s)", (atBottom) => {
-    let pageHeight = atBottom ? window.innerHeight : window.innerHeight + 500;
-    const pageSize = vi.spyOn(document.documentElement, "scrollHeight", "get").mockImplementation(() => pageHeight);
+  test("new updates arrive at the top without scrolling the page or the list", () => {
     const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
     const first = status("Reading page 1", 1);
-    const view = (events: SSEEvent[], streamKey = "scout") => (
-      <StrictMode><ActivityStream events={events} toolTimeline={[]} reasoningBlocks={[]} isRunning streamKey={streamKey} /></StrictMode>
+    const view = (events: SSEEvent[]) => (
+      <StrictMode><ActivityStream events={events} toolTimeline={[]} reasoningBlocks={[]} isRunning streamKey="scout" /></StrictMode>
     );
     try {
       const { rerender } = render(view([first]));
-      expect(scrollTo).not.toHaveBeenCalled();
-      pageHeight += 200;
+      const feed = screen.getByRole("list", { name: "Activity updates" });
+      expect(feed).toHaveAttribute("tabindex", "0");
+      feed.scrollTop = 40; // An operator reading earlier work keeps their place.
       rerender(view([first, status("Reading page 2", 2)]));
-      if (atBottom) expect(scrollTo).toHaveBeenCalledWith({ top: pageHeight, behavior: "auto" });
-      else expect(scrollTo).not.toHaveBeenCalled();
-
-      scrollTo.mockClear();
-      fireEvent.scroll(window); // Operator is reading above the new page bottom.
-      pageHeight += 200;
-      rerender(view([first, status("Reading page 2", 2), status("Reading page 3", 3)]));
+      expect(within(feed).getAllByTestId("activity-sentence")[0]).toHaveTextContent("Reading page 2.");
+      expect(within(feed).getAllByTestId("activity-sentence")[0]).toHaveAttribute("aria-current", "true");
+      expect(feed.scrollTop).toBe(40);
       expect(scrollTo).not.toHaveBeenCalled();
-
-      pageHeight = window.innerHeight;
-      fireEvent.scroll(window);
-      rerender(view([first], "notes"));
-      expect(scrollTo).not.toHaveBeenCalled();
-      pageHeight += 200;
-      rerender(view([first, status("Reading page 4", 4)], "notes"));
-      expect(scrollTo).toHaveBeenCalledWith({ top: pageHeight, behavior: "auto" });
     } finally {
-      pageSize.mockRestore();
       scrollTo.mockRestore();
     }
   });
@@ -119,7 +105,7 @@ describe("ActivityStream", () => {
     expect(newestUpdate?.querySelector(".activity-sentence-pulse")).not.toBeNull();
   });
 
-  test("keeps completed milestones in chronological order and announces the latest", () => {
+  test("lists milestones newest first and announces the latest", () => {
     render(
       <ActivityStream
         events={[
@@ -136,75 +122,11 @@ describe("ActivityStream", () => {
 
     const feed = screen.getByRole("list", { name: "Activity updates" });
     expect(within(feed).getAllByTestId("activity-sentence").map((item) => item.textContent)).toEqual([
-      "Reading page 1.",
-      "Reading page 2.",
       "Workstream completed.",
+      "Reading page 2.",
+      "Reading page 1.",
     ]);
     expect(screen.getByRole("status", { name: "Current agent activity" }))
       .toHaveTextContent("Workstream completed.");
-  });
-
-  test("follows appended updates at the bottom but preserves an operator's scrolled position", () => {
-    const first = status("Reading page 1", 1);
-    const { rerender } = render(
-      <ActivityStream
-        events={[first]}
-        toolTimeline={[]}
-        reasoningBlocks={[]}
-        isRunning
-        streamKey="scout"
-      />,
-    );
-
-    const feed = screen.getByRole("list", { name: "Activity updates" });
-    expect(feed).toHaveAttribute("tabindex", "0");
-    let scrollHeight = 300;
-    Object.defineProperty(feed, "scrollHeight", {
-      configurable: true,
-      get: () => scrollHeight,
-    });
-    Object.defineProperty(feed, "clientHeight", {
-      configurable: true,
-      value: 100,
-    });
-
-    feed.scrollTop = 200;
-    fireEvent.scroll(feed);
-    rerender(
-      <ActivityStream
-        events={[first, status("Reading page 2", 2)]}
-        toolTimeline={[]}
-        reasoningBlocks={[]}
-        isRunning
-        streamKey="scout"
-      />,
-    );
-    expect(feed.scrollTop).toBe(300);
-
-    feed.scrollTop = 40;
-    fireEvent.scroll(feed);
-    scrollHeight = 400;
-    rerender(
-      <ActivityStream
-        events={[first, status("Reading page 2", 2), status("Reading page 3", 3)]}
-        toolTimeline={[]}
-        reasoningBlocks={[]}
-        isRunning
-        streamKey="scout"
-      />,
-    );
-    expect(feed.scrollTop).toBe(40);
-
-    scrollHeight = 500;
-    rerender(
-      <ActivityStream
-        events={[first]}
-        toolTimeline={[]}
-        reasoningBlocks={[]}
-        isRunning
-        streamKey="notes:sub-1"
-      />,
-    );
-    expect(feed.scrollTop).toBe(500);
   });
 });

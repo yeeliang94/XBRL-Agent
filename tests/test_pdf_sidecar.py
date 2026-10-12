@@ -45,10 +45,18 @@ def _make_pdf(path: Path, *, pages: int = 2, with_text: bool = False) -> Path:
 # ---------------------------------------------------------------- normalize
 
 
-def test_normalize_strips_code_fences_and_exotic_whitespace():
-    raw = "```html\n<h3>5.　Receivables</h3>\n```"
-    out = normalize_transcription(raw)
-    assert out == "<h3>5. Receivables</h3>"
+@pytest.mark.parametrize("preserve_formatting", [False, True])
+@pytest.mark.parametrize("space", ["\u2003", "&emsp;", "&#8195;", "\u00a0", "&nbsp;", "\u202f", "\u205f", "\u3000"])
+def test_normalize_strips_code_fences_and_exotic_whitespace(preserve_formatting, space):
+    raw = f"```html\n<h3>5.{space}<strong>Receivables</strong></h3>\n<p>Trade{space}receivables</p>\n```"
+    out = normalize_transcription(raw, preserve_meaningful_formatting=preserve_formatting)
+    heading = "<strong>Receivables</strong>" if preserve_formatting else "Receivables"
+    assert out == f"<h3>5. {heading}</h3>\n<p>Trade receivables</p>"
+
+
+def test_normalize_whitespace_keeps_comments_out_of_visible_text():
+    out = normalize_transcription("<p>Trade</p><!--\u00a0page note-->")
+    assert out == "<p>Trade</p><!-- page note-->"
 
 
 def test_normalize_strips_presentation_but_preserves_table_geometry():

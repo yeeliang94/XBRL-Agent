@@ -74,7 +74,7 @@ import { useNoteOutput } from "./useNoteOutput";
 import { tagNumericCells } from "../lib/tableAlign";
 import { formatGroupedInput } from "../lib/numberFormat";
 import { notesFormatErrorMessage } from "../lib/vocabulary";
-import { humanSlotKey, type HumanFigureSlot } from "../lib/humanFile";
+import { humanSlotKey, isComparisonHighlighted, type ComparisonHighlight, type HumanFigureSlot } from "../lib/humanFile";
 import { HumanStatusMarker } from "./HumanStatusMarker";
 import {
   resolveTheme,
@@ -117,6 +117,15 @@ export interface NotesReviewTabProps {
   human?: HumanNotesView | null;
   humanFigures?: Map<string, HumanFigureSlot> | null;
   onComparisonChange?: () => void;
+  comparisonHighlights?: readonly ComparisonHighlight[];
+  onlyHighlighted?: boolean;
+  onShowAllComparisonFields?: () => void;
+  onComparisonViewChange?: (view: NotesComparisonView) => void;
+}
+
+export interface NotesComparisonView {
+  kind: "figures" | "notes";
+  slots: HumanFigureSlot[];
 }
 
 export interface HumanNotesView {
@@ -194,6 +203,26 @@ function noteFieldPresence(cell: NotesCell, human: HumanNotesView | null, humanF
     }
   }
   return { filled, missed };
+}
+
+function noteMatchesHighlights(cell: NotesCell, human: HumanNotesView | null, humanFigures: Map<string, HumanFigureSlot> | null, selected: readonly ComparisonHighlight[]): boolean {
+  if (cell.kind !== "numeric") {
+    const aiFilled = !isBlankHtml(cell.html);
+    const humanFilled = Boolean(cell.node_uuid && !isBlankHtml(human?.html[cell.node_uuid]));
+    return Boolean(human && cell.node_uuid && (aiFilled || humanFilled)
+      && selected.includes(humanFilled && !aiFilled ? "missed" : aiFilled && !humanFilled ? "ai_only" : "agree"));
+  }
+  return numericNoteCategories(cell, humanFigures).some(({ dimension_key, values }) => Object.keys(values).some((key) => {
+    const column = NUMERIC_VALUE_COLUMNS[key];
+    if (!column || !cell.concept_uuid) return false;
+    const slot = humanFigures?.get(humanSlotKey(cell.concept_uuid, column.period, column.entity_scope, dimension_key));
+    return !(slot?.status === "missed" && values[key] != null) && isComparisonHighlighted(slot, selected);
+  }));
+}
+
+function noteHighlightStyle(slot: HumanFigureSlot | undefined, selected: readonly ComparisonHighlight[]): React.CSSProperties | undefined {
+  if (!isComparisonHighlighted(slot, selected)) return undefined;
+  return slot && !slot.calculated && (slot.status === "missed" || slot.status === "different") ? ui.comparisonAttention : ui.comparisonQuiet;
 }
 
 interface SourceNotePlacement {
@@ -364,6 +393,10 @@ export function NotesReviewTab({
   human = null,
   humanFigures = null,
   onComparisonChange,
+  comparisonHighlights,
+  onlyHighlighted = false,
+  onShowAllComparisonFields,
+  onComparisonViewChange,
 }: NotesReviewTabProps) {
   // sheets / loading / error are the basic fetch lifecycle. We keep them
   // at the tab level (not in the individual cell editor) so one network
@@ -379,7 +412,7 @@ export function NotesReviewTab({
   const [selectedSubnoteRef, setSelectedSubnoteRef] = useState<string | null>(null);
   const [sourceRailWidth, setSourceRailWidth] = useState(280);
   const [saveBlocked, setSaveBlocked] = useState(false);
-  const [, setEditing] = useState(false);
+  const [editing, setEditing] = useState(false);
   const moveBusy = false;
   const handleCellSaved = useCallback((sheet: string, saved: NotesCell) => {
     setSheets((current) => current?.map((item) => item.sheet === sheet
@@ -455,8 +488,10 @@ export function NotesReviewTab({
   }, [hasHumanComparison]);
   useEffect(() => {
     if (!focusCell || saveBlocked || moveBusy) return;
+    setNoteSearch("");
     setHideEmptyFields(false);
     setOnlyMissedFields(false);
+    onShowAllComparisonFields?.();
     setActive((a) => ({ sheet: focusCell.sheet, key: a.key + 1 }));
     setFocusRow(focusCell.row);
     setSelectedCellKey(`${focusCell.sheet}:${focusCell.row}`);
@@ -638,16 +673,6 @@ export function NotesReviewTab({
     ),
     [sheets],
   );
-  const filteredSourceNotes = useMemo(() => {
-    const query = noteSearch.trim().toLowerCase();
-    const inventory = sourceNotes ?? [];
-    if (!query) return inventory;
-    return inventory.filter((note) =>
-      `${note.note_num} ${note.title}`
-        .toLowerCase()
-        .includes(query),
-    );
-  }, [noteSearch, sourceNotes]);
   const activeCellKey = selectedCellKey ?? (selectedSourceNote == null ? (noteEntries.find((entry) => entry.sheet.sheet === active.sheet) ?? noteEntries[0])?.key : null) ?? null;
   // The sheet navigator is a real view switch: only this sheet is mounted.
   // Falling back to the first available sheet keeps legacy runs usable before
@@ -657,6 +682,25 @@ export function NotesReviewTab({
     () => sheets?.find((sheet) => sheet.sheet === active.sheet) ?? sheets?.[0] ?? null,
     [active.sheet, sheets],
   );
+  const comparisonView = useMemo<NotesComparisonView>(() => {
+    const slots = new Map<string, HumanFigureSlot>();
+    for (const cell of activeSheet?.rows ?? []) {
+      if (cell.kind !== "numeric" || !cell.concept_uuid) continue;
+      for (const category of numericNoteCategories(cell, humanFigures)) {
+        for (const key of Object.keys(category.values)) {
+          const column = NUMERIC_VALUE_COLUMNS[key];
+          if (!column) continue;
+          const identity = humanSlotKey(cell.concept_uuid, column.period, column.entity_scope, category.dimension_key);
+          const slot = humanFigures?.get(identity);
+          if (slot) slots.set(identity, slot);
+        }
+      }
+    }
+    return { kind: activeSheet?.rows.some((cell) => cell.kind === "numeric") ? "figures" : "notes", slots: [...slots.values()] };
+  }, [activeSheet, humanFigures]);
+  useEffect(() => {
+    onComparisonViewChange?.(comparisonView);
+  }, [comparisonView, onComparisonViewChange]);
 
   useEffect(() => {
     if (!focusCell || sourceNotes == null || saveBlocked || moveBusy) return;
@@ -673,15 +717,17 @@ export function NotesReviewTab({
     pages: number[] = sourceNotePages(note),
   ) => {
     if (saveBlocked || moveBusy) return;
+    setNoteSearch("");
     setHideEmptyFields(false);
     setOnlyMissedFields(false);
     setSelectedSourceNote(note.note_num);
+    onShowAllComparisonFields?.();
     setSelectedSubnoteRef(subnoteRef);
     reportCellPages(pages, onActiveCellPages);
     setActive((current) => ({ sheet: placement.sheet, key: current.key + 1 }));
     setFocusRow(placement.row);
     setSelectedCellKey(`${placement.sheet}:${placement.row}`);
-  }, [onActiveCellPages, saveBlocked, moveBusy]);
+  }, [onActiveCellPages, saveBlocked, moveBusy, onShowAllComparisonFields]);
 
   const selectSourceNote = useCallback((note: SourceNoteInventoryRow) => {
     setSelectedSubnoteRef(null);
@@ -765,8 +811,6 @@ export function NotesReviewTab({
               <h2 style={{ ...ui.sectionTitle, margin: 0 }}>mTool worksheets</h2>
             </div>
             <div aria-label="Worksheet and source note list" role="region" style={styles.noteRailBody}>
-            <input type="search" aria-label="Search all note fields" placeholder="Search fields" value={noteSearch}
-              onChange={(event) => setNoteSearch(event.target.value)} style={styles.noteRailSearch} />
                 <nav style={{ display: "flex", flexDirection: "column", gap: 4 }} aria-label="Notes sheet navigator">
                   {(sheets ?? []).map((sheet) => {
                     const number = notesSheetNumber(sheet.sheet, filingStandard);
@@ -797,15 +841,6 @@ export function NotesReviewTab({
                   })}
                 </nav>
 
-            {noteSearch.trim() && <nav aria-label="Matching note fields" style={{ display: "flex", flexDirection: "column" }}>
-              {noteEntries.filter(({ cell, sheet }) => `${cell.label} ${sheet.sheet}`.toLowerCase().includes(noteSearch.trim().toLowerCase())).map(({ cell, sheet, key }) => (
-                <button key={key} type="button" disabled={saveBlocked || moveBusy} aria-current={activeCellKey === key ? "true" : undefined}
-                  style={{ ...styles.workspaceSheetButton, ...(activeCellKey === key ? ui.reviewSelection : {}) }}
-                  onClick={() => { setHideEmptyFields(false); setOnlyMissedFields(false); setActive((current) => ({ sheet: sheet.sheet, key: current.key + 1 })); setFocusRow(cell.row); handleWorkspaceCellActivate(sheet.sheet, cell.row); reportCellPages(cell.source_pages, onActiveCellPages); }}>
-                  <span style={{ minWidth: 0 }}>{cell.label}{isBlankHtml(cell.html) && cell.kind !== "numeric" ? " · Empty" : ""}</span>
-                </button>
-              ))}
-            </nav>}
             <section aria-label="Source note inventory" style={{ marginTop: 16, paddingTop: 12 }}>
             <div style={styles.noteRailHeader}>
               <div>
@@ -826,13 +861,7 @@ export function NotesReviewTab({
               {!sourceNotesError && sourceNotes?.length === 0 && (
                 <p style={styles.noteRailEmpty}>No source-note inventory is available for this run.</p>
               )}
-              {!sourceNotesError && sourceNotes != null && sourceNotes.length > 0
-                && filteredSourceNotes.length === 0 && (
-                <p style={styles.noteRailEmpty} role="status">
-                  No source notes match your search.
-                </p>
-              )}
-              {filteredSourceNotes.map((note) => {
+              {(sourceNotes ?? []).map((note) => {
                 const selected = note.note_num === selectedSourceNote;
                 const resolved = note.reviewer_verdict === "not_applicable" || note.reviewer_verdict === "confirmed_absent";
                 const needsReview = sourceNoteNeedsReview(note);
@@ -966,13 +995,15 @@ export function NotesReviewTab({
                     onChange={(event) => setHideEmptyFields(event.target.checked)} />
                   Hide empty fields
                 </label>
-                {hasHumanComparison && <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, fontSize: 14 }}>
+                {hasHumanComparison && comparisonHighlights == null && <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, fontSize: 14 }}>
                   <input type="checkbox" style={ui.checkbox} checked={onlyMissedFields} disabled={saveBlocked || moveBusy}
                     onChange={(event) => setOnlyMissedFields(event.target.checked)} />
                   Only missed by AI
                 </label>}
               </div>
             </div>
+            <input type="search" aria-label="Search note field names" placeholder="Search fields" value={noteSearch}
+              onChange={(event) => setNoteSearch(event.target.value)} style={styles.fieldSearch} />
             {loadError ? (
               categoryRefreshFailed ? <div role="alert" style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
                 <p style={styles.dim}>Category saved. Notes could not be refreshed.</p>
@@ -1001,9 +1032,13 @@ export function NotesReviewTab({
                   onEditingChange={setEditing}
                   moveBusy={moveBusy}
                   attentionRows={null}
+                  fieldSearch={noteSearch}
                   hideEmptyFields={hideEmptyFields}
                   onlyMissedFields={onlyMissedFields && hasHumanComparison}
-                  onShowAllFields={() => { setHideEmptyFields(false); setOnlyMissedFields(false); }}
+                  comparisonHighlights={comparisonHighlights}
+                  onlyHighlighted={onlyHighlighted}
+                  editing={editing}
+                  onShowAllFields={() => { setNoteSearch(""); setHideEmptyFields(false); setOnlyMissedFields(false); onShowAllComparisonFields?.(); }}
                   onActiveCellPages={onActiveCellPages}
                   selectedCellKey={selectedCellKey}
                   onCellActivate={handleWorkspaceCellActivate}
@@ -1040,7 +1075,11 @@ function SheetSection({
   moveBusy,
   attentionRows,
   hideEmptyFields,
+  fieldSearch,
   onlyMissedFields,
+  comparisonHighlights = [],
+  onlyHighlighted = false,
+  editing,
   onShowAllFields,
   focusKey = 0,
   focusRow = null,
@@ -1065,7 +1104,11 @@ function SheetSection({
   onEditingChange: (editing: boolean) => void;
   attentionRows: number[] | null;
   hideEmptyFields: boolean;
+  fieldSearch: string;
   onlyMissedFields: boolean;
+  comparisonHighlights?: readonly ComparisonHighlight[];
+  onlyHighlighted?: boolean;
+  editing: boolean;
   onShowAllFields: () => void;
   moveBusy: boolean;
   /** Bumps on every source-note jump so re-selecting the same row scrolls. */
@@ -1214,17 +1257,22 @@ function SheetSection({
     return next;
   });
 
+  const hasPendingRowSave = Object.keys(rowSaveStatuses).length > 0;
+  const fieldQuery = fieldSearch.trim().toLowerCase();
   const visibleRows = sheet.rows.filter((cell) => {
-    if (cell.invalid_target || selectedCellKey === `${sheet.sheet}:${cell.row}`) return true;
+    // Retain unsaved edits even when their field name no longer matches.
+    const pendingEdit = selectedCellKey === `${sheet.sheet}:${cell.row}` && (editing || hasPendingRowSave);
+    if (fieldQuery && !cell.label.toLowerCase().includes(fieldQuery)) return pendingEdit;
+    if (cell.invalid_target || selectedCellKey === `${sheet.sheet}:${cell.row}` && ((!onlyMissedFields && !onlyHighlighted) || editing || hasPendingRowSave)) return true;
     const presence = noteFieldPresence(cell, human, humanFigures);
-    return (!hideEmptyFields || presence.filled) && (!onlyMissedFields || presence.missed);
+    return (Boolean(fieldQuery) || !hideEmptyFields || presence.filled) && (!onlyMissedFields || presence.missed)
+      && (!onlyHighlighted || noteMatchesHighlights(cell, human, humanFigures, comparisonHighlights));
   }).filter((cell) => attentionRows == null || attentionRows.includes(cell.row) || cell.invalid_target);
   const numericColumns = Object.keys(NUMERIC_VALUE_COLUMNS).filter((key) =>
     sheet.rows.some((cell) => key in (cell.values ?? {}) || cell.categories?.some((category) => key in category.values)),
   );
   const numericGridColumns = `minmax(220px, 1fr) repeat(${numericColumns.length * (humanFigures ? 2 : 1)}, minmax(100px, 120px))`;
   const numericGridMinWidth = 220 + numericColumns.length * (humanFigures ? 2 : 1) * 100;
-  const hasPendingRowSave = Object.keys(rowSaveStatuses).length > 0;
   useEffect(() => {
     onSaveBlocked(hasPendingRowSave || formatRequestPending || formatStatus?.status === "running");
     return () => onSaveBlocked(false);
@@ -1304,7 +1352,7 @@ function SheetSection({
             </div>
           )}
           {attentionRows?.length === 0 && <p role="status">No placed field issues in this sheet. Check the source inventory for unplaced or unresolved notes.</p>}
-          {visibleRows.length === 0 && (hideEmptyFields || onlyMissedFields) && <div style={{ padding: pwc.space.md }}>
+          {visibleRows.length === 0 && (fieldQuery || hideEmptyFields || onlyMissedFields || onlyHighlighted) && <div style={{ padding: pwc.space.md }}>
             <p role="status" style={styles.dim}>No fields match this view.</p>
             <button type="button" className={uiClass.btnGhost} onClick={onShowAllFields}>Show all fields</button>
           </div>}
@@ -1322,6 +1370,7 @@ function SheetSection({
                 onComparisonChange={onComparisonChange}
                 onCategoryResolved={onCategoryResolved}
                 humanFigures={humanFigures}
+                comparisonHighlights={comparisonHighlights}
                 columns={numericColumns}
                 gridTemplateColumns={numericGridColumns}
                 gridMinWidth={numericGridMinWidth}
@@ -1352,6 +1401,9 @@ function SheetSection({
             const field = cell.node_uuid ?? null;
             if (cell.kind === "numeric") return row;
             const selected = selectedCellKey === `${sheet.sheet}:${cell.row}`;
+            const highlighted = noteMatchesHighlights(cell, human, humanFigures, comparisonHighlights);
+            const retainedForEditing = selected && (editing || hasPendingRowSave) && ((Boolean(fieldQuery) && !cell.label.toLowerCase().includes(fieldQuery)) || (onlyMissedFields
+              && !noteFieldPresence(cell, human, humanFigures).missed) || (onlyHighlighted && !highlighted));
             const expanded = isFieldOpen(cell);
             const compared = Boolean(human && field);
             const humanFilled = Boolean(field && !isBlankHtml(human?.html[field]));
@@ -1367,7 +1419,9 @@ function SheetSection({
             // the height of the longer text and never drifts out of line.
             return (
               <section key={`${runId}:${sheet.sheet}:${cell.row}:pair`} aria-label={cell.label}
-                style={{ borderBottom: index < visibleRows.length - 1 ? `1px solid ${pwc.grey100}` : undefined }}
+                style={{ borderBottom: index < visibleRows.length - 1 ? `1px solid ${pwc.grey100}` : undefined,
+                  ...(highlighted ? humanStatus === "missed" ? ui.comparisonAttention : ui.comparisonQuiet : null) }}
+                data-comparison-highlight={highlighted || undefined}
                 data-cell-row={cell.row} data-testid="notes-review-row">
                 <div style={{ display: "flex", alignItems: "center", gap: pwc.space.sm }}>
                   <h3 style={{ ...styles.cellLabel, margin: 0, flex: 1, minWidth: 0 }}>
@@ -1391,6 +1445,7 @@ function SheetSection({
                       <span style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, marginLeft: "auto", fontWeight: 400 }}>
                         {cell.invalid_target && <span id={`${statusId}-filing`} style={{ color: pwc.warning }}>Not a filing field</span>}
                         {marker && <HumanStatusMarker status={humanStatus} />}
+                        {retainedForEditing && <span style={styles.dim}>{editing ? "Editing" : "Unsaved"} · outside this filter</span>}
                       </span>
                     </button>
                   </h3>
@@ -2158,6 +2213,7 @@ function NumericCellRow(props: {
   onSaveStatusChange: (row: number, status: SaveStatus, category?: string) => void;
   onComparisonChange?: () => void;
   humanFigures?: Map<string, HumanFigureSlot> | null;
+  comparisonHighlights?: readonly ComparisonHighlight[];
   columns: string[];
   gridTemplateColumns: string;
   gridMinWidth: number;
@@ -2186,6 +2242,7 @@ function NumericCategoryRow({
   onSaveStatusChange,
   onComparisonChange,
   humanFigures,
+  comparisonHighlights = [],
   columns,
   gridTemplateColumns,
   gridMinWidth,
@@ -2200,6 +2257,7 @@ function NumericCategoryRow({
   onSaveStatusChange: (row: number, status: SaveStatus, category?: string) => void;
   onComparisonChange?: () => void;
   humanFigures?: Map<string, HumanFigureSlot> | null;
+  comparisonHighlights?: readonly ComparisonHighlight[];
   columns: string[];
   gridTemplateColumns: string;
   gridMinWidth: number;
@@ -2320,14 +2378,16 @@ function NumericCategoryRow({
         <SaveStatusBadge status={status} />
       </div>
       {columns.map((key) => (
-          <div key={key} role="cell" style={styles.numericValueCell}>
+          <div key={key} role="cell" style={{ ...styles.numericValueCell, ...noteHighlightStyle(
+            cell.concept_uuid ? humanFigures?.get(humanSlotKey(cell.concept_uuid, NUMERIC_VALUE_COLUMNS[key].period, NUMERIC_VALUE_COLUMNS[key].entity_scope, dimensionKey)) : undefined, comparisonHighlights) }}>
             {key in values && (
               <input
                 type="text"
                 inputMode="decimal"
                 aria-label={`${cell.label}, ${NUMERIC_VALUE_COLUMNS[key].label}`}
                 data-testid={`numeric-input-${cell.row}-${key}`}
-                style={styles.numericInput}
+                style={{ ...styles.numericInput, ...noteHighlightStyle(
+                  cell.concept_uuid ? humanFigures?.get(humanSlotKey(cell.concept_uuid, NUMERIC_VALUE_COLUMNS[key].period, NUMERIC_VALUE_COLUMNS[key].entity_scope, dimensionKey)) : undefined, comparisonHighlights) }}
                 // Grouped (1,234) at rest; raw digits while this field is
                 // focused so typing and the parse round-trip aren't disturbed.
                 value={
@@ -2363,7 +2423,8 @@ function NumericCategoryRow({
                 // Only a difference carries a marker; a zero opposite a blank is
                 // muted. Blank when the human file has nothing there, as in Figures.
                 return <span data-testid={`numeric-human-${cell.row}-${dimensionKey || "base"}-${key}`}
-                  style={{ ...styles.numericHumanFigure, ...(slot?.status === "zero_blank" ? { color: pwc.grey500 } : null) }}>
+                  data-comparison-highlight={isComparisonHighlighted(slot, comparisonHighlights) || undefined}
+                  style={{ ...styles.numericHumanFigure, ...(slot?.status === "zero_blank" ? { color: pwc.grey500 } : null), ...noteHighlightStyle(slot, comparisonHighlights) }}>
                   <HumanStatusMarker status={slot?.status} />
                   {slot?.human_value == null ? "" : formatGroupedInput(String(slot.human_value))}
                 </span>;
@@ -2548,10 +2609,10 @@ const styles = {
     color: pwc.grey700,
     fontSize: 12,
   } as React.CSSProperties,
-  noteRailSearch: {
+  fieldSearch: {
     ...ui.input,
     width: "100%",
-    marginBottom: pwc.space.sm,
+    marginBottom: pwc.space.lg,
   } as React.CSSProperties,
   noteRailList: {
     minHeight: 0,

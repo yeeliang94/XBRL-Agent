@@ -35,28 +35,90 @@ test.each(["failed", "succeeded"])("formatter calls share one workstream and ret
   cleanup();
 });
 
-test("saved formatter sub-agents replay their own activity", () => {
+test("saved formatting shows sheets, a plain failure and calls behind Technical detail", () => {
   window.history.replaceState({}, "", "/");
-  const step = (sub_agent_id: string, timestamp: number, phase: string, message: string) =>
-    ({ event: "status", timestamp, data: { sub_agent_id, phase, message } }) as SSEEvent;
+  const step = (sub_agent_id: string, timestamp: number, phase: string, message: string, extra = {}) =>
+    ({ event: "status", timestamp, data: { sub_agent_id, phase, message, ...extra } }) as SSEEvent;
+  const finding = "Table 1: Note 26, row 3 combines two source rows.";
   render(<RunDetailView detail={makeDetail({ agents: [
+    makeAgent({ id: 10, statement_type: "NOTES_FORMATTING", status: "failed", variant: "Notes-Issuedcapital",
+      started_at: "2026-04-10T09:00:00Z", error_message: "Older attempt failure" }),
     makeAgent({ id: 11, statement_type: "NOTES_FORMATTING", status: "completed", variant: "Notes-Issuedcapital",
+      started_at: "2026-04-10T09:30:00Z", total_tokens: 39885,
       events: [step("Notes-Issuedcapital", 2, "started", "Formatting started"),
         step("Notes-Issuedcapital", 4, "completed", "Formatting finished")] }),
     makeAgent({ id: 12, statement_type: "NOTES_FORMATTING", status: "failed", variant: "notes_format_Notes-Listofnotes_part2",
+      error_message: finding,
       events: [step("notes_format_Notes-Listofnotes_part2", 3, "started", "Formatting started"),
-        step("notes_format_Notes-Listofnotes_part2", 5, "failed", "Formatter timed out after 600s.")] }),
+        step("notes_format_Notes-Listofnotes_part2", 5, "failed",
+          "1 note still looks different from the source PDF. Retry it from the Notes tab.", { detail: finding })] }),
   ], run_events: [
     { event: "pipeline_stage", data: { stage: "formatting_notes", status: "failed", message: "Appearance checking finished." }, timestamp: 6 },
   ] })} onDelete={() => {}} onDownload={() => {}} />);
   clickRunTab(/^activity$/i);
-  fireEvent.click(within(screen.getByRole("tablist", { name: "Run workstreams" })).getByRole("tab", { name: /Notes formatting/ }));
-  const subTabs = within(screen.getByRole("tablist", { name: "Formatting sub-agents" }));
+  const workstream = within(screen.getByRole("tablist", { name: "Run workstreams" })).getByRole("tab", { name: /Notes formatting/ });
+  expect(workstream).toHaveTextContent("1 of 2 sheets formatted");
+  fireEvent.click(workstream);
+  // No unlabelled stage line or call list beside the chips.
+  expect(screen.queryByText("Appearance checking finished.")).toBeNull();
+  expect(screen.queryByText("Formatting calls")).toBeNull();
+  const chips = within(screen.getByRole("tablist", { name: "Formatting by sheet" }));
+  expect(chips.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["All", "Issued Capital", "List of Notes · Failed"]);
+  expect(screen.getByTestId("formatting-failure")).toHaveTextContent(
+    "List of Notes: 1 note still looks different from the source PDF. Retry it from the Notes tab.");
+  expect(screen.queryByText(finding)).toBeNull();
   const updates = () => within(screen.getByRole("list", { name: "Activity updates" }));
   expect(updates().getByText("Issued Capital: Formatting finished.")).toBeVisible();
-  fireEvent.click(subTabs.getByRole("tab", { name: "List of Notes · part 2 · Failed" }));
-  expect(updates().getByText("Formatter timed out after 600s.")).toBeVisible();
+  fireEvent.click(chips.getByRole("tab", { name: "List of Notes · Failed" }));
   expect(updates().queryByText(/Formatting finished/)).toBeNull();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Technical detail" }));
+  const calls = within(screen.getByRole("list", { name: "Formatting calls" }));
+  expect(calls.getByText("notes_format_Notes-Listofnotes_part2")).toBeVisible();
+  expect(calls.getByText(finding)).toBeVisible();
+  // Earlier attempts stay on record here even though the latest one counts.
+  expect(calls.getByText("Older attempt failure")).toBeVisible();
+  expect(screen.getByRole("list", { name: "Formatting calls" })).toHaveTextContent("39,885 tokens");
+});
+
+test("saved formatting retains a stage failure outside recorded sheet calls", () => {
+  const failure = "List of Notes could not start formatting. Retry it from Notes.";
+  const ended = Date.parse("2026-04-10T10:00:00Z") / 1000;
+  const completedEvent = { event: "status", timestamp: ended - 1,
+    data: { sub_agent_id: "Notes-Issuedcapital", phase: "completed", message: "Formatting finished" } };
+  render(<RunDetailView detail={makeDetail({ agents: [
+    makeAgent({ id: 11, statement_type: "NOTES_FORMATTING", status: "completed",
+      variant: "Notes-Issuedcapital", events: [completedEvent as SSEEvent] }),
+  ], run_events: [
+    { event: "error", timestamp: ended, data: { type: "notes_formatting_incomplete", message: failure } },
+    { event: "pipeline_stage", timestamp: ended, data: { stage: "formatting_notes", status: "failed" } },
+  ] })} onDelete={() => {}} onDownload={() => {}} />);
+  clickRunTab(/^activity$/i);
+  fireEvent.click(within(screen.getByRole("tablist", { name: "Run workstreams" }))
+    .getByRole("tab", { name: /Notes formatting/ }));
+  expect(within(screen.getByTestId("agent-error-message")).getByText(failure)).toBeVisible();
+  expect(screen.getByText("What went wrong")).toBeVisible();
+  expect(screen.getByRole("tablist", { name: "Formatting by sheet" })).toBeVisible();
+});
+
+test("saved formatting keeps a separate stage failure beside a failed sheet", () => {
+  const stageFailure = "Formatting stopped before saving the remaining sheets.";
+  const finding = "Table 1: Note 26, row 3 combines two source rows.";
+  const ended = Date.parse("2026-04-10T10:00:00Z") / 1000;
+  render(<RunDetailView detail={makeDetail({ agents: [
+    makeAgent({ id: 12, statement_type: "NOTES_FORMATTING", status: "failed",
+      variant: "notes_format_Notes-Listofnotes_part2", error_message: finding,
+      events: [{ event: "status", timestamp: ended - 1, data: { sub_agent_id: "notes_format_Notes-Listofnotes_part2",
+        phase: "failed", message: "1 note still looks different from the source PDF. Retry it from the Notes tab.",
+        detail: finding } } as unknown as SSEEvent] }),
+  ], run_events: [
+    { event: "error", timestamp: ended, data: { type: "notes_formatting_incomplete", message: stageFailure } },
+    { event: "pipeline_stage", timestamp: ended, data: { stage: "formatting_notes", status: "failed" } },
+  ] })} onDelete={() => {}} onDownload={() => {}} />);
+  clickRunTab(/^activity$/i);
+  fireEvent.click(within(screen.getByRole("tablist", { name: "Run workstreams" }))
+    .getByRole("tab", { name: /Notes formatting/ }));
+  expect(screen.getByTestId("formatting-failure")).toHaveTextContent("List of Notes: 1 note still looks different");
+  expect(within(screen.getByTestId("agent-error-message")).getByText(stageFailure)).toBeVisible();
 });
 
 test.each([false, true])("formatting retries replace older failures with current working and success states (stage: %s)", (hasStage) => {
@@ -985,7 +1047,8 @@ describe("RunDetailView", () => {
     expect(within(workstreams).getByRole("tab", { name: /Notes cleanup/ })).toHaveTextContent("Working");
     fireEvent.click(review);
     expect(screen.getByRole("region", { name: "Recorded activity" })).toBeVisible();
-    fireEvent.keyDown(review, { key: "ArrowDown" });
+    // Run checks list the latest first, so cleanup sits above AI review.
+    fireEvent.keyDown(review, { key: "ArrowUp" });
     expect(within(workstreams).getByRole("tab", { name: /Notes cleanup/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("region", { name: "Live activity" })).toBeVisible();
   });
@@ -2010,7 +2073,7 @@ describe("RunDetailView", () => {
   });
 
   // UX-QA #14: Activity lists statements in reading order, not backend order.
-  test("Activity orders agents scout → SOFP → SOPL → SOCI → SOCIE → SOCF", () => {
+  test("Activity orders statements SOFP → SOPL → SOCI → SOCIE → SOCF, preparation last", () => {
     const detail = makeDetail({
       agents: [
         makeAgent({ id: 1, statement_type: "SOCF" }),
@@ -2023,11 +2086,11 @@ describe("RunDetailView", () => {
     clickRunTab(/activity/i);
     const rows = activityRows();
     const order = rows.map((row) => row.textContent);
-    // Document scan first, then face statements in reading order (SOCF last).
-    expect(order[0]).toMatch(/document preparation/i);
-    expect(order[1]).toMatch(/Statement of financial position/);
-    expect(order[2]).toMatch(/Profit or loss/);
-    expect(order[3]).toMatch(/Cash flows/);
+    // Face statements in reading order, then the document scan at the bottom.
+    expect(order[0]).toMatch(/Statement of financial position/);
+    expect(order[1]).toMatch(/Profit or loss/);
+    expect(order[2]).toMatch(/Cash flows/);
+    expect(order[3]).toMatch(/document preparation/i);
   });
 
   test("Activity gives source preparation a plain-language label", () => {

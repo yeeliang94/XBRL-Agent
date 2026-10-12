@@ -443,6 +443,17 @@ textarea:focus {
   box-shadow: none !important;
 }
 
+/* Search focus uses one edge; an offset outline creates a second border. */
+input[type="search"] {
+  appearance: none;
+}
+input[type="search"]:focus {
+  outline: 2px solid #000000;
+  outline-offset: -2px;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
 /* Every interactive control shares one restrained motion contract. Components
    can add state-specific colours, but navigation, hover and press feedback
    should never snap because a class hook was omitted. */
@@ -1178,4 +1189,10 @@ details[open] > summary::after {
 }
 @media (max-width: 600px) {
   .history-filters { grid-template-columns: minmax(0, 1fr) !important; }
+}
+/* Comparison score details float over the table without moving its rows. */
+.human-comparison-score-panel { box-sizing: border-box; }
+@media (max-width: 640px) {
+  .human-comparison-score { position: static !important; }
+  .human-comparison-score-panel { left: auto !important; right: 0; max-width: 100% !important; }
 }

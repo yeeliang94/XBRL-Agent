@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
-import { ConceptsPage } from "../pages/ConceptsPage";
+import { act, render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
+import { ConceptsPage, type ConceptRow } from "../pages/ConceptsPage";
 import { HumanFileDialog } from "../components/HumanFileDialog";
 import type { HumanComparison, HumanFileRecord } from "../lib/humanFile";
 
@@ -14,7 +14,7 @@ beforeEach(() => { globalThis.fetch = vi.fn(); });
 afterEach(() => { cleanup(); globalThis.fetch = originalFetch; });
 
 const TEMPLATE = "mfrs-company-sofp-cunoncu-v1";
-const leaf = (uuid: string, label: string, row: number, cy: number | null, py: number | null) => ({
+const leaf = (uuid: string, label: string, row: number, cy: number | null, py: number | null): ConceptRow => ({
   concept_uuid: uuid, parent_uuid: null, kind: "LEAF", canonical_label: label,
   display_label: null, render_sheet: "SOFP-CuNonCu", render_row: row, render_col: "B",
   template_id: TEMPLATE, value: cy, value_status: "observed", children_status: null,
@@ -50,12 +50,12 @@ const comparison: HumanComparison = {
   notes: { totals: { human_filled: 0, both_filled: 0, ai_only: 0 }, fields: [], human_html: {} },
 };
 
-function mockApi() {
+function mockApi(data = comparison, concepts: ConceptRow[] = [leaf("cash", "Cash", 10, 100, 90), leaf("ppe", "Property", 11, 200, null), leaf("inv", "Inventories", 12, null, null), leaf("zero", "* Other", 13, null, null), { ...leaf("total", "Total assets", 14, 300, null), kind: "COMPUTED", editable: false }]) {
   (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(async (url: string) => {
     const body = url.includes("/human-comparison")
-      ? comparison
+      ? data
       : url.endsWith("/concepts")
-        ? { concepts: [leaf("cash", "Cash", 10, 100, 90), leaf("ppe", "Property", 11, 200, null), leaf("inv", "Inventories", 12, null, null), leaf("zero", "* Other", 13, null, null), { ...leaf("total", "Total assets", 14, 300, null), kind: "COMPUTED", editable: false }] }
+        ? { concepts }
         : url.includes("/conflicts") ? { conflicts: [] } : { count: 0 };
     return { ok: true, status: 200, json: async () => body } as Response;
   });
@@ -84,12 +84,12 @@ describe("figures view with a human file", () => {
       .toHaveAttribute("data-status-icon", "inactive");
     // The comparison denominator must visibly disclose excluded rows.
     const tiles = screen.getByTestId("human-comparison-tiles");
-    expect(tiles).toHaveTextContent("1 of 3 match");
-    expect(tiles).toHaveTextContent("1 differ");
-    expect(tiles).toHaveTextContent("1 missed by AI");
-    expect(tiles).toHaveTextContent("1 AI-only");
-    expect(tiles).toHaveAttribute("title", "Not counted: 1 human zero, 1 unmatched row");
-    expect(tiles).toHaveTextContent("2 not counted");
+    expect(within(tiles).getByRole("button", { name: "Match 1" })).toBeVisible();
+    expect(within(tiles).getByRole("button", { name: "Different 1" })).toBeVisible();
+    expect(within(tiles).getByRole("button", { name: "Missed by AI 1" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(tiles).getByRole("button", { name: "AI-only 1" })).toBeVisible();
+    expect(within(tiles).getByRole("button", { name: "Not counted 2" })).toHaveAttribute("title", "Not counted: 1 displayed total, 1 human zero. 2 unmatched rows across the run, listed separately.");
+    expect(screen.getByText("33.3%")).toBeVisible();
     // Human values are read-only text, not boxed like editable inputs.
     expect(within(cashRow).getByTestId("human-value-cash-CY")).not.toHaveStyle({ borderStyle: "solid" });
     // A human zero opposite an AI blank is shown without a marker.
@@ -106,25 +106,167 @@ describe("figures view with a human file", () => {
     expect(screen.queryByText("Source PDF", { selector: "span" })).not.toBeInTheDocument();
   });
 
-  test("Rows filter shows only rows that differ from the human file", async () => {
+  test("highlight toggles target exact periods and only-highlighted rows follow their union", async () => {
     mockApi();
     render(<ConceptsPage runId={7} humanFile={file} />);
     await screen.findByTestId("human-comparison-tiles");
-    expect(screen.getByRole("option", { name: "Differs from human (2)" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Rows"), { target: { value: "human_differs" } });
+    expect(screen.getByTestId("human-value-inv-CY")).toHaveAttribute("data-comparison-highlight", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Missed by AI 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Different 1" }));
+    expect(screen.getByTestId("human-value-ppe-CY")).toHaveAttribute("data-comparison-highlight", "true");
+    expect(screen.getByTestId("human-value-ppe-PY")).not.toHaveAttribute("data-comparison-highlight");
+    expect(screen.getByTestId("human-value-total-CY")).not.toHaveAttribute("data-comparison-highlight");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Only highlighted" }));
     await waitFor(() => expect(screen.queryByTestId("concept-row-cash")).not.toBeInTheDocument());
     expect(screen.getByTestId("concept-row-ppe")).toBeInTheDocument();
-    expect(screen.getByTestId("concept-row-total")).toBeInTheDocument();
+    expect(screen.queryByTestId("concept-row-total")).not.toBeInTheDocument();
     expect(screen.queryByTestId("concept-row-inv")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "AI-only 1" }));
+    expect(screen.getByTestId("concept-row-cash")).toBeInTheDocument();
+    expect(screen.getByTestId("human-value-cash-PY")).toHaveAttribute("data-comparison-highlight", "true");
+    expect(screen.getByTestId("human-value-cash-CY")).not.toHaveAttribute("data-comparison-highlight");
+    fireEvent.click(screen.getByRole("button", { name: "Not counted 2" }));
+    expect(screen.getByTestId("concept-row-total")).toBeInTheDocument();
+    expect(screen.getByTestId("concept-row-zero")).toBeInTheDocument();
   });
 
   test("an excluded human zero does not appear among missed figures", async () => {
-    mockApi();
+    mockApi(comparison, [leaf("ppe", "Property", 11, 200, null),
+      { ...leaf("inv", "Inventories", 12, null, null), parent_uuid: "ppe" },
+      leaf("zero", "* Other", 13, null, null)]);
     render(<ConceptsPage runId={7} humanFile={file} />);
     await screen.findByTestId("human-comparison-tiles");
-    fireEvent.change(screen.getByLabelText("Rows"), { target: { value: "human_missed" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Only highlighted" }));
     expect(screen.getByTestId("concept-row-inv")).toBeInTheDocument();
     expect(screen.queryByTestId("concept-row-zero")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("concept-row-ppe")).not.toBeInTheDocument();
+  });
+
+  test("score details show coverage and correctness and close with Escape or an outside click", async () => {
+    mockApi();
+    render(<ConceptsPage runId={7} humanFile={file} />);
+    const trigger = await screen.findByText("Score details");
+    const details = trigger.closest("details")!;
+    // Native disclosure behavior is supplied by the browser, not jsdom.
+    details.open = true;
+    expect(within(details).getByText("66.7%")).toBeVisible();
+    expect(within(details).getByText("50.0%")).toBeVisible();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(details.open).toBe(false);
+    expect(trigger).toHaveFocus();
+    details.open = true;
+    fireEvent.pointerDown(screen.getByTestId("concept-row-ppe"));
+    expect(details.open).toBe(false);
+  });
+
+  test("highlights and scores follow the selected entity without leaking the other entity's periods", async () => {
+    const groupComparison = { ...comparison, figures: { ...comparison.figures,
+      totals: { ...comparison.figures.totals, Group: { human_filled: 2, both_filled: 1, same_value: 1, ai_only: 0, zero_blank_excluded: 0 } },
+      slots: [...comparison.figures.slots,
+        { concept_uuid: "cash", period: "CY", entity_scope: "Group", dimension_key: "", status: "agree" as const, human_value: 100, ai_value: 100 },
+        { concept_uuid: "cash", period: "PY", entity_scope: "Group", dimension_key: "", status: "missed" as const, human_value: 90, ai_value: null }],
+    } };
+    const cash = { ...leaf("cash", "Cash", 10, 100, 90), scope_facts: { Company: { CY: 100, PY: 90 }, Group: { CY: 100, PY: null } } };
+    mockApi(groupComparison, [cash, leaf("inv", "Inventories", 12, null, null)]);
+    render(<ConceptsPage runId={7} humanFile={file} />);
+    await screen.findByTestId("human-value-cash-CY");
+    fireEvent.click(screen.getByTestId("scope-btn-Group"));
+    expect(screen.getByTestId("human-value-cash-PY")).toHaveAttribute("data-comparison-highlight", "true");
+    expect(screen.getByTestId("human-value-cash-CY")).not.toHaveAttribute("data-comparison-highlight");
+    expect(screen.getAllByText("50.0%").some((element) => element.tagName === "STRONG")).toBe(true);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Only highlighted" }));
+    expect(screen.getByTestId("concept-row-cash")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("scope-btn-Company"));
+    expect(screen.queryByTestId("concept-row-cash")).not.toBeInTheDocument();
+    expect(screen.getByTestId("concept-row-inv")).toBeInTheDocument();
+  });
+
+  test("an empty comparison shows no agreement score", async () => {
+    mockApi({ ...comparison, figures: { ...comparison.figures, totals: {} } });
+    render(<ConceptsPage runId={7} humanFile={file} />);
+    const bar = await screen.findByTestId("human-comparison-bar");
+    expect(bar).toHaveTextContent("— figure agreement");
+    expect(bar).not.toHaveTextContent("100.0%");
+  });
+
+  test("equity matrix highlights target the exact component and period", async () => {
+    const data = { ...comparison, figures: { ...comparison.figures, slots: [
+      { concept_uuid: "capital", period: "CY", entity_scope: "Company", dimension_key: "", status: "agree" as const, human_value: 10, ai_value: 10 },
+      { concept_uuid: "capital", period: "PY", entity_scope: "Company", dimension_key: "", status: "missed" as const, human_value: 5, ai_value: null },
+    ] } };
+    mockApi(data, [{ ...leaf("capital", "Share capital", 10, 10, null), kind: "MATRIX_CELL", shape: "matrix",
+      matrix_col: "B", matrix_col_label: "Share capital", template_id: "mfrs-company-socie-default-v1" }]);
+    render(<ConceptsPage runId={7} humanFile={file} />);
+    const prior = await screen.findByTestId("matrix-human-10-B-PY");
+    expect(prior).toHaveAttribute("data-comparison-highlight", "true");
+    expect(screen.getByTestId("matrix-human-10-B-CY")).not.toHaveAttribute("data-comparison-highlight");
+    expect(screen.getByTestId("matrix-cell-10-B-PY")).toHaveAttribute("data-comparison-highlight", "true");
+    expect(screen.getByTestId("matrix-cell-10-B-CY")).not.toHaveAttribute("data-comparison-highlight");
+  });
+
+  test("numeric notes score only their displayed concepts, categories, periods and entities", async () => {
+    const ordinary = JSON.stringify({ share: "ordinary" });
+    const preference = JSON.stringify({ share: "preference" });
+    mockApi({ ...comparison, figures: { ...comparison.figures, slots: [...comparison.figures.slots,
+      { concept_uuid: "cash", period: "CY", entity_scope: "Group", dimension_key: "", status: "different", human_value: 500, ai_value: 100 },
+      { concept_uuid: "capital", period: "CY", entity_scope: "Company", dimension_key: ordinary, status: "agree", human_value: 10, ai_value: 10 },
+      { concept_uuid: "capital", period: "CY", entity_scope: "Company", dimension_key: preference, status: "missed", human_value: 5, ai_value: null },
+      { concept_uuid: "capital", period: "PY", entity_scope: "Company", dimension_key: preference, status: "different", human_value: 50, ai_value: 40 },
+      { concept_uuid: "other-total", period: "CY", entity_scope: "Group", dimension_key: "", calculated: true, status: "different", human_value: 900, ai_value: 800 },
+    ] } });
+    const original = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/notes_cells")) return new Response(JSON.stringify({ sheets: [{ sheet: "Notes-Issuedcapital", rows: [{
+        row: 6, label: "Cash", kind: "numeric", concept_uuid: "cash", html: "", values: { cy: 100 },
+        source_pages: [], evidence: null, updated_at: null,
+      }, {
+        row: 7, label: "Share capital", kind: "numeric", concept_uuid: "capital", html: "", values: { cy: null },
+        categories: [{ dimension_key: ordinary, dimensions: { share: "ordinary" }, label: "Ordinary", values: { cy: 10 }, evidence: null }],
+        source_pages: [], evidence: null, updated_at: null,
+      }, {
+        row: 8, label: "Total", kind: "numeric", concept_uuid: "total", html: "", values: { cy: 300 },
+        source_pages: [], evidence: null, updated_at: null,
+      }, {
+        row: 9, label: "Other", kind: "numeric", concept_uuid: "zero", html: "", values: { cy: null },
+        source_pages: [], evidence: null, updated_at: null,
+      }] }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      return original(url, init);
+    });
+    render(<ConceptsPage runId={7} humanFile={file} initialView="notes" />);
+    await screen.findByTestId("numeric-input-6-cy");
+    await waitFor(() => expect(screen.getByText(/figure agreement/)).toHaveTextContent("66.7%"));
+    expect(screen.getByRole("button", { name: "Match 2" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Different 0" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Missed by AI 1" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "AI-only 0" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Not counted 2" })).toBeVisible();
+    expect(screen.getByTestId(`numeric-human-7-${preference}-cy`)).toHaveTextContent("5");
+    expect(screen.queryByText("Company and Group")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Placed / })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Only missed by AI" })).not.toBeInTheDocument();
+  });
+
+  test("comparison view changes stay blocked through a pending or failed figure save", async () => {
+    mockApi();
+    const original = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    let finishPatch: ((response: Response) => void) | undefined;
+    vi.mocked(globalThis.fetch).mockImplementation((url, init) => init?.method === "PATCH"
+      ? new Promise<Response>((resolve) => { finishPatch = resolve; }) : original(url, init));
+    render(<ConceptsPage runId={7} humanFile={file} />);
+    const row = await screen.findByTestId("concept-row-ppe");
+    const input = within(row).getByRole("textbox", { name: /current period/ });
+    fireEvent.change(input, { target: { value: "300" } });
+    fireEvent.blur(input);
+    expect(screen.getByRole("button", { name: "Different 1" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "Only highlighted" })).toBeDisabled();
+    expect(screen.getByRole("tab", { name: "Source PDF" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeDisabled();
+    await act(async () => { finishPatch!(new Response("{}", { status: 500 })); });
+    expect(screen.getByRole("button", { name: "Different 1" })).toBeDisabled();
+    fireEvent.change(input, { target: { value: "301" } });
+    fireEvent.blur(input);
+    await act(async () => { finishPatch!(new Response(JSON.stringify({ recomputed: [] }), { status: 200, headers: { "Content-Type": "application/json" } })); });
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "Only highlighted" })).toBeEnabled());
   });
 
   test("switching to Source PDF hides the human columns and restores the PDF pane", async () => {

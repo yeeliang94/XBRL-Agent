@@ -5,7 +5,7 @@ import { ExpandMore, LeftPanelClose } from "../components/iconGlyphs";
 import { ui, uiClass } from "../lib/uiStyles";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { StatusIcon } from "../components/StatusIcon";
-import { NotesReviewTab } from "../components/NotesReviewTab";
+import { NotesReviewTab, type NotesComparisonView } from "../components/NotesReviewTab";
 import { ResizableDivider } from "../components/ResizableDivider";
 import { ReconciliationQueue } from "../components/ReconciliationQueue";
 import { PdfSourcePane } from "../components/PdfSourcePane";
@@ -28,13 +28,16 @@ import { TemplateSettingsPage } from "./TemplateSettingsPage";
 import {
   HumanComparisonBar,
   type ComparisonPane,
-  type ComparisonTile,
+  type ComparisonSummary,
 } from "../components/HumanComparisonBar";
 import { HumanStatusMarker } from "../components/HumanStatusMarker";
 import {
   getHumanComparison,
   humanSlotKey,
   HUMAN_STATUS_LABEL,
+  comparisonCategory,
+  isComparisonHighlighted,
+  type ComparisonHighlight,
   type HumanComparison,
   type HumanFigureSlot,
   type HumanFileRecord,
@@ -165,6 +168,12 @@ const HUMAN_ROW_FILTERS: Array<{ value: HumanRowFilter; label: string; status: H
 interface HumanView {
   slots: Map<string, HumanFigureSlot>;
   notComparedTemplates: Set<string>;
+  highlights: readonly ComparisonHighlight[];
+}
+
+function comparisonCellStyle(slot: HumanFigureSlot | undefined, highlights: readonly ComparisonHighlight[]): React.CSSProperties | undefined {
+  if (!isComparisonHighlighted(slot, highlights)) return undefined;
+  return slot && (comparisonCategory(slot) === "missed" || comparisonCategory(slot) === "different") ? ui.comparisonAttention : ui.comparisonQuiet;
 }
 const ROW_FILTERS: Array<{ value: RowFilter; label: string }> = [
   { value: "review", label: "Review relevant" },
@@ -488,10 +497,23 @@ export function ConceptsPage({
   // values, so it is re-read after every saved edit (conflictReloadKey).
   const [comparison, setComparison] = useState<HumanComparison | null>(null);
   const [comparisonPane, setComparisonPane] = useState<ComparisonPane>("human");
+  const [comparisonHighlights, setComparisonHighlights] = useState<ComparisonHighlight[]>(["missed"]);
+  const [onlyHighlighted, setOnlyHighlighted] = useState(false);
+  const [comparisonBlocked, setComparisonBlocked] = useState(false);
+  const comparisonControlsBlocked = comparisonBlocked || Object.values(editStatus).some((status) => status === "saving" || status === "error");
+  const [notesComparisonView, setNotesComparisonView] = useState<NotesComparisonView>({ kind: "notes", slots: [] });
+  const handleNotesPreparationBlocked = useCallback((blocked: boolean) => {
+    setComparisonBlocked(blocked);
+    onPreparationBlocked?.(blocked);
+  }, [onPreparationBlocked]);
+  const showAllComparisonFields = useCallback(() => setOnlyHighlighted(false), []);
   const humanFileId = humanFile ? `${humanFile.sha256}:${humanFile.uploaded_at}` : null;
   useEffect(() => {
     // A newly attached file opens on the human columns.
     setComparisonPane("human");
+    setComparisonHighlights(["missed"]);
+    setOnlyHighlighted(false);
+    setRowFilter((current) => current.startsWith("human_") ? "all" : current);
   }, [humanFileId]);
   useEffect(() => {
     if (runId == null || humanFileId == null) {
@@ -513,13 +535,14 @@ export function ConceptsPage({
     }
     return {
       slots,
+      highlights: comparisonHighlights,
       notComparedTemplates: new Set(
         comparison.file.not_compared
           .filter((n) => n.reason !== "not_in_run")
           .map((n) => n.template_id),
       ),
     };
-  }, [comparison]);
+  }, [comparison, comparisonHighlights]);
 
   // Open-conflict counts feed the compact attention control. Keep the request
   // keyed on conflictReloadKey so it refreshes after an edit or a manual
@@ -805,6 +828,9 @@ export function ConceptsPage({
     const humanFilter = HUMAN_ROW_FILTERS.find((option) => option.value === rowFilter);
     const matchesRowFilter = (row: ConceptRow) => {
       const scopedRow = conceptForScope(row, activeScope);
+      if (humanActive && onlyHighlighted && humanView) {
+        return humanSlotsForRow(row, humanView, activeScope).some((slot) => isComparisonHighlighted(slot, comparisonHighlights));
+      }
       if (rowFilter === "all") return true;
       if (humanFilter) {
         // Without a comparison the stored filter falls back to every row.
@@ -828,7 +854,7 @@ export function ConceptsPage({
     for (const row of directMatches) {
       let parent = row.parent_uuid;
       while (parent) {
-        visibleUuids.add(parent);
+        if (!humanActive || !onlyHighlighted || byUuid.get(parent)?.kind === "ABSTRACT") visibleUuids.add(parent);
         parent = byUuid.get(parent)?.parent_uuid ?? null;
       }
     }
@@ -847,7 +873,7 @@ export function ConceptsPage({
       noSourceCount: baseRows.filter((row) => rowLacksSource(conceptForScope(row, activeScope))).length,
       humanFilterCounts,
     };
-  }, [concepts, searchQuery, activeTemplate, activeSheet, rowFilter, editStatus, actionableChecks, activeScope, humanView]);
+  }, [concepts, searchQuery, activeTemplate, activeSheet, rowFilter, editStatus, actionableChecks, activeScope, humanView, humanActive, onlyHighlighted, comparisonHighlights]);
 
   useEffect(() => {
     if (notesActive) {
@@ -949,41 +975,49 @@ export function ConceptsPage({
     );
   }
 
-  // Human-file summary: figures follow the Company/Group switch; notes are
-  // placement only. Exceptions are listed only when there are any.
-  let comparisonTiles: ComparisonTile[] = [];
+  // Scores use inputs only; visible calculated values remain a separate exclusion.
+  const comparingProse = notesActive && notesComparisonView.kind === "notes";
+  let comparisonSummary: ComparisonSummary = { kind: comparingProse ? "notes" : "figures", scope: activeScope,
+    humanFilled: 0, bothFilled: 0, matched: 0, aiOnly: 0, notCounted: 0 };
   let comparisonExcludes: string | null = null;
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
   if (comparison) {
-    if (notesActive) {
+    const unmatched = comparison.file.unmatched.filter((row) => row.kind === (comparingProse ? "note" : "figure")).length;
+    if (comparingProse) {
       const t = comparison.notes.totals;
-      comparisonTiles = [
-        { label: "placed", value: `${t.both_filled} of ${t.human_filled}` },
-        ...(t.human_filled > t.both_filled ? [{ label: "missed by AI", value: String(t.human_filled - t.both_filled) }] : []),
-        ...(t.ai_only > 0 ? [{ label: "AI-only", value: String(t.ai_only) }] : []),
-      ];
-      const unmatchedNotes = comparison.file.unmatched.filter((u) => u.kind === "note").length;
-      if (unmatchedNotes > 0) {
-        comparisonTiles.push({ label: "not counted", value: String(unmatchedNotes) });
-        comparisonExcludes = `Not counted: ${plural(unmatchedNotes, "unmatched note")}`;
-      }
+      comparisonSummary = { kind: "notes", scope: activeScope, humanFilled: t.human_filled,
+        bothFilled: t.both_filled, matched: t.both_filled, aiOnly: t.ai_only, notCounted: 0 };
+      // Unmatched notes have no field to highlight, so they are named, not counted.
+      comparisonExcludes = unmatched ? `${plural(unmatched, "unmatched note")} across the run, listed separately.` : null;
     } else {
-      const t = comparison.figures.totals[activeScope] ?? { human_filled: 0, both_filled: 0, same_value: 0, ai_only: 0, zero_blank_excluded: 0 };
-      comparisonTiles = [
-        { label: "match", value: `${t.same_value} of ${t.human_filled}` },
-        ...(t.both_filled > t.same_value ? [{ label: "differ", value: String(t.both_filled - t.same_value) }] : []),
-        ...(t.human_filled > t.both_filled ? [{ label: "missed by AI", value: String(t.human_filled - t.both_filled) }] : []),
-        ...(t.ai_only > 0 ? [{ label: "AI-only", value: String(t.ai_only) }] : []),
-      ];
-      const n = comparison.figures.excluded.unmatched_rows;
-      const exclusions = [
-        t.zero_blank_excluded > 0 ? plural(t.zero_blank_excluded, "human zero") : null,
-        n > 0 ? plural(n, "unmatched row") : null,
+      // Numeric notes score the exact slots rendered by the current worksheet.
+      const slots = notesActive ? notesComparisonView.slots : comparison.figures.slots.filter((slot) => slot.entity_scope === activeScope);
+      const t = notesActive ? slots.reduce((total, slot) => {
+        if (slot.calculated) return total;
+        if (slot.status === "zero_blank") total.zero_blank_excluded++;
+        else if (slot.status === "ai_only") total.ai_only++;
+        else {
+          total.human_filled++;
+          if (slot.status !== "missed") total.both_filled++;
+          if (slot.status === "agree") total.same_value++;
+        }
+        return total;
+      }, { human_filled: 0, both_filled: 0, same_value: 0, ai_only: 0, zero_blank_excluded: 0 }) : comparison.figures.totals[activeScope];
+      const calculated = slots.filter((slot) => slot.calculated).length;
+      comparisonSummary = { kind: "figures", scope: notesActive ? [...new Set(slots.map((slot) => slot.entity_scope))].join(" and ") : activeScope, humanFilled: t?.human_filled ?? 0,
+        bothFilled: t?.both_filled ?? 0, matched: t?.same_value ?? 0, aiOnly: t?.ai_only ?? 0,
+        notCounted: (t?.zero_blank_excluded ?? 0) + calculated };
+      // The count covers only cells the "Not counted" highlight can show;
+      // unmatched rows have no cell here and are listed below the table.
+      const excluded = [
+        calculated > 0 ? plural(calculated, "displayed total") : null,
+        t?.zero_blank_excluded ? plural(t.zero_blank_excluded, "human zero") : null,
       ].filter(Boolean);
-      if (exclusions.length > 0) {
-        comparisonTiles.push({ label: "not counted", value: String(t.zero_blank_excluded + n) });
-        comparisonExcludes = `Not counted: ${exclusions.join(", ")}`;
-      }
+      const parts = [
+        excluded.length > 0 ? `Not counted: ${excluded.join(", ")}.` : null,
+        unmatched > 0 ? `${plural(unmatched, "unmatched row")} across the run, listed separately.` : null,
+      ].filter(Boolean);
+      comparisonExcludes = parts.length > 0 ? parts.join(" ") : null;
     }
   }
   const activeNotCompared = !notesActive && humanActive && activeTemplate
@@ -1055,11 +1089,20 @@ export function ConceptsPage({
               testId="comparison-pane-toggle"
               values={["Human file", "Source PDF"] as const}
               activeValue={comparisonPane === "human" ? "Human file" : "Source PDF"}
+              disabled={comparisonControlsBlocked}
               onChange={(value) => setComparisonPane(value === "Human file" ? "human" : "pdf")}
               buttonTestId={(value) => `comparison-pane-${value === "Human file" ? "human" : "pdf"}`}
             />
           }
-          tiles={comparisonTiles}
+          summary={comparisonSummary}
+          highlights={comparisonHighlights}
+          onToggleHighlight={(status) => {
+            setComparisonHighlights((current) => current.includes(status) ? current.filter((item) => item !== status) : [...current, status]);
+            setRowFilter("all");
+          }}
+          onlyHighlighted={onlyHighlighted}
+          onOnlyHighlightedChange={(only) => { setOnlyHighlighted(only); setRowFilter("all"); }}
+          controlsBlocked={comparisonControlsBlocked}
           excludesNote={comparisonExcludes}
           onReplace={onReplaceHumanFile}
           onRemoved={onHumanFileRemoved}
@@ -1189,7 +1232,7 @@ export function ConceptsPage({
                       : ""}
                   </option>
                 ))}
-                {comparison && HUMAN_ROW_FILTERS.map((option) => (
+                {comparison && !humanActive && HUMAN_ROW_FILTERS.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
                     {humanFilterCounts[option.value] != null ? ` (${humanFilterCounts[option.value]})` : ""}
@@ -1294,7 +1337,11 @@ export function ConceptsPage({
               focusSheet={activeNotesSheet}
               focusCell={notesFocusCell}
               onActiveCellPages={handleNotesCellPages}
-              onPreparationBlocked={onPreparationBlocked}
+              onPreparationBlocked={handleNotesPreparationBlocked}
+              comparisonHighlights={humanActive ? comparisonHighlights : undefined}
+              onlyHighlighted={humanActive && onlyHighlighted}
+              onShowAllComparisonFields={showAllComparisonFields}
+              onComparisonViewChange={setNotesComparisonView}
               onComparisonChange={() => setConflictReloadKey((key) => key + 1)}
               humanFigures={humanActive ? humanView?.slots : null}
               human={humanActive && comparison ? {
@@ -1865,6 +1912,7 @@ function ConceptMatrixGrid({
                       slot={cell ? human.slots.get(humanSlotKey(cell.uuid, period, activeScope)) : undefined}
                       notCompared={human.notComparedTemplates.has(g.templateId)}
                       testId={`matrix-human-${rn}-${col}-${period}`}
+                      highlights={human.highlights}
                     />
                   </div>
                 );
@@ -1879,12 +1927,14 @@ function ConceptMatrixGrid({
                 <div
                   key={`${col}-${period}`}
                   data-testid={testId}
+                  data-comparison-highlight={human && cell && isComparisonHighlighted(human.slots.get(humanSlotKey(cell.uuid, period, activeScope)), human.highlights) || undefined}
                   onClick={() => cell && onSelectRow(cell.uuid)}
                   style={{
                     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
                     textAlign: "right",
                     minWidth: 0,
                     background: selected ? pwc.grey50 : "transparent",
+                    ...(human && cell ? comparisonCellStyle(human.slots.get(humanSlotKey(cell.uuid, period, activeScope)), human.highlights) : null),
                     cursor: cell ? "pointer" : "default",
                   }}
                 >
@@ -1898,6 +1948,7 @@ function ConceptMatrixGrid({
                       period={showPeriods ? period : undefined}
                       scope={activeScope}
                       highlight={highlightEmpty}
+                      comparisonStyle={human ? comparisonCellStyle(human.slots.get(humanSlotKey(cell.uuid, period, activeScope)), human.highlights) : undefined}
                       compact
                     />
                   ) : cell ? (
@@ -2108,7 +2159,8 @@ function ConceptRowView({
       {!isAbstract && (
         <>
           {/* value column — editable for LEAF rows, read-only otherwise */}
-          <div style={styles.valueCell}>
+          <div data-comparison-highlight={human && isComparisonHighlighted(human.slots.get(humanSlotKey(row.concept_uuid, "CY", activeScope)), human.highlights) || undefined}
+            style={{ ...styles.valueCell, ...(human ? comparisonCellStyle(human.slots.get(humanSlotKey(row.concept_uuid, "CY", activeScope)), human.highlights) : null) }}>
             {isComputed ? (
               <ReadOnlyValue
                 value={cyValue}
@@ -2128,6 +2180,7 @@ function ConceptRowView({
                 period={showPeriods ? "CY" : undefined}
                 scope={activeScope}
                 highlight={cyIncompleteMandatory}
+                comparisonStyle={human ? comparisonCellStyle(human.slots.get(humanSlotKey(row.concept_uuid, "CY", activeScope)), human.highlights) : undefined}
               />
             ) : (
               <ReadOnlyValue
@@ -2141,7 +2194,8 @@ function ConceptRowView({
             )}
           </div>
           {showPeriods && (
-            <div style={styles.valueCell}>
+            <div data-comparison-highlight={human && isComparisonHighlighted(human.slots.get(humanSlotKey(row.concept_uuid, "PY", activeScope)), human.highlights) || undefined}
+              style={{ ...styles.valueCell, ...(human ? comparisonCellStyle(human.slots.get(humanSlotKey(row.concept_uuid, "PY", activeScope)), human.highlights) : null) }}>
               {isComputed ? (
                 <ReadOnlyValue
                   value={pyValue}
@@ -2157,6 +2211,7 @@ function ConceptRowView({
                   period="PY"
                   scope={activeScope}
                   highlight={pyIncompleteMandatory}
+                  comparisonStyle={human ? comparisonCellStyle(human.slots.get(humanSlotKey(row.concept_uuid, "PY", activeScope)), human.highlights) : undefined}
                 />
               ) : (
                 <ReadOnlyValue
@@ -2172,6 +2227,7 @@ function ConceptRowView({
                 slot={human.slots.get(humanSlotKey(row.concept_uuid, "CY", activeScope))}
                 notCompared={human.notComparedTemplates.has(row.template_id)}
                 testId={`human-value-${row.concept_uuid}-CY`}
+                highlights={human.highlights}
               />
             </div>
           )}
@@ -2180,6 +2236,7 @@ function ConceptRowView({
               slot={human.slots.get(humanSlotKey(row.concept_uuid, "PY", activeScope))}
               notCompared={human.notComparedTemplates.has(row.template_id)}
               testId={`human-value-${row.concept_uuid}-PY`}
+              highlights={human.highlights}
             />
           )}
           {hasConflict && <div role="alert" style={{ ...styles.stateCell, gridColumn: "1 / -1" }}>
@@ -2221,10 +2278,12 @@ function HumanValueCell({
   slot,
   notCompared,
   testId,
+  highlights = [],
 }: {
   slot: HumanFigureSlot | undefined;
   notCompared: boolean;
   testId?: string;
+  highlights?: readonly ComparisonHighlight[];
 }) {
   if (notCompared || !slot || slot.human_value == null && slot.status !== "ai_only") {
     return <span data-testid={testId} aria-hidden="true" style={styles.humanEmpty} />;
@@ -2233,9 +2292,11 @@ function HumanValueCell({
   // A zero opposite a blank is not a difference worth a marker.
   return (
     <span data-testid={testId} data-human-status={slot.status}
+      data-comparison-highlight={isComparisonHighlighted(slot, highlights) || undefined}
       style={{
         ...styles.humanCell,
         ...(slot.status === "zero_blank" ? styles.humanQuiet : null),
+        ...comparisonCellStyle(slot, highlights),
       }}
       title={HUMAN_STATUS_LABEL[slot.status]}>
       <HumanStatusMarker status={slot.status} />
@@ -2250,12 +2311,14 @@ function SegmentedControl<T extends string>({
   activeValue,
   onChange,
   buttonTestId,
+  disabled = false,
 }: {
   testId: string;
   values: readonly T[];
   activeValue: T;
   onChange: (value: T) => void;
   buttonTestId: (value: T) => string;
+  disabled?: boolean;
 }) {
   return (
     <div data-testid={testId} role="tablist" className="segmented-control-group" style={styles.segmented}>
@@ -2267,6 +2330,7 @@ function SegmentedControl<T extends string>({
             type="button"
             role="tab"
             aria-selected={active}
+            disabled={disabled}
             data-testid={buttonTestId(value)}
             className="segmented-control-button"
             onClick={() => onChange(value)}
@@ -2383,6 +2447,7 @@ function EditableValueCell({
   scope,
   highlight = false,
   compact = false,
+  comparisonStyle,
 }: {
   uuid: string;
   ariaLabel: string;
@@ -2393,6 +2458,7 @@ function EditableValueCell({
   scope: "Company" | "Group";
   highlight?: boolean;
   compact?: boolean;
+  comparisonStyle?: React.CSSProperties;
 }) {
   const [draft, setDraft] = useState(value == null ? "" : String(value));
   const [focused, setFocused] = useState(false);
@@ -2543,6 +2609,7 @@ function EditableValueCell({
           fontVariantNumeric: "tabular-nums",
           fontSize: 14,
           background: highlightEmpty ? pwc.orange50 : pwc.white,
+          ...comparisonStyle,
         }}
       />
       {badge && compact && (

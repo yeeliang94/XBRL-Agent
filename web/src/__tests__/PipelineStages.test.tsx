@@ -72,6 +72,12 @@ describe("PipelineStages", () => {
     expect(checks.length).toBe(6);
   });
 
+  test.each(["queued", "working", "completed", "failed"] as const)("a formatter %s status does not mark the run Ready", (phase) => {
+    render(<PipelineStages currentPhase={phase} isRunning={true} isComplete={false} />);
+    expect(screen.getByText("Review")).toHaveAttribute("aria-current", "step");
+    expect(screen.getByText("Ready")).not.toHaveAttribute("aria-current");
+  });
+
   test("maps coordinator stages to the run-level progress story", () => {
     const { container, rerender } = render(
       <PipelineStages currentPhase="viewing_pdf" pipelineStage="cross_checking" isRunning={true} isComplete={false} />,
