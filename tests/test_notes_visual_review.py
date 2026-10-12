@@ -52,7 +52,8 @@ async def test_prepared_output_is_given_to_fresh_reviewer(review_harness):
 @pytest.mark.asyncio
 async def test_a_structural_finding_is_never_a_pass(review_harness):
     kwargs, decision, _ = review_harness
-    decision[0].update(status="pass", issue_kind="structure", reason="Total row is heading cells.")
+    decision[0].update(status="pass", issue_kind="structure", reason="Total row is heading cells.",
+                       observed_text="Closing 2024")
     errors, result = await vr.check_visual_rows(**kwargs)
     assert errors[112] == "Table 0: Total row is heading cells."
     assert result["tables"][0]["status"] == "unresolved"
@@ -70,8 +71,35 @@ async def test_formatter_layout_is_context_beside_the_actual_output(review_harne
                    if isinstance(part, str) and "FORMATTED NOTE ROW 112" in part)
     assert "columns 1=label, 2=amount" in content
     assert "single line below row 1, columns 2-2" in content
-    # The real candidate and prepared output stay the evidence.
-    assert "CANONICAL CANDIDATE HTML:" in content and "PREPARED OUTPUT HTML:" in content
+    # The real candidate and prepared output stay the evidence, table by table.
+    assert "TABLE 0 CANONICAL CANDIDATE HTML:" in content and "TABLE 0 PREPARED OUTPUT HTML:" in content
+
+
+@pytest.mark.asyncio
+async def test_unquoted_structure_claim_and_content_defect_never_trigger_recopy(review_harness, monkeypatch):
+    """Run 183 AMSB row 125: one finding mixed a real missing word with a
+    structure defect the checker took from the adjacent comparative table."""
+    kwargs, decision, harness = review_harness
+    kwargs["rows"][112] = ("<p>Net carrying amount</p>"
+                           "<table><tr><td>At 31 December 2025</td></tr><tr><td>Net carrying amount</td><td>1</td></tr></table>"
+                           "<table><tr><td>At 31 December 2024</td></tr><tr><td>Net carrying amount</td><td>2</td></tr></table>")
+    prepared = kwargs["rows"][112]
+    monkeypatch.setattr(vr, "prepare_note_evidence", lambda html, style: (prepared, {"html_sha256": "abc"}))
+    decision[:] = [
+        {"row": 112, "table": 0, "status": "unresolved", "source_pages": [3], "issue_kind": "structure",
+         "reason": "Dated row labelled 2025 should be a heading.", "observed_text": "At 31 December 2023"},
+        {"row": 112, "table": 1, "status": "unresolved", "source_pages": [3], "issue_kind": "structure",
+         "reason": "Heading split from figures.", "observed_text": "Net carrying amount",
+         "content_defect": "Asset header lacks 'land'"},
+    ]
+    errors, result = await vr.check_visual_rows(**kwargs)
+    content = next(part for part in harness.calls[0][0]
+                   if isinstance(part, str) and "FORMATTED NOTE ROW 112" in part)
+    assert "TABLE 1 — preceding text: Net carrying amount; first row: At 31 December 2024" in content
+    assert "did not quote text from this table" in errors[112]
+    assert "Asset header lacks 'land'" in errors[112]
+    assert result["tables"][1]["issue_kind"] == "source_content"
+    assert vr.structure_findings({"failed_rows": [112], "visual_review": result}) == {}
 
 
 @pytest.mark.asyncio
@@ -108,8 +136,8 @@ async def test_review_can_distinguish_double_intent_after_transport_normalizatio
         assert errors == {}
         note = next(part for part in harness.calls[-1][0]
                     if isinstance(part, str) and "PREPARED OUTPUT HTML:" in part)
-        canonical, prepared = note.split("\nPREPARED OUTPUT HTML:\n")
-        assert "CANONICAL CANDIDATE HTML:\n" + html in canonical
+        canonical, prepared = note.split("\nTABLE 0 PREPARED OUTPUT HTML:\n")
+        assert "TABLE 0 CANONICAL CANDIDATE HTML:\n" + html in canonical
         assert "double" not in prepared
         amount = BeautifulSoup(prepared, "html.parser").find_all("td")[1]
         styles = dict(decl.strip().split(":", 1) for decl in amount["style"].split(";") if decl.strip())
@@ -256,3 +284,29 @@ def test_evidence_is_the_prepared_copy_output():
     prepared, identity = vr.prepare_note_evidence(html, DEFAULT_STYLE)
     assert prepared == prepare_note_output(html, style=DEFAULT_STYLE, decorate=True)["html"]
     assert len(identity["html_sha256"]) == 64
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pages", [[], [3, 4], [9]])
+async def test_rejected_citation_never_reaches_recopy(review_harness, pages):
+    """Review finding: an unseen-page structure finding quoting real table text
+    still reached structure_findings."""
+    kwargs, decision, _ = review_harness
+    decision[0].update(status="unresolved", issue_kind="structure", source_pages=pages,
+                       reason="Total row is heading cells.", observed_text="Closing 2024")
+    errors, result = await vr.check_visual_rows(**kwargs)
+    assert 112 in errors
+    assert result["tables"][0]["status"] == "unresolved"
+    assert vr.structure_findings({"failed_rows": [112], "visual_review": result}) == {}
+
+
+@pytest.mark.asyncio
+async def test_duplicate_assessment_never_reaches_recopy(review_harness):
+    """Greptile PR #34: a duplicate structure assessment skipped the evidence
+    checks and, as the last entry for its table, still requested a re-copy."""
+    kwargs, decision, _ = review_harness
+    decision.append({"row": 112, "table": 0, "status": "unresolved", "issue_kind": "structure",
+                     "source_pages": [], "reason": "Total row is heading cells."})
+    errors, result = await vr.check_visual_rows(**kwargs)
+    assert "duplicate" in errors[112]
+    assert vr.structure_findings({"failed_rows": [112], "visual_review": result}) == {}

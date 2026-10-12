@@ -35,7 +35,7 @@ from notes._rate_limit import (
     RATE_LIMIT_MAX_RETRIES,
     is_rate_limit_error,
 )
-from notes.agent import create_notes_agent
+from notes.agent import create_notes_agent, share_class_exit_check
 from notes.constants import NOTES_PHASE_MAP
 from notes.listofnotes_subcoordinator import run_listofnotes_subcoordinator
 from notes.writer import BORDERLINE_FUZZY_SCORE
@@ -1035,6 +1035,7 @@ async def _invoke_single_notes_agent_once(
             # usable output and the outer retry loop / caller must see
             # a failure.
             if deps.wrote_once and deps.filled_path:
+                share_class_exit_check(deps)
                 logger.warning(
                     "%s: LLM stalled past %ss after write — treating as done "
                     "(rows already on disk at %s).",
@@ -1130,6 +1131,7 @@ async def _invoke_single_notes_agent_once(
             deps.filled_path = deps.template_path
         else:
             raise _NoWriteError("Notes agent finished without writing any payloads")
+    share_class_exit_check(deps)
 
     return _SingleAgentOutcome(
         filled_path=deps.filled_path,

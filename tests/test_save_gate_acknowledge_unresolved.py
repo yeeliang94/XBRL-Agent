@@ -148,3 +148,24 @@ def test_clean_verify_does_not_set_flag():
     assert _check_save_gate(deps, acknowledge_unresolved=True,
                             acknowledge_reason="n/a") is None
     assert deps.completed_with_flag is False
+
+
+def test_deferred_acknowledgement_says_it_was_not_applied():
+    """Runs 183-185: a pre-emptive acknowledgement looked like an unexplained
+    refusal, so agents repeated work before resending it."""
+    from extraction.agent import _check_save_gate
+    deps = _deps()
+    deps.save_attempts = 1
+    deps.last_verify_result = _imbalanced()
+    msg = _check_save_gate(deps, acknowledge_unresolved=True,
+                           acknowledge_reason="genuinely unbalanced in source")
+    assert "Your acknowledgement was not applied" in msg
+    assert "send the same acknowledgement again" in msg
+    assert "not applied" not in _check_save_gate(_with_gap(), acknowledge_unresolved=False)
+
+
+def _with_gap():
+    deps = _deps()
+    deps.save_attempts = 1
+    deps.last_verify_result = _imbalanced()
+    return deps

@@ -478,3 +478,56 @@ def test_duplicate_protected_profit_totals_do_not_create_unresolved_writes(tmp_p
     deps = SimpleNamespace(_unresolved_fill_error_state={}, last_fill_errors=[])
     _update_unresolved_fill_errors(deps, result)
     assert deps.last_fill_errors == []
+
+
+@pytest.mark.parametrize(("section", "face_row"), [
+    ("Current liabilities", 63),
+    ("Non-current liabilities", 52),
+])
+def test_cross_sheet_hint_follows_section_and_successful_redirect_clears_rejection(
+    tmp_path, section, face_row,
+):
+    """Runs 183-185: lease liabilities rejected on the sub-sheet were all sent
+    to the non-current face row, and the successful face retry left the
+    sub-sheet rejection in save_result."""
+    from types import SimpleNamespace
+    from extraction.agent import _update_unresolved_fill_errors
+
+    template = str(
+        Path(__file__).resolve().parent.parent
+        / "XBRL-template-MFRS/Company/01-SOFP-CuNonCu.xlsx"
+    )
+    output = str(tmp_path / "filled.xlsx")
+    deps = SimpleNamespace(_unresolved_fill_error_state={}, last_fill_errors=[])
+    rejected = fill_workbook(template, output, [{
+        "sheet": "SOFP-Sub-CuNonCu", "field_label": "Lease liabilities",
+        "section": section, "col": 2, "value": 100,
+    }, {
+        "sheet": "SOFP-Sub-CuNonCu", "field_label": "Missing disclosure line",
+        "col": 2, "value": 7,
+    }])
+    _update_unresolved_fill_errors(deps, rejected)
+    assert f"'SOFP-CuNonCu'!row {face_row} " in rejected.errors[0]
+    assert len(deps.last_fill_errors) == 2
+
+    retried = fill_workbook(template, output, [{
+        "sheet": "SOFP-CuNonCu", "field_label": "Lease liabilities",
+        "section": section, "col": 2, "value": 100,
+    }])
+    assert retried.success, retried.errors
+    _update_unresolved_fill_errors(deps, retried)
+    assert len(deps.last_fill_errors) == 1
+    assert "Missing disclosure line" in deps.last_fill_errors[0]
+
+
+def test_cross_sheet_hint_lists_every_candidate_without_a_section(tmp_path):
+    template = str(
+        Path(__file__).resolve().parent.parent
+        / "XBRL-template-MFRS/Company/01-SOFP-CuNonCu.xlsx"
+    )
+    result = fill_workbook(template, str(tmp_path / "filled.xlsx"), [{
+        "sheet": "SOFP-Sub-CuNonCu", "field_label": "Lease liabilities",
+        "col": 2, "value": 100,
+    }])
+    assert "'SOFP-CuNonCu'!row 52, 'SOFP-CuNonCu'!row 63" in result.errors[0]
+    assert result.failed_request_keys[0]["redirect_target"] is None

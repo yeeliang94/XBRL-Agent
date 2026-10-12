@@ -603,3 +603,40 @@ def test_category_total_column_is_the_field_without_a_category(tmp_path, prior_t
             expected.add(("PY", "", float(prior_total)))
     assert {(f["period"], f["dimension_key"], f["value"]) for f in read.facts
             if f["concept_uuid"] == uuid and f["value"] is not None} == expected
+
+
+def test_repeated_total_without_its_own_mtool_cell_is_derived_from_human_inputs(tmp_path):
+    """Run 185: SOCI shows "Total comprehensive income" twice. mTool gives the
+    element one cell, so the attributable copy (row 42) had no human slot and
+    showed blank beside the run's total."""
+    from mtool.offline_fill import fill_workbook
+    from tests._human_file_fixture import TEMPLATES
+
+    db = tmp_path / "audit.db"
+    init_db(db)
+    tid = import_template_file(db, tmp_path, "06-SOCI-NetOfTax.xlsx")
+    run = add_run(db, {"filing_standard": "mfrs", "filing_level": "company", "denomination": "units",
+                       "statements": ["SOCI"], "variants": {"SOCI": "NetOfTax"}})
+    inputs = {7: 58500, 40: 58500}
+    with sqlite3.connect(db) as conn:
+        nodes = dict(conn.execute("SELECT render_row,concept_uuid FROM concept_nodes WHERE template_id=?", (tid,)))
+        conn.executemany(
+            "INSERT INTO run_concept_facts(run_id,concept_uuid,period,entity_scope,value,value_status,updated_at) "
+            "VALUES (?,?,'CY','Company',?,'observed','t')",
+            [(run, nodes[r], v) for r, v in (inputs | {38: 58500, 42: 58500}).items()])
+    path = tmp_path / "human.xlsx"
+    assert fill_workbook(str(TEMPLATES / "06-SOCI-NetOfTax.xlsx"), {"writes": [
+        {"sheet": "SOCI-NetOfTax", "cell": f"B{r}", "value": v} for r, v in inputs.items()]},
+        str(path), strict=True)["status"] == "ok"
+    with sqlite3.connect(db) as conn:
+        ingest_human_file(conn, run, path, filename=path.name, unit="units", uploaded_by=None)
+        # A native mTool file has one cell for the repeated element (local
+        # run 330 shows the same), so the second copy has no human slot.
+        conn.execute("DELETE FROM human_file_facts WHERE run_id=? AND concept_uuid=?", (run, nodes[42]))
+        comparison = load_comparison(conn, run)
+    slots = {(s["concept_uuid"], s["period"]): s for s in comparison["figures"]["slots"]}
+    for row in (38, 42):
+        slot = slots[(nodes[row], "CY")]
+        assert slot["calculated"] and slot["human_value"] == 58500 and slot["status"] == "agree"
+    # Totals are shown only; the scored statistics are unchanged.
+    assert comparison["figures"]["totals"]["Company"]["human_filled"] == 2

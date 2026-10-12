@@ -4289,6 +4289,23 @@ def _reviewer_actionable_failures(failures: list) -> list:
     ]
 
 
+def _figures_review_mode(reviewer_failures: list, conflicts: list, has_facts) -> tuple[bool, Optional[str]]:
+    """Return (launch review, spot-check mode) for the automatic figures review.
+
+    Actionable failures or open conflicts get the corrective pass. Otherwise a
+    run with face facts gets the light triage. A failed notes↔face tie-out is
+    not reviewer-actionable, so it must not suppress the triage a fully clean
+    run would receive (runs 183-185). A run with no face facts (notes-only, or
+    a mocked run) has nothing to triage; the reviewer would refuse it and
+    wrongly land the run completed_with_errors.
+    """
+    if reviewer_failures or conflicts:
+        return True, None
+    if has_facts() is not False:
+        return True, "light"
+    return False, None
+
+
 def _run_notes_citation_consistency(merged_path: str, run_id: int) -> list:
     """N4: run the generic citation-consistency pass and fold to CrossCheckResults.
 
@@ -7203,24 +7220,15 @@ async def run_multi_agent_stream(
                 c for c in load_open_conflicts(AUDIT_DB_PATH, run_id)
                 if c.get("kind") != "correction_exhausted"
             ]
-            has_issues = bool(reviewer_failures) or bool(canonical_conflicts)
-            should_correct = has_issues
-            # Every applicable run receives review: investigate known issues,
-            # otherwise perform bounded source-grounded triage.
-            spot_check_mode: Optional[str] = None
-            # A clean run with no face facts (notes-only, or a mocked run)
-            # has nothing to triage; the reviewer would refuse it and wrongly
-            # land the run completed_with_errors.
-            if not has_issues and not hard_failures and _run_has_facts(AUDIT_DB_PATH, run_id) is not False:
-                spot_check_mode = "light"
-                should_correct = True
-                logger.info(
-                    "run %s clean — launching reviewer triage", run_id,
-                )
+            should_correct, spot_check_mode = _figures_review_mode(
+                reviewer_failures, canonical_conflicts,
+                lambda: _run_has_facts(AUDIT_DB_PATH, run_id),
+            )
+            if spot_check_mode is not None:
+                logger.info("run %s has no actionable issues — launching reviewer triage", run_id)
             if not should_correct:
                 _record_review_not_applicable(CORRECTION_AGENT_ID,
-                    "Failed notes cross-checks require notes review; clean-run figures triage is not applicable."
-                    if hard_failures else "No extracted figures are available for AI review.")
+                    "No extracted figures are available for AI review.")
             if should_correct:
                 # Create + register the CORRECTION audit row when review launches.
                 # Inapplicable reviews receive a separate terminal skipped row.

@@ -83,7 +83,7 @@ class SuccessfulRequestKey(TypedDict):
     resolved_row: int
 
 
-class FailedRequestKey(TypedDict):
+class FailedRequestKey(TypedDict, total=False):
     key: str
     base_key: str
     message: str
@@ -92,6 +92,9 @@ class FailedRequestKey(TypedDict):
     kind: str
     candidate_rows: list[int]
     resolved_row: Optional[int]
+    # The single writable cell the refusal told the agent to use instead, as
+    # (normalized sheet, row). A successful write there resolves this refusal.
+    redirect_target: Optional[tuple[str, int]]
 
 
 @dataclass
@@ -355,6 +358,7 @@ def fill_workbook(
         kind: str = "",
         candidate_rows: Optional[list[int]] = None,
         resolved_row: Optional[int] = None,
+        redirect_target: Optional[tuple[str, int]] = None,
     ) -> None:
         """Attach one deterministic refusal to its own request identity."""
         errors.append(message)
@@ -368,6 +372,7 @@ def fill_workbook(
             "kind": kind,
             "candidate_rows": list(candidate_rows or []),
             "resolved_row": resolved_row,
+            "redirect_target": redirect_target,
         })
 
     guard_rejections: dict[str, int] = {}
@@ -454,17 +459,28 @@ def fill_workbook(
                     f"{f' (section: {mapping.section})' if mapping.section else ''}"
                     f" in sheet '{mapping.sheet}'."
                 )
-                redirect = _writable_label_in_other_sheets(
+                redirects = _writable_label_in_other_sheets(
                     wb, label_index, mapping.sheet,
                     mapping.field_label, mapping.col,
+                    section_hint=mapping.section,
+                    writable_coordinates_by_sheet=writable_coordinates_by_sheet,
                 )
-                if redirect is not None:
-                    other_sheet, other_row = redirect
+                redirect_target = None
+                if len(redirects) == 1:
+                    other_sheet, other_row = redirects[0]
+                    redirect_target = (_normalize_label(other_sheet), other_row)
                     msg += (
                         f" It IS a writable cell at '{other_sheet}'!row"
                         f" {other_row} — write it there instead. This row"
                         f" has no equivalent on '{mapping.sheet}' (some face"
                         f" rows are direct data-entry with no sub-sheet line)."
+                    )
+                elif redirects:
+                    places = ", ".join(f"'{sheet}'!row {row}" for sheet, row in redirects)
+                    msg += (
+                        f" It is a writable label at {places}. Choose the one"
+                        " whose section matches the source (for example current"
+                        " or non-current) and write it there with that section."
                     )
                 else:
                     msg += " Check the exact label text from read_template()."
@@ -480,7 +496,8 @@ def fill_workbook(
                 )
                 if period_retry:
                     msg += " This is the reporting-period placeholder; use row=1, the same col, and field_label=''."
-                reject(mapping, msg, candidate_rows=[1] if period_retry else None)
+                reject(mapping, msg, candidate_rows=[1] if period_retry else None,
+                       redirect_target=redirect_target)
                 continue
         elif mapping.row is not None:
             target_row = mapping.row
@@ -1010,11 +1027,16 @@ def _writable_label_in_other_sheets(
     current_sheet: str,
     field_label: str,
     col: int,
-) -> Optional[tuple[str, int]]:
-    """Find `field_label` as a writable leaf on a sheet other than `current_sheet`.
+    *,
+    section_hint: str = "",
+    writable_coordinates_by_sheet: Optional[dict] = None,
+) -> list[tuple[str, int]]:
+    """Find `field_label` as a writable leaf on sheets other than `current_sheet`.
 
-    Returns ``(sheet, row)`` for the first non-header occurrence whose cell at
-    `col` is empty or non-formula (i.e. a real data-entry target), else None.
+    Returns every ``(sheet, row)`` the request could mean. One entry is a safe
+    redirect; several mean the agent must choose by section. Rows are narrowed
+    with the same section matching the real write uses, so a non-current
+    request is not pointed at the current row (or the reverse).
 
     Motivated by the 2026-06-15 SOFP OrderOfLiquidity incident: the agent
     tried to write a non-derivative FVTPL unit-trust value to the SUB-sheet,
@@ -1026,16 +1048,30 @@ def _writable_label_in_other_sheets(
     could send the agent to the wrong sheet, which is worse than no hint.
     """
     normalized = _normalize_label(field_label)
+    col_letter = openpyxl.utils.get_column_letter(col)
+    found: list[tuple[str, int]] = []
     for sheet_name, entries in label_index.items():
         if sheet_name == current_sheet or sheet_name not in wb.sheetnames:
             continue
+        exact_coordinates = (writable_coordinates_by_sheet or {}).get(sheet_name)
+        matches = []
         for entry in entries:
             if entry.normalized_label != normalized or entry.is_header:
                 continue
-            cell = wb[sheet_name].cell(row=entry.row, column=col)
-            if cell.value is None or not str(cell.value).startswith("="):
-                return (sheet_name, entry.row)
-    return None
+            if exact_coordinates is not None:
+                if (entry.row, col_letter) not in exact_coordinates:
+                    continue
+            else:
+                cell = wb[sheet_name].cell(row=entry.row, column=col)
+                if cell.value is not None and str(cell.value).startswith("="):
+                    continue
+            matches.append(entry)
+        if len(matches) > 1 and section_hint:
+            in_section = [e for e in matches if _entry_matches_section(e, section_hint)]
+            if in_section:
+                matches = in_section
+        found.extend((sheet_name, entry.row) for entry in matches)
+    return found
 
 
 def _find_row_by_label(

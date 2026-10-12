@@ -1030,6 +1030,15 @@ class NotesDeps:
     # finishes to build the aggregated coverage warnings + side-log.
     # Typed `Any` to avoid importing CoverageReceipt here (cycle).
     coverage_receipt: Any = None
+    # Issued Capital only: the model's accepted list of every disclosed share
+    # class, bound to the numeric cells it described. Runs 183-185 saved
+    # ordinary shares only while a preference-share note went unwritten.
+    share_class_receipt: Optional[list[dict]] = None
+    share_class_receipt_cells: Optional[frozenset] = None
+    share_class_refusals: int = 0
+    # Warnings owned by the share-class receipt; replaced, not accumulated,
+    # when a corrected receipt is accepted.
+    share_class_warnings: list[str] = field(default_factory=list)
 
 
 def _load_template_label_catalog(
@@ -2025,6 +2034,151 @@ def _sub_agent_sink_write(
             1 for p in unstyled if _payload_source_consulted(deps, p)
         ), origin=deps.source_html_origin)
     return msg
+
+
+# A missing share-class receipt refuses save_result this many times, then the
+# sheet finishes with a visible warning instead of losing its persisted work.
+MAX_SHARE_CLASS_REFUSALS = 2
+
+
+def _numeric_cells_fingerprint(deps: "NotesDeps") -> frozenset:
+    """Every written numeric cell and value. A receipt describes exactly these;
+    any later write, even to the same category, makes it stale."""
+    from concept_model.dimensions import dimension_key
+    return frozenset(
+        (c.get("sheet"), c.get("row"), c.get("col"),
+         dimension_key(c.get("dimensions")), repr(c.get("value")))
+        for c in deps.numeric_cells
+    )
+
+
+def _numeric_dimension_keys(deps: "NotesDeps") -> frozenset:
+    from concept_model.dimensions import dimension_key
+    return frozenset(dimension_key(c.get("dimensions")) for c in deps.numeric_cells)
+
+
+def _submit_share_classes_impl(deps: "NotesDeps", classes: Any) -> str:
+    """Validate the model's list of every share class the source discloses.
+
+    The model decides what the classes are; code only checks that each
+    written class has its own numeric payloads, that two classes never share
+    one fact identity, and that every written category is accounted for.
+    """
+    from concept_model.dimensions import dimension_key, numeric_category_catalog
+    axis = next(a for a in numeric_category_catalog(deps.filing_standard)
+                if a.endswith("ClassesOfShareCapitalAxis"))
+    if not isinstance(classes, list):
+        return "Invalid share-class receipt: pass a list of class objects."
+    errors: list[str] = []
+    written_keys = _numeric_dimension_keys(deps)
+    claimed: dict[str, str] = {}
+    entries: list[dict] = []
+    for index, item in enumerate(classes):
+        where = f"entry {index}"
+        if not isinstance(item, dict):
+            errors.append(f"{where}: must be an object")
+            continue
+        name = str(item.get("class_name") or "").strip()
+        action = item.get("action")
+        member = str(item.get("dimension_member") or "").strip()
+        pages = item.get("source_pages") or []
+        note = str(item.get("note") or "").strip()
+        if not name:
+            errors.append(f"{where}: class_name is required")
+        if not note:
+            errors.append(f"{where} ({name}): note is the printed note number")
+        if (not isinstance(pages, list) or not pages
+                or not all(isinstance(p, int) for p in pages)):
+            errors.append(f"{where} ({name}): source_pages must list the pages that disclose it")
+        elif not set(pages).issubset(deps.viewed_pdf_pages):
+            errors.append(f"{where} ({name}): view pages {sorted(set(pages) - deps.viewed_pdf_pages)} before citing them")
+        if action == "written":
+            key = dimension_key({axis: member}) if member else ""
+            if key not in written_keys:
+                errors.append(
+                    f"{where} ({name}): no numeric payload was written with "
+                    + (f"dimensions {{{axis}: {member}}}" if member else "empty dimensions")
+                    + "; write its rows first")
+            if key in claimed:
+                errors.append(
+                    f"{where} ({name}): shares one fact identity with '{claimed[key]}'; "
+                    "give each class its own catalog member or they overwrite each other")
+            claimed.setdefault(key, name)
+        elif action == "not_written":
+            if not str(item.get("reason") or "").strip():
+                errors.append(f"{where} ({name}): not_written requires a reason")
+        else:
+            errors.append(f"{where} ({name}): action must be 'written' or 'not_written'")
+        entries.append({"class_name": name, "note": note, "source_pages": pages,
+                        "dimension_member": member, "action": action,
+                        "reason": str(item.get("reason") or "").strip()})
+    unclaimed = sorted(written_keys - set(claimed))
+    if unclaimed:
+        errors.append("numeric payloads exist for categories no written entry names: "
+                      + ", ".join(k or "(empty dimensions)" for k in unclaimed))
+    if not entries and written_keys:
+        errors.append("list every disclosed share class")
+    if errors:
+        return ("Share-class receipt refused. Fix every item and resubmit the whole list:\n"
+                + "\n".join(f"{n}. {e}" for n, e in enumerate(errors, 1)))
+    deps.share_class_receipt = entries
+    deps.share_class_receipt_cells = _numeric_cells_fingerprint(deps)
+    skipped = [e for e in entries if e["action"] == "not_written"]
+    _set_share_class_warnings(deps, [
+        f"Share class '{e['class_name']}' (Note {e['note']}) not written: {e['reason']}"
+        for e in skipped
+    ])
+    return (f"Share-class receipt accepted: {len(entries) - len(skipped)} written, "
+            f"{len(skipped)} not written. Call save_result.")
+
+
+SHARE_CLASS_UNCONFIRMED = (
+    "Share-class coverage was not confirmed; check every disclosed share class."
+)
+
+
+def _set_share_class_warnings(deps: "NotesDeps", warnings: list[str]) -> None:
+    """Replace the receipt-owned warnings; other write warnings stay."""
+    owned = set(deps.share_class_warnings)
+    deps.write_skip_errors[:] = [w for w in deps.write_skip_errors if w not in owned]
+    deps.share_class_warnings = list(dict.fromkeys(warnings))
+    deps.write_skip_errors.extend(
+        w for w in deps.share_class_warnings if w not in deps.write_skip_errors)
+
+
+def _share_class_coverage_confirmed(deps: "NotesDeps") -> bool:
+    return (getattr(deps, "template_type", None) != NotesTemplateType.ISSUED_CAPITAL
+            or (deps.share_class_receipt is not None
+                and deps.share_class_receipt_cells == _numeric_cells_fingerprint(deps)))
+
+
+def share_class_exit_check(deps: "NotesDeps") -> None:
+    """Every successful Issued Capital exit (save, timeout salvage or a run that
+    ends without save_result) keeps its workbook but must not look clean when
+    the share-class receipt is missing or stale."""
+    if not _share_class_coverage_confirmed(deps):
+        _set_share_class_warnings(deps, [
+            w for w in deps.share_class_warnings if w != SHARE_CLASS_UNCONFIRMED
+        ] + [SHARE_CLASS_UNCONFIRMED])
+
+
+def _share_class_save_gate(deps: "NotesDeps") -> Optional[str]:
+    """Refuse Issued Capital completion until every share class is accounted for."""
+    if _share_class_coverage_confirmed(deps):
+        return None
+    if deps.share_class_refusals >= MAX_SHARE_CLASS_REFUSALS:
+        share_class_exit_check(deps)
+        return None
+    deps.share_class_refusals += 1
+    stale = deps.share_class_receipt is not None
+    return (
+        "save_result refused: "
+        + ("numeric writes changed after the share-class receipt; resubmit it. "
+           if stale else "call submit_share_classes first. ")
+        + "Search the whole document for every issued share class (ordinary, "
+        "preference, redeemable or convertible), including classes disclosed "
+        "in a separate note, and list each one as written or not_written."
+    )
 
 
 def _submit_coverage_entries_impl(deps: "NotesDeps", entries: Any) -> str:
@@ -3897,6 +4051,9 @@ def create_notes_agent(
         # don't race on NOTES_{type}_result.json file writes.
         if ctx.deps.payload_sink is not None:
             return "Sub-agent mode -- sub-coordinator will persist."
+        refusal = _share_class_save_gate(ctx.deps)
+        if refusal is not None:
+            return refusal
         prefix = f"NOTES_{ctx.deps.template_type.value}"
         json_path = Path(ctx.deps.output_dir) / f"{prefix}_result.json"
         report = ctx.deps.token_report.format_table()
@@ -3909,6 +4066,27 @@ def create_notes_agent(
         await asyncio.to_thread(report_path.write_text, report, encoding="utf-8")
         ctx.deps.result_saved = True
         return f"Saved {json_path.name}\n{report}"
+
+    if deps.template_type == NotesTemplateType.ISSUED_CAPITAL:
+        @agent.tool
+        async def submit_share_classes(
+            ctx: RunContext[NotesDeps], classes: Any = None,
+        ) -> str:
+            """List every share class the document discloses, after all writes.
+
+            Call this before save_result. Pass the entry objects directly:
+
+              - {"class_name": "<printed class>", "note": "<printed note number>",
+                 "source_pages": [<viewed pages>], "action": "written",
+                 "dimension_member": "<catalog member used, or '' if unresolved>"}
+              - {"class_name": ..., "note": ..., "source_pages": [...],
+                 "action": "not_written", "reason": "<one sentence>"}
+
+            Include classes disclosed in a separate note (for example
+            preference shares). Each written class needs its own numeric
+            payloads; two classes may not share one catalog member.
+            """
+            return _submit_share_classes_impl(ctx.deps, classes)
 
     # Sheet-12 sub-agent mode only: the coverage-receipt tool. Registered
     # conditionally so Sheets 10/11/13/14 don't expose it (their agents
