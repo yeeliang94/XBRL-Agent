@@ -1428,6 +1428,12 @@ describe("NotesReviewTab — cross-run isolation (peer-review fix)", () => {
         />,
       );
       await waitFor(() => expect(spy).toHaveBeenCalled());
+      const search = screen.getByRole("searchbox", { name: "Search note field names" });
+      fireEvent.change(search, { target: { value: "No matching field" } });
+      expect(screen.queryByRole("button", { name: "Review Registered office" })).toBeNull();
+      rerender(<NotesReviewTab runId={42} focusCell={{ sheet: "Notes-CI", row: 12, key: 2 }} />);
+      expect(search).toHaveValue("");
+      expect(screen.getByRole("button", { name: "Review Registered office" })).toBeVisible();
       spy.mockClear();
 
       rerender(
@@ -3379,7 +3385,10 @@ describe("NotesReviewTab — AI formatter", () => {
     expect(screen.getByTestId("sheet-title")).toHaveTextContent("Corporate Information");
     expect(within(inventory).getByText(/Exact field not recorded/)).toBeVisible();
     expect(within(inventory).queryByLabelText("Destinations for note 2")).not.toBeInTheDocument();
+    const search = screen.getByRole("searchbox", { name: "Search note field names" });
+    fireEvent.change(search, { target: { value: "Corporate" } });
     fireEvent.click(within(inventory).getByTestId("source-note-2"));
+    expect(search).toHaveValue("");
     expect(within(inventory).getByTestId("source-note-2")).toHaveStyle({ background: "rgb(238, 239, 241)", fontWeight: 500 });
     const destinations = within(inventory).getByLabelText("Destinations for note 2");
     expect(within(destinations).getByRole("button", { name: "Property, plant and equipment" })).toBeVisible();
