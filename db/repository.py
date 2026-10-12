@@ -272,6 +272,7 @@ class RunSummary:
     # v30 evals workspace: the build that produced this run, so History/trends
     # can attribute quality to a version. None on legacy rows.
     app_version: Optional[str] = None
+    updated_at: str = ""
 
 
 @dataclass
@@ -3024,8 +3025,9 @@ def list_runs(
 ) -> list[RunSummary]:
     """Return RunSummary rows for the History list view.
 
-    Ordering: completed outcomes first by ended_at DESC, then upload time.
-    Other statuses use upload time; filters are ANDed together.
+    Ordering: latest saved document update first, regardless of status.
+    History includes all documents; progress contains only drafts and running runs.
+    Filters are ANDed together.
 
     `model` filter matches against run_agents.model — the effective resolved
     model per agent. This is the ONLY authoritative source for per-run model
@@ -3043,7 +3045,7 @@ def list_runs(
         params.append(f"%{_escape_like(filename_substring.lower())}%")
     if document_group == "progress":
         clauses.append("r.status IN ('draft', 'running')")
-    elif document_group == "history":
+    elif document_group == "results":
         clauses.append("r.status NOT IN ('draft', 'running')")
     if status:
         clauses.append("r.status = ?")
@@ -3071,12 +3073,7 @@ def list_runs(
     sql = (
         "SELECT r.* FROM runs r"
         + where_sql
-        + " ORDER BY CASE WHEN r.status IN "
-        "('completed', 'completed_with_errors', 'correction_exhausted') THEN 0 ELSE 1 END, "
-        "CASE WHEN r.status IN "
-        "('completed', 'completed_with_errors', 'correction_exhausted') "
-        "THEN COALESCE(NULLIF(r.ended_at, ''), r.created_at) ELSE r.created_at END DESC, "
-        "r.created_at DESC, r.id DESC LIMIT ? OFFSET ?"
+        + " ORDER BY r.updated_at DESC, r.created_at DESC, r.id DESC LIMIT ? OFFSET ?"
     )
     params.extend([int(limit), int(offset)])
 
@@ -3116,6 +3113,7 @@ def list_runs(
                 RunSummary(
                     id=run.id,
                     created_at=run.created_at,
+                    updated_at=r["updated_at"],
                     pdf_filename=run.pdf_filename,
                     status=run.status,
                     session_id=run.session_id,
@@ -3160,7 +3158,7 @@ def count_runs(
         params.append(f"%{_escape_like(filename_substring.lower())}%")
     if document_group == "progress":
         clauses.append("r.status IN ('draft', 'running')")
-    elif document_group == "history":
+    elif document_group == "results":
         clauses.append("r.status NOT IN ('draft', 'running')")
     if status:
         clauses.append("r.status = ?")

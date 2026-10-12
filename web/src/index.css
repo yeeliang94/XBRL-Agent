@@ -359,6 +359,31 @@ details[open] > .pwc-disclosure-content {
 .activity-sentence-pulse {
   animation: pulse-subtle 1.8s var(--motion-standard) infinite;
 }
+.preparation-page-strip > span {
+  transition: background-color var(--motion-fast) var(--motion-standard);
+}
+/* Mapping has no page percentage. The wave indicates an active wait while
+   the captured/checked blocks retain their actual completed state. */
+.preparation-page-strip.is-mapping .preparation-map-wave {
+  animation: preparation-map-wave 3.2s ease-in-out infinite;
+}
+@keyframes preparation-map-wave {
+  0%, 45%, 100% { opacity: 0; }
+  15%, 25% { opacity: .8; }
+}
+@media (max-width: 780px) {
+  .preparation-workspace { grid-template-columns: minmax(0, 1fr) !important; }
+  .preparation-activity {
+    border-left: none !important;
+    border-top: 1px solid #DFE3E6;
+    padding-left: 0 !important;
+    padding-top: 16px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .preparation-map-wave { animation: none !important; }
+  .preparation-page-strip > span { transition: none !important; }
+}
 .pwc-dialog-scrim-enter {
   animation: scrim-in var(--motion-fast) var(--motion-standard) both;
 }

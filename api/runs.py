@@ -115,7 +115,7 @@ def _agent_thinking_tokens(agent) -> int:
 async def list_runs_endpoint(
     q: Optional[str] = None,
     status: Optional[str] = None,
-    document_group: Optional[Literal["progress", "history"]] = None,
+    document_group: Optional[Literal["progress", "history", "results"]] = None,
     model: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -125,7 +125,7 @@ async def list_runs_endpoint(
     # query params. FastAPI cannot parse a param named `from` (reserved
     # keyword), so we alias via the date-range middleware on the app.
 ):
-    """List past runs with optional filters. Newest first by default."""
+    """List documents with optional filters, latest update first."""
     from db import repository as repo
     # Clamp once, use for both the DB query AND the response payload.
     # Previously the response echoed the raw request values, so a caller
