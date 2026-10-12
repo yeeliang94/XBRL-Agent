@@ -481,8 +481,7 @@ def _parse_decls(style: str) -> dict[str, str]:
     return parsed
 
 
-_BOLD_WEIGHTS = {"bold": "700", "bolder": "700",
-                 "600": "600", "700": "700", "800": "800", "900": "900"}
+_KEYWORD_WEIGHTS = {"bold": 700, "bolder": 700, "normal": 400, "lighter": 400}
 
 
 def _emphasis_weight(mark: Tag) -> str:
@@ -493,10 +492,12 @@ def _emphasis_weight(mark: Tag) -> str:
     for parent in mark.parents:
         raw = _parse_decls(parent.get("style", "")).get("font-weight", "")
         value = raw.lower().replace("!important", "").strip()
-        if value in _BOLD_WEIGHTS:
-            return _BOLD_WEIGHTS[value]
-        if value and value != "inherit":
-            break
+        if not value or value == "inherit":
+            continue
+        weight = _KEYWORD_WEIGHTS.get(value) or (int(value) if value.isdigit() else 0)
+        # Any numeric weight counts (themes allow 400-800, e.g. 650), so a
+        # bold ancestor between the round values is still inherited.
+        return str(weight) if weight >= 600 else "600"
     return "600"
 
 
