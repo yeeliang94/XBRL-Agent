@@ -20,6 +20,7 @@ from pathlib import Path
 import tempfile
 import threading
 import time
+import unicodedata
 from typing import Any, Callable
 from typing import Annotated, Literal
 
@@ -774,6 +775,18 @@ def _is_systemic_preparation_error(error: BaseException) -> bool:
         error, (PreparationError, UnexpectedModelBehavior))
 
 
+# Typographic look-alikes a model may substitute when quoting manifest text.
+_CELL_TEXT_FOLD = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
+                                 "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-",
+                                 "\u2014": "-", "\u2212": "-"})
+
+
+def _normalise_cell_text(text: str) -> str:
+    """Comparison form of cell text: the evidence check asks whether the model
+    cited a real cell, so spacing and quote/dash look-alikes must not fail it."""
+    return " ".join(unicodedata.normalize("NFKC", text).translate(_CELL_TEXT_FOLD).split())
+
+
 def _candidate_table_cells(html: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     return [
@@ -798,7 +811,8 @@ def _table_verdict_unverified(*, has_tables: bool, verdict: bool | None,
         for relationship in relationships
     ):
         return True
-    actual = {(c["table"], c["row"], c["cell"]): c["text"] for c in candidate_cells}
+    actual = {(c["table"], c["row"], c["cell"]): _normalise_cell_text(c["text"])
+              for c in candidate_cells}
     covered_tables = set()
     for relationship in relationships:
         evidence = relationship.get("candidate_cells") or []
@@ -810,7 +824,7 @@ def _table_verdict_unverified(*, has_tables: bool, verdict: bool | None,
             except ValueError:
                 return True
             key = (cell.table, cell.row, cell.cell)
-            if key not in actual or cell.text != actual[key]:
+            if key not in actual or _normalise_cell_text(cell.text) != actual[key]:
                 return True
             if cell.text.strip():
                 covered_tables.add(cell.table)
