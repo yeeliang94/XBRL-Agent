@@ -17,8 +17,8 @@
   border: 1px solid #CBD1D6; /* grey300 */
   border-radius: 8px; /* radius.md */
   background: #fff;
-  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 14px;
+  font-family: Arial, sans-serif;
+  font-size: var(--nt-cell-font-size, 13px);
   line-height: 1.5;
   color: #000000;
   min-height: 40px;
@@ -34,6 +34,15 @@
   /* Paragraph gap is theme-driven (--nt-para-spacing) so the editor preview
      matches the clipboard paste; 8px fallback = the historic default. */
   margin: 0 0 var(--nt-para-spacing, 8px) 0;
+}
+
+/* Match prepared review/Copy/mTool emphasis; nested marks must not become
+   browser-default "bolder". Explicit source/user inline weights still win. */
+.notes-review-tab :is(.tiptap, .notes-human-content) :is(strong, b) {
+  font-weight: 600;
+}
+.notes-review-tab :is(.tiptap, .notes-human-content) :is(h1, h2, h3, h4, h5, h6) :is(strong, b) {
+  font-weight: max(600, var(--nt-heading-weight, 600));
 }
 
 .notes-review-tab .tiptap p:last-child {
