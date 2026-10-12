@@ -42,6 +42,13 @@ function semanticToolSentence(entry: ToolTimelineEntry): string | null {
       const pages = argsPreview(entry.tool_name, entry.args);
       return finishSentence(pages ? `Reviewing source ${pages}` : "Reviewing source pages");
     }
+    case "zoom_pdf_region": {
+      const args = entry.args;
+      const page = typeof args.page === "number" ? ` page ${args.page}` : "";
+      const region = typeof args.region === "string" && args.region.trim().toLowerCase() !== "full"
+        ? ` (${args.region.trim().toLowerCase().replace(/-/g, " ")})` : "";
+      return finishSentence(`Zooming into source${page || " page"}${region}`);
+    }
     case "read_page_text": {
       const pages = argsPreview(entry.tool_name, entry.args);
       return finishSentence(pages ? `Reading the text of source ${pages}` : "Reading source page text");

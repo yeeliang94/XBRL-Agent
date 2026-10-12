@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 import re
@@ -560,7 +561,7 @@ def formatter_db(tmp_path):
 
 async def _run_formatter_with_fake_agent(
     monkeypatch, formatter_db, fake_agent, *, style_sources=None, sheet=_SHEET,
-    visual_check=None, rows=None,
+    visual_check=None, rows=None, on_event=None, deadline=None,
 ):
     from pathlib import Path
 
@@ -579,8 +580,142 @@ async def _run_formatter_with_fake_agent(
         run_id=run_id, db_path=str(db_path), pdf_path=pdf_path,
         sheet=sheet, model="fake-model",
         output_dir=str(Path(pdf_path).parent),
-        style_sources=style_sources, rows=rows,
+        style_sources=style_sources, rows=rows, on_event=on_event, deadline=deadline,
     )
+
+
+@pytest.mark.asyncio
+async def test_formatter_reports_its_activity_live_and_saves_it(monkeypatch, formatter_db):
+    # Activity shows each formatter sub-agent's own steps: live events carry
+    # the pass's sub_agent_id, and History replays the same events from the
+    # pass's run_agents row.
+    from db import repository as repo
+
+    live = []
+    result = await _run_formatter_with_fake_agent(
+        monkeypatch, formatter_db, _FakeAgent([_GOOD_PATCH]),
+        on_event=lambda event_type, data: live.append((event_type, data)),
+    )
+    assert result["ok"] is True
+    assert {data["sub_agent_id"] for _, data in live} == {_SHEET}
+    phases = [data["phase"] for event_type, data in live if event_type == "status"]
+    assert phases[0] == "started" and phases[-1] == "completed"
+    assert "Checking formatted notes against the source PDF…" in [
+        data["message"] for _, data in live
+    ]
+    db, _, run_id = formatter_db
+    with repo.db_session(db) as conn:
+        (agent_id, variant), = conn.execute(
+            "SELECT id, variant FROM run_agents WHERE run_id=? AND statement_type='NOTES_FORMATTING'",
+            (run_id,),
+        ).fetchall()
+        saved = repo.fetch_events(conn, agent_id)
+    assert variant == _SHEET
+    assert [(e.event_type, e.payload) for e in saved] == live
+
+
+def test_saved_formatter_activity_keeps_when_each_event_happened(monkeypatch, formatter_db):
+    # Events are written when the pass ends; History orders parallel passes
+    # by the time each event happened, not by the save time.
+    import notes.formatter_activity as activity_module
+    from db import repository as repo
+
+    times = iter(["2026-10-11T01:00:00.000001Z", "2026-10-11T01:00:00.000002Z"])
+    monkeypatch.setattr(activity_module, "_event_time", lambda: next(times))
+    activity = activity_module.FormatterActivity(sub_agent_id="x", sheet="x")
+    activity.status("started", "Formatting started")
+    activity.status("completed", "Formatting finished")
+    db, _, run_id = formatter_db
+    with repo.db_session(db) as conn:
+        agent_id = repo.create_run_agent(conn, run_id, "NOTES_FORMATTING", variant="x")
+    activity.save(str(db), agent_id)
+    with repo.db_session(db) as conn:
+        assert [e.ts for e in repo.fetch_events(conn, agent_id)] == [
+            "2026-10-11T01:00:00.000001Z", "2026-10-11T01:00:00.000002Z",
+        ]
+
+
+class _SlowAgent:
+    async def run(self, *_args, **_kwargs):
+        await asyncio.sleep(30)
+
+
+def _final_phase(live):
+    return [data for event_type, data in live if event_type == "status"][-1]
+
+
+@pytest.mark.asyncio
+async def test_formatter_time_limit_is_reported_as_failed(monkeypatch, formatter_db):
+    import time
+    from db import repository as repo
+
+    live = []
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_run_formatter_with_fake_agent(
+            monkeypatch, formatter_db, _SlowAgent(),
+            on_event=lambda event_type, data: live.append((event_type, data)),
+            deadline=time.monotonic() + 0.05,
+        ), timeout=0.05)
+    assert _final_phase(live)["phase"] == "failed"
+    assert _final_phase(live)["message"] == "Formatting reached its time limit."
+    db, _, run_id = formatter_db
+    with repo.db_session(db) as conn:
+        status, error_type = conn.execute(
+            "SELECT status, error_type FROM run_agents WHERE run_id=? AND statement_type='NOTES_FORMATTING'",
+            (run_id,),
+        ).fetchone()
+    assert (status, error_type) == ("failed", "timeout")
+
+
+@pytest.mark.asyncio
+async def test_formatter_stopped_before_its_time_limit_is_cancelled(monkeypatch, formatter_db):
+    import time
+
+    live = []
+    task = asyncio.create_task(_run_formatter_with_fake_agent(
+        monkeypatch, formatter_db, _SlowAgent(),
+        on_event=lambda event_type, data: live.append((event_type, data)),
+        deadline=time.monotonic() + 30,
+    ))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert _final_phase(live)["phase"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_live_formatter_events_reach_the_queue_from_tool_threads():
+    # view_pdf_pages is synchronous, so PydanticAI runs it on a worker thread.
+    from notes.formatter_activity import queue_event_sink
+
+    queue: asyncio.Queue = asyncio.Queue()
+    sink = queue_event_sink(queue, "notes-formatting", "NOTES_FORMATTING")
+    await asyncio.to_thread(sink, "tool_call", {"tool_name": "view_pdf_pages"})
+    event = await asyncio.wait_for(queue.get(), timeout=1)
+    assert event == {"event": "tool_call", "data": {
+        "tool_name": "view_pdf_pages", "agent_id": "notes-formatting",
+        "agent_role": "NOTES_FORMATTING",
+    }}
+
+
+def test_formatter_tool_reports_page_images_as_a_count():
+    from pydantic_ai.messages import BinaryContent
+    from notes.formatter_activity import FormatterActivity
+
+    live = []
+    activity = FormatterActivity(
+        sub_agent_id="notes_format_x_part2", sheet="x",
+        on_event=lambda event_type, data: live.append((event_type, data)),
+    )
+    call_id = activity.tool_started("view_pdf_pages", {"pages": [3]})
+    activity.tool_finished(call_id, "view_pdf_pages", [
+        "=== Page 3 ===", BinaryContent(data=b"png" * 500, media_type="image/png"),
+    ])
+    (_, call), (_, outcome) = live
+    assert call["tool_call_id"] == outcome["tool_call_id"] == call_id
+    assert call["args"] == {"pages": [3]}
+    assert outcome["result_summary"] == "=== Page 3 === [1 page image(s)]"
 
 
 @pytest.mark.asyncio

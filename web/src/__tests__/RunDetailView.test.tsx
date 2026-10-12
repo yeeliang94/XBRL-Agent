@@ -35,6 +35,30 @@ test.each(["failed", "succeeded"])("formatter calls share one workstream and ret
   cleanup();
 });
 
+test("saved formatter sub-agents replay their own activity", () => {
+  window.history.replaceState({}, "", "/");
+  const step = (sub_agent_id: string, timestamp: number, phase: string, message: string) =>
+    ({ event: "status", timestamp, data: { sub_agent_id, phase, message } }) as SSEEvent;
+  render(<RunDetailView detail={makeDetail({ agents: [
+    makeAgent({ id: 11, statement_type: "NOTES_FORMATTING", status: "completed", variant: "Notes-Issuedcapital",
+      events: [step("Notes-Issuedcapital", 2, "started", "Formatting started"),
+        step("Notes-Issuedcapital", 4, "completed", "Formatting finished")] }),
+    makeAgent({ id: 12, statement_type: "NOTES_FORMATTING", status: "failed", variant: "notes_format_Notes-Listofnotes_part2",
+      events: [step("notes_format_Notes-Listofnotes_part2", 3, "started", "Formatting started"),
+        step("notes_format_Notes-Listofnotes_part2", 5, "failed", "Formatter timed out after 600s.")] }),
+  ], run_events: [
+    { event: "pipeline_stage", data: { stage: "formatting_notes", status: "failed", message: "Appearance checking finished." }, timestamp: 6 },
+  ] })} onDelete={() => {}} onDownload={() => {}} />);
+  clickRunTab(/^activity$/i);
+  fireEvent.click(within(screen.getByRole("tablist", { name: "Run workstreams" })).getByRole("tab", { name: /Notes formatting/ }));
+  const subTabs = within(screen.getByRole("tablist", { name: "Formatting sub-agents" }));
+  const updates = () => within(screen.getByRole("list", { name: "Activity updates" }));
+  expect(updates().getByText("Issued Capital: Formatting finished.")).toBeVisible();
+  fireEvent.click(subTabs.getByRole("tab", { name: "List of Notes · part 2 · Failed" }));
+  expect(updates().getByText("Formatter timed out after 600s.")).toBeVisible();
+  expect(updates().queryByText(/Formatting finished/)).toBeNull();
+});
+
 test.each([false, true])("formatting retries replace older failures with current working and success states (stage: %s)", (hasStage) => {
   window.history.replaceState({}, "", "/");
   const failure = makeAgent({ id: 11, statement_type: "NOTES_FORMATTING", status: "failed",
