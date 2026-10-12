@@ -368,3 +368,10 @@ test("Figures distinguish editable inputs from plain read-only values", () => {
   const css = readReference("../index.css");
   expect(css).not.toContain('.concept-tree-row[aria-selected="false"] input:not(:focus)');
 });
+
+test("Stacked worksheet navigation never covers the figures beneath it", () => {
+  // JSDOM does not apply media queries; pin the narrow-width rule itself.
+  const css = readReference("../index.css");
+  const narrow = css.slice(css.indexOf(".review-workspace > .review-template-rail {"));
+  expect(narrow.slice(0, narrow.indexOf("}"))).toContain("position: static !important");
+});
