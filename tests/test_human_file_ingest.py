@@ -605,6 +605,62 @@ def test_category_total_column_is_the_field_without_a_category(tmp_path, prior_t
             if f["concept_uuid"] == uuid and f["value"] is not None} == expected
 
 
+@pytest.mark.parametrize("filename,statement,variant", [
+    ("01-SOFP-CuNonCu.xlsx", "SOFP", "CuNonCu"),
+    ("02-SOFP-OrderOfLiquidity.xlsx", "SOFP", "OrderOfLiquidity"),
+    ("03-SOPL-Function.xlsx", "SOPL", "Function"),
+    ("04-SOPL-Nature.xlsx", "SOPL", "Nature"),
+    ("05-SOCI-BeforeTax.xlsx", "SOCI", "BeforeTax"),
+    ("06-SOCI-NetOfTax.xlsx", "SOCI", "NetOfTax"),
+    ("07-SOCF-Indirect.xlsx", "SOCF", "Indirect"),
+    ("08-SOCF-Direct.xlsx", "SOCF", "Direct"),
+    ("09-SOCIE.xlsx", "SOCIE", "Default"),
+])
+def test_empty_input_sections_show_zero_human_totals(tmp_path, filename, statement, variant):
+    from mtool.offline_fill import fill_workbook
+    from tests._human_file_fixture import TEMPLATES
+
+    db = tmp_path / "audit.db"
+    init_db(db)
+    tid = import_template_file(db, tmp_path, filename)
+    run = add_run(db, {"filing_standard": "mfrs", "filing_level": "company",
+                       "denomination": "units", "statements": [statement],
+                       "variants": {statement: variant}})
+    with sqlite3.connect(db) as conn:
+        sheet, row, col = conn.execute(
+            "SELECT t.target_sheet,t.target_row,t.target_col FROM concept_targets t "
+            "JOIN concept_nodes n USING(concept_uuid) WHERE n.template_id=? "
+            "AND n.kind IN ('LEAF','MATRIX_CELL') AND NOT EXISTS "
+            "(SELECT 1 FROM concept_edges e WHERE e.parent_uuid=n.concept_uuid) "
+            "AND t.period='CY' ORDER BY t.target_row LIMIT 1", (tid,)).fetchone()
+    path = tmp_path / "human.xlsx"
+    assert fill_workbook(str(TEMPLATES / filename), {"writes": [
+        {"sheet": sheet, "cell": f"{col}{row}", "value": 123}]},
+        str(path), strict=True)["status"] == "ok"
+    with sqlite3.connect(db) as conn:
+        ingest_human_file(conn, run, path, filename=path.name, unit="units", uploaded_by=None)
+        # These formula totals have addressable input children, all left blank.
+        empty_totals = conn.execute(
+            "SELECT h.concept_uuid,h.period,h.entity_scope,h.dimension_key "
+            "FROM human_file_facts h WHERE h.run_id=? AND h.calculated=1 "
+            "AND EXISTS (SELECT 1 FROM concept_edges e WHERE e.parent_uuid=h.concept_uuid) "
+            "AND NOT EXISTS (SELECT 1 FROM concept_edges e "
+            "LEFT JOIN human_file_facts c ON c.run_id=h.run_id AND c.concept_uuid=e.child_uuid "
+            "AND c.period=h.period AND c.entity_scope=h.entity_scope "
+            "AND c.dimension_key=h.dimension_key WHERE e.parent_uuid=h.concept_uuid "
+            "AND (c.concept_uuid IS NULL OR c.calculated=1 OR c.value IS NOT NULL))",
+            (run,)).fetchall()
+        comparison = load_comparison(conn, run)
+    assert empty_totals
+    slots = {(s["concept_uuid"], s["period"], s["entity_scope"], s["dimension_key"]): s
+             for s in comparison["figures"]["slots"]}
+    for key in empty_totals:
+        assert key in slots, "The human total must remain visible when its inputs are blank"
+        assert slots[key]["human_value"] == 0
+        assert slots[key]["calculated"]
+    assert comparison["figures"]["totals"]["Company"]["human_filled"] == 1
+
+
 def test_repeated_total_without_its_own_mtool_cell_is_derived_from_human_inputs(tmp_path):
     """Run 185: SOCI shows "Total comprehensive income" twice. mTool gives the
     element one cell, so the attributable copy (row 42) had no human slot and

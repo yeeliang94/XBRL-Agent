@@ -503,32 +503,48 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(screen.getByRole("tab", { name: /notes formatting/i })).toHaveTextContent("Failed");
   });
 
-  test("formatting shows each sub-agent's own activity in one tab", () => {
+  test("formatting reads like other workstreams: one chip per sheet, parts and the queue", () => {
     const formatterEvent = (event: "status" | "tool_call" | "tool_result", timestamp: number, data: Record<string, unknown>) => ({
       type: "EVENT" as const,
       payload: { event, timestamp, data: { agent_id: "notes-formatting", agent_role: "NOTES_FORMATTING", ...data } } as never,
     });
     let state: AppState = { ...initialState, sessionId: "test-session", filename: "test.pdf", isRunning: true,
       pipelineStage: "formatting_notes", activeTab: "notes-formatting", notesInRun: ["CORP_INFO"],
-      events: [{ event: "pipeline_stage", timestamp: 1, data: { stage: "formatting_notes", started_at: 1, completed: 0, total: 2 } }] };
+      events: [{ event: "pipeline_stage", timestamp: 1, data: { stage: "formatting_notes", started_at: 1, completed: 0, total: 3,
+        message: "Checking formatted notes against the source PDF…" } }] };
     for (const action of [
       formatterEvent("status", 2, { sub_agent_id: "Notes-Issuedcapital", phase: "started", message: "Formatting started" }),
       formatterEvent("status", 3, { sub_agent_id: "notes_format_Notes-Listofnotes_part1", phase: "started", message: "Formatting started" }),
+      formatterEvent("status", 3.1, { sub_agent_id: "notes_format_Notes-Listofnotes_part2", phase: "started", message: "Formatting started" }),
+      formatterEvent("status", 3.2, { sub_agent_id: "notes_format_Notes-Listofnotes_part2", phase: "completed", message: "Formatting finished" }),
+      formatterEvent("status", 3.3, { sub_agent_id: "Notes-RelatedPartytran", phase: "queued", message: "Waiting for a free slot." }),
       formatterEvent("status", 4, { sub_agent_id: "notes_format_Notes-Listofnotes_part1", phase: "working", message: "Checking formatted notes against the source PDF…" }),
       formatterEvent("tool_call", 4.5, { sub_agent_id: "Notes-Issuedcapital", tool_name: "zoom_pdf_region",
         tool_call_id: "Notes-Issuedcapital:tool1", args: { page: 12, region: "bottom-half" } }),
-      formatterEvent("status", 5, { sub_agent_id: "Notes-Issuedcapital", phase: "failed", message: "Visual reviewer did not complete a valid assessment." }),
+      formatterEvent("status", 5, { sub_agent_id: "Notes-Issuedcapital", phase: "failed",
+        message: "1 note still looks different from the source PDF. Retry it from the Notes tab.",
+        detail: "Table 0: row 2 is bold in the prepared output" }),
     ]) state = appReducer(state, action);
     render(<ExtractPage {...makeProps({ state })} />);
-    expect(screen.getAllByRole("tab", { name: /notes formatting/i })).toHaveLength(1);
+    const workstream = screen.getByRole("tab", { name: /notes formatting/i });
+    expect(workstream).toHaveTextContent("2 of 4 parts done");
+    expect(workstream).toHaveTextContent("1 running");
     const panel = within(screen.getByRole("tabpanel", { name: "Notes formatting activity" }));
-    const subTabs = within(panel.getByRole("tablist", { name: "Formatting sub-agents" }));
-    expect(subTabs.getByRole("tab", { name: "Issued Capital · Failed" })).toBeVisible();
-    expect(subTabs.getByRole("tab", { name: "List of Notes · part 1" })).toBeVisible();
+    // The stage line that echoed whichever sheet reported last is gone.
+    expect(panel.queryByText("Checking formatted notes against the source PDF…")).toBeNull();
+    const chips = within(panel.getByRole("tablist", { name: "Formatting by sheet" }));
+    expect(chips.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "All", "Issued Capital · Failed", "List of Notes · 1 of 2", "Related Party Transactions · Waiting",
+    ]);
     const updates = () => within(panel.getByRole("list", { name: "Activity updates" }));
     expect(updates().getByText("List of Notes · part 1: Checking formatted notes against the source PDF…")).toBeVisible();
-    fireEvent.click(subTabs.getByRole("tab", { name: "Issued Capital · Failed" }));
-    expect(updates().getByText("Visual reviewer did not complete a valid assessment.")).toBeVisible();
+    expect(updates().queryByText("Zooming into source page 12 (bottom half).")).toBeNull();
+    // A sheet's failure is reported while other sheets are still working.
+    expect(panel.queryByTestId("formatting-failure")).toBeNull();
+    fireEvent.click(chips.getByRole("tab", { name: "Issued Capital · Failed" }));
+    expect(panel.getByTestId("formatting-failure")).toHaveTextContent(
+      "What went wrong1 note still looks different from the source PDF. Retry it from the Notes tab.");
+    expect(panel.queryByText(/row 2 is bold/)).toBeNull();
     expect(updates().getByText("Zooming into source page 12 (bottom half).")).toBeVisible();
     expect(updates().queryByText(/Checking formatted notes/)).toBeNull();
   });

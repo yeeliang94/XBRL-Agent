@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AgentTabStatus, ReasoningBlock, SSEEvent, ToolTimelineEntry } from "../lib/types";
 import { buildActivitySentences } from "../lib/buildActivitySentences";
 import { pwc } from "../lib/theme";
@@ -10,6 +10,7 @@ interface Props {
   reasoningBlocks: ReasoningBlock[];
   isRunning: boolean;
   status?: AgentTabStatus;
+  /** Identifies the stream shown; a new stream opens at its latest update. */
   streamKey: string;
   recorded?: boolean;
   /** Tool calls, model and usage for this workstream. When supplied, one
@@ -67,58 +68,18 @@ export function ActivityStream({
   onTechnicalChange,
 }: Props) {
   const [showTechnical, setShowTechnical] = useState(false);
+  // Newest first: the latest update sits at the top, so following live
+  // work never needs scrolling, and opening Activity never moves the page.
   const items = useMemo(
-    () => buildActivitySentences(events, toolTimeline, status).reverse(),
+    () => buildActivitySentences(events, toolTimeline, status),
     [events, toolTimeline, reasoningBlocks, status],
   );
-  const scrollRef = useRef<HTMLOListElement>(null);
-  // Page-level follow: true only while the operator sits at the page bottom,
-  // so opening Activity never jumps the page.
-  const pageFollowRef = useRef(false);
-  const followLatestRef = useRef(true);
-  const latest = items[items.length - 1] ?? null;
-  const followKey = `${latest?.id ?? "empty"}:${latest?.text.length ?? 0}`;
-  const previousUpdateRef = useRef({ streamKey, followKey });
-
-  const announcement = latest?.text ?? "";
-
+  const announcement = items[0]?.text ?? "";
+  // Switching to another stream starts at its latest update.
+  const feedRef = useRef<HTMLOListElement>(null);
   useEffect(() => {
-    const streamChanged = previousUpdateRef.current.streamKey !== streamKey;
-    const hasNewUpdate = !streamChanged && previousUpdateRef.current.followKey !== followKey;
-    previousUpdateRef.current = { streamKey, followKey };
-    if (streamChanged) {
-      followLatestRef.current = true;
-    }
-    const node = scrollRef.current;
-    if (!node) return;
-    if (node.scrollHeight > node.clientHeight) {
-      // Bounded by a narrow layout: follow inside the list.
-      if (followLatestRef.current) node.scrollTop = node.scrollHeight;
-      return;
-    }
-    // The list grows with the page. Follow new updates only while the
-    // operator is already at the bottom of the page.
-    if (isRunning && pageFollowRef.current && hasNewUpdate) {
-      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
-    }
-  }, [followKey, streamKey, isRunning]);
-
-  useEffect(() => {
-    const onScroll = () => {
-      const root = document.documentElement;
-      pageFollowRef.current = root.scrollHeight - window.scrollY - window.innerHeight <= 48;
-    };
-    onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
-
-  const handleScroll = useCallback(() => {
-    const node = scrollRef.current;
-    if (!node) return;
-    const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
-    followLatestRef.current = distanceFromBottom <= 32;
-  }, []);
+    if (feedRef.current) feedRef.current.scrollTop = 0;
+  }, [streamKey]);
 
   return (
     <section aria-label={recorded ? "Recorded activity" : "Live activity"} style={styles.root}>
@@ -141,11 +102,10 @@ export function ActivityStream({
         )}
       </div>
       {showTechnical && technical != null ? <div data-testid="activity-technical">{technical}</div> : <ol
-        ref={scrollRef}
+        ref={feedRef}
         className="agent-scroll"
         aria-label="Activity updates"
         tabIndex={0}
-        onScroll={handleScroll}
         style={styles.feed}
       >
         {items.length === 0 ? (
@@ -157,7 +117,7 @@ export function ActivityStream({
               text={item.text}
               active={item.active}
               isRunning={isRunning}
-              isLatest={index === items.length - 1}
+              isLatest={index === 0}
             />
         ))}
       </ol>}

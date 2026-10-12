@@ -44,7 +44,7 @@ def candidate_sheets(
 # dozen tables) otherwise waits on one request that reads every source page and
 # writes every patch; a failed repair then repeats all of it.
 FORMAT_ROWS_PER_PART = 4
-FORMAT_MAX_CONCURRENT_REQUESTS = 4
+FORMAT_MAX_CONCURRENT_REQUESTS = 10
 
 
 def _precise_now() -> str:
@@ -207,7 +207,26 @@ async def run_pdf_auto_format(
             )
 
     async def _bounded(**kwargs):
-        async with model_slots:
+        def status(phase: str, message: str) -> None:
+            if on_event is None:
+                return
+            try:
+                on_event("status", {
+                    "phase": phase, "message": message,
+                    "sub_agent_id": kwargs.get("trace_label") or kwargs["sheet"],
+                    "sheet": kwargs["sheet"],
+                })
+            except Exception:  # noqa: BLE001 — display only
+                logger.warning("formatter slot event failed", exc_info=True)
+
+        status("queued", "Waiting for a free slot.")
+        try:
+            await model_slots.acquire()
+        except asyncio.CancelledError:
+            # No formatter has started to report this part's terminal status.
+            status("cancelled", "Formatting stopped")
+            raise
+        try:
             if on_phase is not None:
                 kwargs["on_phase"] = lambda message: on_phase(kwargs["sheet"], message)
             if on_event is not None:
@@ -220,6 +239,8 @@ async def run_pdf_auto_format(
                 )
             coro = formatter(model=model_factory(), **kwargs)
             return await coro
+        finally:
+            model_slots.release()
 
     async def one(sheet: str) -> tuple[str, dict[str, Any]]:
         previous = None

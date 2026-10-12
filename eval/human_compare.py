@@ -194,8 +194,16 @@ def load_comparison(conn: sqlite3.Connection, run_id: int) -> dict[str, Any] | N
         for period, scope in scopes_by_template.get(template_id, ())
         if (uuid, period, scope, "") not in human
     ]
+    # Excel treats an addressable empty input as zero in a formula. Keep the
+    # input itself blank for scoring, but include its zero in displayed totals.
+    # Missing addresses and totals without formula edges still stay unresolved.
+    operands = {
+        k: h["value"] if h["value"] is not None else 0.0
+        for k, h in human.items()
+        if h["value"] is not None or not h["calculated"]
+    }
     derived = derive_totals(
-        {k: h["value"] for k, h in human.items() if h["value"] is not None},
+        operands,
         edges, [k for k, h in human.items() if h["calculated"]] + unaddressed)
     for key, total in derived.items():
         human.setdefault(key, {"value": None, "calculated": True})["value"] = total

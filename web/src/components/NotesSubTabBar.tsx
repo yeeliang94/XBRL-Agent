@@ -1,6 +1,8 @@
 import React from "react";
 import { pwc } from "./../lib/theme";
 import type { AgentTabStatus } from "./../lib/types";
+import { STATUS_SYMBOLS, type StatusSymbol } from "./../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 
 // Nested sub-tab bar for the Notes-12 content pane. Sheet 12 fans out to
 // 5 parallel sub-agents; this bar lets operators filter the timeline to
@@ -25,13 +27,25 @@ export interface NotesSubTabBarProps {
   activeSubId: string | null;
   onSelect: (subId: string | null) => void;
   ariaLabel?: string;
+  /** Wrap chips onto further lines instead of scrolling sideways, and show
+   *  each chip's status icon (notes formatter: one chip per sheet). */
+  showStatus?: boolean;
 }
+
+const CHIP_STATUS_SYMBOL: Partial<Record<AgentTabStatus, StatusSymbol>> = {
+  running: STATUS_SYMBOLS.inProgress,
+  complete: STATUS_SYMBOLS.success,
+  failed: STATUS_SYMBOLS.failure,
+  cancelled: STATUS_SYMBOLS.inactive,
+  pending: STATUS_SYMBOLS.inactive,
+};
 
 export function NotesSubTabBar({
   subAgents,
   activeSubId,
   onSelect,
   ariaLabel = "Sheet-12 sub-agents",
+  showStatus = false,
 }: NotesSubTabBarProps) {
   // Don't render an orphan "All" chip when there are no sub-agents yet —
   // the parent relies on `subAgents.length > 0` to gate this component,
@@ -40,7 +54,7 @@ export function NotesSubTabBar({
   if (subAgents.length === 0) return null;
 
   return (
-    <div role="tablist" aria-label={ariaLabel} style={styles.bar}>
+    <div role="tablist" aria-label={ariaLabel} style={showStatus ? styles.wrappingBar : styles.bar}>
       <button
         role="tab"
         type="button"
@@ -73,9 +87,13 @@ export function NotesSubTabBar({
             className="notes-subtab"
             style={chipStyle(active)}
           >
+            {showStatus && s.status && CHIP_STATUS_SYMBOL[s.status] && (
+              <StatusIcon symbol={CHIP_STATUS_SYMBOL[s.status]!} size={14} style={styles.chipIcon} />
+            )}
             {s.label ?? `Sub ${labelNum}${s.notes ? ` · ${noteRange}` : ""}`}
             {/* Only the exception is marked; running and finished chips stay plain. */}
             {s.status === "failed" && <span style={styles.failed}> · Failed</span>}
+            {showStatus && s.status === "pending" && " · Waiting"}
           </button>
         );
       })}
@@ -111,5 +129,15 @@ const styles = {
     background: pwc.grey50,
     overflowX: "auto" as const,
   } as React.CSSProperties,
+  wrappingBar: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 6,
+    alignItems: "center",
+    padding: `${pwc.space.xs}px ${pwc.space.md}px`,
+    borderBottom: `1px solid ${pwc.grey200}`,
+    background: pwc.grey50,
+  } as React.CSSProperties,
+  chipIcon: { marginRight: 4, verticalAlign: "-2px" } as React.CSSProperties,
   failed: { color: pwc.error } as React.CSSProperties,
 };

@@ -188,7 +188,8 @@ describe("ActiveTabPanel — Sheet-12 sub-tabs", () => {
     // Now only sub0's tool row is visible.
     expect(screen.getAllByText(/locating the contents page/i).length).toBeGreaterThan(0);
     expect(screen.queryAllByText(/reviewing source pages/i)).toHaveLength(0);
-    expect(feed.scrollTop).toBe(400);
+    // The sub-agent's stream opens at its latest update, which is at the top.
+    expect(feed.scrollTop).toBe(0);
   });
 
   test("default activeSubId is null (All tab selected)", () => {
