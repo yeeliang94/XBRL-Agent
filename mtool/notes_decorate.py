@@ -481,6 +481,25 @@ def _parse_decls(style: str) -> dict[str, str]:
     return parsed
 
 
+_BOLD_WEIGHTS = {"bold": "700", "bolder": "700",
+                 "600": "600", "700": "700", "800": "800", "900": "900"}
+
+
+def _emphasis_weight(mark: Tag) -> str:
+    """Weight for an un-styled <strong>/<b>. Browser-default "bolder" can
+    compound emphasis inside headings and table headers, so use our heading
+    semibold — unless the nearest ancestor that sets a weight is already bold,
+    in which case inherit it rather than render lighter than its context."""
+    for parent in mark.parents:
+        raw = _parse_decls(parent.get("style", "")).get("font-weight", "")
+        value = raw.lower().replace("!important", "").strip()
+        if value in _BOLD_WEIGHTS:
+            return _BOLD_WEIGHTS[value]
+        if value and value != "inherit":
+            break
+    return "600"
+
+
 def _whiteout_hidden_borders(el: Tag) -> None:
     """Rewrite any border explicitly set to hidden/none — in ANY of the forms a
     browser collapses per-side borders into — to an explicit white border so a
@@ -1080,6 +1099,9 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
                          f"margin-bottom: 6px; font-weight: {weight};")
         else:
             _merge_style(h, heading_style)
+    for mark in soup.find_all(("strong", "b")):
+        if "font-weight" not in _parse_decls(mark.get("style", "")):
+            _merge_style(mark, f"font-weight: {_emphasis_weight(mark)};")
     list_marker_css = _list_marker_css(style)
     for lst in soup.find_all(("ul", "ol", "li")):
         # The marker glyph applies to <ul> only — <ol> keeps its numbering and
