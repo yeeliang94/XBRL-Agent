@@ -416,3 +416,57 @@ async def test_single_agent_stops_at_save_result_without_a_closing_turn(
         str(filled) if write_outcome == "written" else "x"
     ), "a recorded clash leaves the blank template for the reviewer"
     assert (tmp_path / "NOTES_CORP_INFO_conversation_trace.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_issued_capital_timeout_salvage_without_share_class_receipt_is_not_clean(
+    tmp_path, monkeypatch,
+):
+    """Review finding: a post-write stall returned a clean Issued Capital
+    outcome with no share-class receipt. The workbook is kept, flagged."""
+    from unittest.mock import patch
+    from notes import coordinator as coord
+    from notes.agent import NotesDeps, SHARE_CLASS_UNCONFIRMED
+    from notes_types import NotesTemplateType
+    from token_tracker import TokenReport
+
+    filled = tmp_path / "NOTES_ISSUED_CAPITAL_filled.xlsx"
+    filled.write_bytes(b"fake-xlsx")
+    deps = NotesDeps(
+        pdf_path="x.pdf", template_path="t.xlsx", model=None, output_dir=str(tmp_path),
+        token_report=TokenReport(model="test"), template_type=NotesTemplateType.ISSUED_CAPITAL,
+        sheet_name="Notes-Issuedcapital", filing_level="company",
+    )
+    deps.wrote_once, deps.filled_path = True, str(filled)
+    deps.numeric_cells = [{"sheet": "Notes-Issuedcapital", "row": 11, "col": 2, "value": 1,
+                           "dimensions": {}}]
+
+    class _FakeAgentRun:
+        ctx = None
+        def __aiter__(self): return _SlowIterable()
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        @property
+        def usage(self):
+            class U:
+                total_tokens = input_tokens = output_tokens = 0
+                details: dict = {}
+            return U()
+
+    class _FakeAgent:
+        def iter(self, *a, **kw): return _FakeAgentRun()
+
+    monkeypatch.setattr(coord, "NOTES_TURN_TIMEOUT", 0.05)
+
+    async def noop_emit(*a, **kw): pass
+
+    with patch.object(coord, "create_notes_agent", return_value=(_FakeAgent(), deps)):
+        outcome = await asyncio.wait_for(coord._invoke_single_notes_agent_once(
+            template_type=NotesTemplateType.ISSUED_CAPITAL, pdf_path="/tmp/fake.pdf",
+            inventory=[], filing_level="company", model="test", output_dir=str(tmp_path),
+            event_queue=None, agent_id="notes:ISSUED_CAPITAL", emit=noop_emit,
+            page_hints=None, page_offset=0,
+        ), timeout=1.0)
+
+    assert outcome.filled_path == str(filled)
+    assert SHARE_CLASS_UNCONFIRMED in outcome.write_errors

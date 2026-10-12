@@ -41,6 +41,17 @@ class TableAssessment(BaseModel):
     status: Literal["pass", "needs_correction", "unresolved"]
     source_pages: list[int]
     reason: str = Field(min_length=1)
+    observed_text: str = Field(
+        default="",
+        description="For any finding that is not a pass: an exact row label or cell "
+                    "text copied from THIS table's canonical candidate, naming the row "
+                    "the finding is about.",
+    )
+    content_defect: str = Field(
+        default="",
+        description="Added or missing words or figures in this table, quoted, when "
+                    "present alongside another issue; empty otherwise.",
+    )
     issue_kind: Literal["style", "structure", "source_content", "source_provenance",
                         "source_emphasis"] = Field(
         default="style",
@@ -78,6 +89,45 @@ def _layout_text(note: dict | None) -> str:
         return "unavailable"
 
 
+def _plain(text: str) -> str:
+    return " ".join(text.split()).casefold()
+
+
+def _table_packets(canonical: str, prepared: str) -> str | None:
+    """Each table on its own: context, header line, candidate and prepared HTML.
+
+    Adjacent current/comparative tables look alike in one blob (runs 183-185).
+    Returns None when prepared output cannot be paired table by table.
+    """
+    source = BeautifulSoup(canonical, "html.parser")
+    tables = source.find_all("table")
+    prepared_tables = BeautifulSoup(prepared, "html.parser").find_all("table")
+    if not tables or len(tables) != len(prepared_tables):
+        return None
+    outside = BeautifulSoup(canonical, "html.parser")
+    for index, table in enumerate(outside.find_all("table")):
+        table.replace_with(outside.new_string(f" [TABLE {index}] "))
+    parts = ["NOTE TEXT OUTSIDE TABLES: " + " ".join(outside.get_text(" ", strip=True).split())[:1500]]
+    for index, (table, output) in enumerate(zip(tables, prepared_tables)):
+        context = next((
+            " ".join(block.get_text(" ", strip=True).split())
+            for block in table.find_all_previous(["p", "h1", "h2", "h3", "h4", "h5", "h6", "div"])
+            if not block.find_parent("table") and not block.find("table")
+            and block.get_text(strip=True)
+        ), "")
+        first_row = table.find("tr")
+        header = " | ".join(
+            " ".join(cell.get_text(" ", strip=True).split())
+            for cell in (first_row.find_all(["td", "th"]) if first_row else [])
+        )
+        parts.append(
+            f"TABLE {index} — preceding text: {context[:200] or 'none'}; first row: {header or 'empty'}"
+            f"\nTABLE {index} CANONICAL CANDIDATE HTML:\n{table}"
+            f"\nTABLE {index} PREPARED OUTPUT HTML:\n{output}"
+        )
+    return "\n".join(parts)
+
+
 def structure_findings(outcome: dict) -> dict[int, list[tuple[int, str]]]:
     """Current structural findings per failed note row: (table, reason)."""
     reviews = outcome.get("visual_reviews") or [outcome.get("visual_review") or {}]
@@ -88,7 +138,8 @@ def structure_findings(outcome: dict) -> dict[int, list[tuple[int, str]]]:
             current[(item["row"], item["table"])] = item
     found: dict[int, list[tuple[int, str]]] = {}
     for (row, table), item in sorted(current.items()):
-        if row in failed and item.get("issue_kind") == "structure" and item.get("status") != "pass":
+        if (row in failed and item.get("issue_kind") == "structure" and item.get("status") != "pass"
+                and item.get("recopy_eligible", True)):
             found.setdefault(row, []).append((table, item.get("reason", "")))
     return found
 
@@ -195,8 +246,9 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
                 + rule_map_text(rows[row])
                 + "\nFORMATTER LAYOUT (its description of the source; context only, "
                 "judge the actual HTML): " + _layout_text((layouts or {}).get(row))
-                + "\nCANONICAL CANDIDATE HTML:\n" + rows[row]
-                + "\nPREPARED OUTPUT HTML:\n" + prepared
+                + "\n" + (_table_packets(rows[row], prepared)
+                          or "CANONICAL CANDIDATE HTML:\n" + rows[row]
+                          + "\nPREPARED OUTPUT HTML:\n" + prepared)
             )
         except ValueError as exc:
             errors[row] = str(exc)
@@ -254,6 +306,12 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
             errors[row] = "Visual reviewer did not complete a valid assessment."
         return errors, {"tables": [], "evidence": evidence}
     seen = set()
+    ineligible: set[tuple[int, int]] = set()
+    table_text = {
+        (row, index): _plain(table.get_text(" ", strip=True))
+        for row in {row for row, _ in reviewable}
+        for index, table in enumerate(BeautifulSoup(rows[row], "html.parser").find_all("table"))
+    }
     for assessment in decision.tables:
         key = (assessment.row, assessment.table)
         if key not in reviewable or key in seen:
@@ -269,6 +327,28 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
             issue = "Visual assessment cited unseen source pages."
         elif not set(assessment.source_pages).issubset(by_row[assessment.row].source_pages):
             issue = "Visual assessment cited pages outside this note's source pages."
+        if issue:
+            # Rejected evidence proves nothing about the table, whatever it
+            # quotes: it stays unresolved and never triggers a re-copy.
+            assessment.status = "unresolved"
+            ineligible.add(key)
+        elif assessment.content_defect.strip():
+            # Wrong words or figures cannot be repaired by a re-copy that must
+            # keep every word, nor by formatting. Report them once, together.
+            also = f" Also reported: {assessment.reason}" if assessment.issue_kind != "source_content" else ""
+            assessment.issue_kind = "source_content"
+            assessment.status = "unresolved"
+            issue = ("Source correction or human review required: "
+                     + assessment.content_defect.strip() + "." + also)
+        elif (assessment.issue_kind == "structure"
+              and (not assessment.observed_text.strip()
+                   or _plain(assessment.observed_text) not in table_text.get(key, ""))):
+            # A structure claim that names no text in this table is not
+            # evidence about this table; it must not trigger a re-copy.
+            assessment.status = "unresolved"
+            ineligible.add(key)
+            issue = ("Checker structure finding did not quote text from this table, so it "
+                     "was not acted on: " + assessment.reason)
         elif assessment.issue_kind in SOURCE_DEFECT_KINDS:
             # Neither a style patch nor a table re-copy repairs these.
             assessment.status = "unresolved"
@@ -284,7 +364,11 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
             _add_error(errors, assessment.row, finding)
     for row, _ in reviewable - seen:
         _add_error(errors, row, "Visual assessment omitted a table.")
-    return errors, {**decision.model_dump(), "evidence": evidence}
+    dumped = decision.model_dump()
+    for item in dumped["tables"]:
+        if (item["row"], item["table"]) in ineligible:
+            item["recopy_eligible"] = False
+    return errors, {**dumped, "evidence": evidence}
 
 
 async def review_and_correct_rows(

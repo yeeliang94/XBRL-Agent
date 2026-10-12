@@ -61,6 +61,26 @@ def _source_cell(conn, run_id: int, generation, blocks, sheet: str, row: int):
     return cell, rendered.block_ids, wrap
 
 
+def _continued_refusal(blocks, block) -> RecopyRefused:
+    """Name the pages and any recorded preparation doubt, so the row says
+    exactly which source correction a person must make."""
+    group = [b for b in blocks
+             if b.block_id == block.block_id
+             or (block.table_group_id and b.table_group_id == block.table_group_id)
+             or b.continues_block_id == block.block_id
+             or block.continues_block_id == b.block_id]
+    pages = sorted({b.page for b in group if b.page is not None})
+    doubts = sorted({str((b.locator or {}).get("uncertainty_reason") or "").strip()
+                     for b in group} - {""})
+    where = (f"pages {pages[0]}-{pages[-1]}" if len(pages) > 1
+             else f"page {pages[0]}" if pages else "several pages")
+    message = (f"needs source correction: the table continues across {where}, "
+               "and continued tables are not re-copied automatically")
+    if doubts:
+        message += "; preparation already recorded: " + "; ".join(doubts)
+    return RecopyRefused(message)
+
+
 def _table_block(blocks, ordered_ids: list[str], html: str, table: int):
     by_id = {b.block_id: b for b in blocks}
     tables = [by_id[bid] for bid in ordered_ids if by_id[bid].block_kind == "table"]
@@ -71,7 +91,7 @@ def _table_block(blocks, ordered_ids: list[str], html: str, table: int):
     block = tables[table]
     continued = any(b.continues_block_id == block.block_id for b in blocks)
     if block.table_group_id or block.continues_block_id or continued:
-        raise RecopyRefused("tables continued across pages are not re-copied automatically")
+        raise _continued_refusal(blocks, block)
     return block
 
 
@@ -79,7 +99,7 @@ def _block_homes(conn, run_id: int, generation, blocks, block, sheet: str) -> di
     """Rows built from this block, with their content revisions, or a refusal."""
     continued = any(b.continues_block_id == block.block_id for b in blocks)
     if block.table_group_id or block.continues_block_id or continued:
-        raise RecopyRefused("tables continued across pages are not re-copied automatically")
+        raise _continued_refusal(blocks, block)
     homes = {(p["sheet"], p["row"]) for p in
              srepo.placements_for_block(conn, generation["id"], block.block_id)}
     if any(home_sheet != sheet for home_sheet, _ in homes):

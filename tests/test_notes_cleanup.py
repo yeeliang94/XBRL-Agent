@@ -205,3 +205,20 @@ def test_viewed_page_unrelated_to_deletion_does_not_authorize_content_loss():
     patch = Patch(inspected_cells=['x'], removals=[op(text='The Company has no contingent liabilities.', page=8)])
     with pytest.raises(ValueError, match='Source page does not support this block'):
         apply_patch(cells, patch, {8})
+
+
+def test_rejection_names_every_unsafe_removal_with_its_context():
+    """Run 185: a generic first error made the agent regenerate the whole sheet."""
+    html = '<h1>COMPANY SDN. BHD.</h1><p>Disclosure.</p><h1>NOTES TO THE FINANCIAL STATEMENTS</h1>'
+    cells = {'x': {'html': html, 'source_pages': '[1]'}}
+    patch = Patch(inspected_cells=['x'], removals=[
+        op(block=0, page=3),
+        op(block=2, text='NOTES TO THE FINANCIAL STATEMENTS', retained=0),
+    ])
+    with pytest.raises(ValueError) as caught:
+        apply_patch(cells, patch, {1})
+    message = str(caught.value)
+    assert 'removal 0 (cell x, block 0, cited page 3): Unviewed source page; pages viewed so far: [1]' in message
+    assert 'supported pages are [1]' in message
+    assert 'removal 1 (cell x, block 2, cited page 1): Banner must not name a retained heading' in message
+    assert cells['x']['html'] == html

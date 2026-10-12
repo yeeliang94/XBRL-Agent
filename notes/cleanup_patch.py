@@ -40,45 +40,68 @@ def enumerate_blocks(html):
         payload.append({'block':i,'tag':t.name,'text':text,'eligible':eligible})
     return soup, nodes, payload
 
+def _removal_errors(index, op, cell, blocks, nodes, removed, viewed):
+    """Every reason one proposed removal is unsafe, each naming the removal."""
+    where = f'removal {index} (cell {op.cell}, block {op.block}, cited page {op.evidence_page})'
+    if not 0 <= op.block < len(nodes) or not blocks[op.block]['eligible']:
+        return [f'{where}: Protected or missing block']
+    errors = []
+    if ' '.join(op.expected_text.split()) != ' '.join(blocks[op.block]['text'].split()):
+        errors.append(f'{where}: Stale text; the block now reads {blocks[op.block]["text"]!r}')
+    if op.evidence_page not in viewed:
+        errors.append(f'{where}: Unviewed source page; pages viewed so far: {sorted(viewed) or "none"}')
+    # Frozen placements bind exact source text to its page, including
+    # ancestor headings inherited from another page. Legacy cells have
+    # only their recorded cell-level source pages.
+    source_pages = (cell['source_block_pages'].get(' '.join(op.expected_text.split()), [])
+                    if 'source_block_pages' in cell
+                    else json.loads(cell.get('source_pages') or '[]'))
+    if op.evidence_page not in source_pages:
+        errors.append(f'{where}: Source page does not support this block; '
+                      f'its supported pages are {sorted(source_pages) or "none"}')
+    if op.reason == 'continuation_heading':
+        retained = op.retained_block
+        if (retained is None or not 0 <= retained < op.block or retained in removed
+            or (not nodes[op.block].name.startswith('h') and not CONTINUED.search(op.expected_text))
+            or normalized(blocks[retained]['text']) != normalized(op.expected_text)):
+            errors.append(f'{where}: Continuation lacks a retained matching heading')
+    elif op.retained_block is not None:
+        errors.append(f'{where}: Banner must not name a retained heading; '
+                      'use reason continuation_heading or omit retained_block')
+    return errors
+
+
 def apply_patch(cells, patch, viewed):
+    """Apply all removals or none. A rejection lists every unsafe removal."""
     if set(patch.inspected_cells) != set(cells) or len(patch.inspected_cells) != len(cells):
-        raise ValueError('Incomplete or duplicate cell inspection')
+        missing = sorted(set(cells) - set(patch.inspected_cells))
+        raise ValueError('Incomplete or duplicate cell inspection'
+                         + (f'; not inspected: {missing}' if missing else ''))
     grouped = {cid:[] for cid in cells}
-    for op in patch.removals:
+    errors = []
+    for index, op in enumerate(patch.removals):
         if op.cell not in grouped:
-            raise ValueError('Unknown cell')
-        grouped[op.cell].append(op)
+            errors.append(f'removal {index}: Unknown cell {op.cell}')
+        else:
+            grouped[op.cell].append((index, op))
+    parsed = {}
+    for cid, cell in cells.items():
+        soup, nodes, blocks = enumerate_blocks(cell['html'])
+        parsed[cid] = (soup, nodes, blocks)
+        ops = grouped[cid]
+        removed = {op.block for _, op in ops}
+        if len(removed) != len(ops):
+            errors.append(f'cell {cid}: Duplicate deletion of the same block')
+        for index, op in ops:
+            errors.extend(_removal_errors(index, op, cell, blocks, nodes, removed, viewed))
+    if errors:
+        raise ValueError('; '.join(errors))
     outputs = {}
     for cid, cell in cells.items():
         original = cell['html']
-        soup, nodes, blocks = enumerate_blocks(original)
-        ops = grouped[cid]
+        soup, nodes, blocks = parsed[cid]
+        ops = [op for _, op in grouped[cid]]
         removed = {op.block for op in ops}
-        if len(removed) != len(ops):
-            raise ValueError('Duplicate deletion')
-        for op in ops:
-            if not 0 <= op.block < len(nodes) or not blocks[op.block]['eligible']:
-                raise ValueError('Protected or missing block')
-            if ' '.join(op.expected_text.split()) != ' '.join(blocks[op.block]['text'].split()):
-                raise ValueError('Stale text')
-            if op.evidence_page not in viewed:
-                raise ValueError('Unviewed source page')
-            # Frozen placements bind exact source text to its page, including
-            # ancestor headings inherited from another page. Legacy cells have
-            # only their recorded cell-level source pages.
-            source_pages = (cell['source_block_pages'].get(' '.join(op.expected_text.split()), [])
-                            if 'source_block_pages' in cell
-                            else json.loads(cell.get('source_pages') or '[]'))
-            if op.evidence_page not in source_pages:
-                raise ValueError('Source page does not support this block')
-            if op.reason == 'continuation_heading':
-                retained = op.retained_block
-                if (retained is None or not 0 <= retained < op.block or retained in removed
-                    or (not nodes[op.block].name.startswith('h') and not CONTINUED.search(op.expected_text))
-                    or normalized(blocks[retained]['text']) != normalized(op.expected_text)):
-                    raise ValueError('Continuation lacks a retained matching heading')
-            elif op.retained_block is not None:
-                raise ValueError('Banner must not name a retained heading')
         # Verify that all protected blocks, their contents and styles survive.
         kept = [str(t) for i,t in enumerate(nodes) if i not in removed]
         tables_before = [str(t) for t in soup.find_all('table')]
@@ -87,9 +110,9 @@ def apply_patch(cells, patch, viewed):
         cleaned = str(soup) if ops else original
         after, after_nodes, _ = enumerate_blocks(cleaned)
         if [str(t) for t in after_nodes] != kept or [str(t) for t in after.find_all('table')] != tables_before:
-            raise ValueError('Deletion changed retained content or table geometry')
+            raise ValueError(f'cell {cid}: Deletion changed retained content or table geometry')
         if ops and not after.get_text(strip=True):
-            raise ValueError('Cannot empty a note')
+            raise ValueError(f'cell {cid}: Cannot empty a note')
         outputs[cid] = {**cell, 'html':cleaned,'original_html':original,
                         'removals':[op.model_dump() for op in ops]}
     return outputs

@@ -290,3 +290,17 @@ def test_live_templates_seed_pair_resolves_to_non_abstract_leaf(standard, templa
             )
     finally:
         wb.close()
+
+
+def test_notes_face_failure_does_not_suppress_figures_triage():
+    """Runs 183-185: a run whose only hard failure was a notes tie-out got no
+    figures review at all, while a fully clean run got triage."""
+    from server import _figures_review_mode, _reviewer_actionable_failures
+    from cross_checks.framework import CrossCheckResult
+
+    tieout = CrossCheckResult(name="Notes↔face tie-out: issued capital", status="failed")
+    assert _reviewer_actionable_failures([tieout]) == []
+    assert _figures_review_mode([], [], lambda: True) == (True, "light")
+    assert _figures_review_mode([], [], lambda: False) == (False, None)
+    face = CrossCheckResult(name="sofp_balance", status="failed")
+    assert _figures_review_mode([face], [], lambda: True) == (True, None)

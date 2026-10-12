@@ -24,9 +24,13 @@ shares and AMOUNT columns.
    Never target a generic `Balance at ...` label without first naming which of
    these parent paths it belongs to. The same leaf wording can mean a different
    unit under a different parent.
-2. Find the share-capital note in the PDF (usually labelled "Share capital"
-   or "Issued and paid-up share capital", typically Note 14-18 range).
-3. The note contains a movement table. Extract the numeric values by line.
+2. Find every note that discloses issued capital (usually labelled "Share
+   capital" or "Issued and paid-up share capital", typically Note 14-18
+   range). Preference, redeemable or convertible shares are often disclosed
+   in a separate note; check the notes list and the face equity section
+   before deciding the ordinary-share note is the whole disclosure.
+3. Each note contains a movement table. Extract the numeric values by line,
+   one payload set per share class.
 4. Emit one `NotesPayload` per matched row with `numeric_values` set.
    For company filings provide `company_cy` and `company_py` (or
    generic `cy` / `py`). For group filings provide only the disclosed keys
@@ -47,7 +51,8 @@ shares and AMOUNT columns.
    actually shows a table; if the note is a single line with no
    schedule, skip the reproduction. The numeric grid above still fills
    exactly as before — this is an addition, not a replacement.
-6. Call `write_notes` with the batch, then `save_result`.
+6. Call `write_notes` with the batch, then `submit_share_classes` listing
+   every disclosed class as written or not_written, then `save_result`.
 
 === NOTES ===
 

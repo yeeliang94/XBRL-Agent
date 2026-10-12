@@ -458,6 +458,7 @@ def _check_save_gate(
     #      class — write omission and verifier gap are deliberately separate,
     #      so one cannot pre-authorize the other; and
     #   2. it must supply a non-empty reason of its own.
+    ack_deferred = False
     if acknowledge_unresolved:
         reason = (acknowledge_reason or "").strip()
         verify_gap = balance_bad or mandatory_bad
@@ -469,7 +470,7 @@ def _check_save_gate(
         if missing_prior_refusal:
             # First contact with the gap — refuse once (which sets the flag
             # below and surfaces the guidance) before honouring an ack.
-            pass
+            ack_deferred = True
         elif not reason:
             return (
                 "save_result refused: acknowledge_unresolved=true requires a "
@@ -547,6 +548,12 @@ def _check_save_gate(
     if coverage_bad:
         issues.append("- Source coverage: " + "; ".join(coverage_details))
     parts.extend(issues)
+    if ack_deferred:
+        parts.append(
+            "Your acknowledgement was not applied: at least one issue above had "
+            "not been reported to you before this call. Re-check it; if it is "
+            "still genuine, send the same acknowledgement again."
+        )
     parts.append(
         "Correct any valid target with write_facts, re-run verify_totals, and "
         "resubmit face coverage before retrying save_result. If a rejected "
@@ -617,6 +624,17 @@ def _update_unresolved_fill_errors(deps: "ExtractionDeps", result) -> None:
             ]
             for existing_key in equivalent:
                 drop(existing_key)
+            # A refusal that named one writable cell on another sheet is
+            # resolved by a successful write to exactly that cell and column.
+            redirected = [
+                existing_key
+                for existing_key, meta in metadata.items()
+                if meta.get("col") == col
+                and meta.get("redirect_target") is not None
+                and tuple(meta["redirect_target"]) == (sheet, int(resolved_row))
+            ]
+            for existing_key in redirected:
+                drop(existing_key)
 
     result_errors = list(dict.fromkeys(
         getattr(result, "errors", []) or []
@@ -643,6 +661,7 @@ def _update_unresolved_fill_errors(deps: "ExtractionDeps", result) -> None:
             "candidate_rows": list(item.get("candidate_rows") or []),
             "resolved_row": item.get("resolved_row"),
             "kind": item.get("kind"),
+            "redirect_target": item.get("redirect_target"),
         }
 
     deps.last_fill_errors = list(dict.fromkeys(
@@ -696,9 +715,19 @@ def _format_verify_result(result) -> str:
         actions.append(result.feedback)
     if result.mandatory_unfilled:
         actions.append(
-            "One or more mandatory ('*'-prefixed) rows are blank. "
-            "View the relevant PDF pages and fill the listed rows "
-            "before calling save_result."
+            "One or more mandatory ('*'-prefixed) rows are blank. For each "
+            "listed row, view the relevant PDF pages: fill it only from a "
+            "disclosed figure. If the source does not disclose it, or it does "
+            "not apply to this filing, leave it blank; never write an "
+            "invented zero."
+        )
+    if result.is_balanced is False or result.mandatory_unfilled:
+        actions.append(
+            "If after re-checking the source a gap is genuine, do not plug a "
+            "catch-all row or invent a value. Call save_result with "
+            "acknowledge_unresolved=true and an unresolved_reason that names "
+            "each affected row, its outcome (not disclosed, not applicable or "
+            "unresolved) and the page you checked."
         )
     if actions:
         lines.append("\nAction required:\n" + "\n\n".join(actions))
@@ -1489,6 +1518,10 @@ def create_extraction_agent(
         # refuse to finalise if the agent skipped or failed verification.
         ctx.deps.last_verify_result = result
         rendered = _format_verify_result(result)
+        # This output already explains the gap and the audited completion
+        # path, so it is the prior warning an acknowledgement requires.
+        if result.is_balanced is False or result.mandatory_unfilled:
+            ctx.deps.seen_unresolved_refusal = True
         coverage_nudge = _face_coverage_pre_save_nudge(ctx.deps)
         if coverage_nudge:
             rendered += "\n" + coverage_nudge
