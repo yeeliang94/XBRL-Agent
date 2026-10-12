@@ -26,6 +26,8 @@ export function useDocuments(enabled: boolean) {
   const [loading, setLoading] = useState(true);
   const [pages, setPages] = useState(1);
   const [revision, setRevision] = useState(0);
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+  const lastHistoryRefresh = useRef(Date.now());
   const [visible, setVisible] = useState(() => document.visibilityState !== "hidden");
   useEffect(() => {
     const update = () => setVisible(document.visibilityState !== "hidden");
@@ -55,6 +57,11 @@ export function useDocuments(enabled: boolean) {
         setRuns(response.runs);
         if (recent.status === "fulfilled") setRecentDocuments(recent.value.runs);
         setTotal(response.total);
+        // Reuse the list poll; saved activity only refreshes History every 30s.
+        if (Date.now() - lastHistoryRefresh.current >= 30_000) {
+          lastHistoryRefresh.current = Date.now();
+          setHistoryRefreshKey((value) => value + 1);
+        }
         setError(null);
         delay = response.total > 0 ? 2_000 : 30_000;
       } catch (e) {
@@ -69,12 +76,12 @@ export function useDocuments(enabled: boolean) {
     void poll();
     return () => { cancelled = true; clearTimeout(timer); };
   }, [enabled, visible, pages, revision]);
-  return { runs, recentDocuments, total, error, loading, refresh,
+  return { runs, recentDocuments, total, error, loading, refresh, historyRefreshKey,
     loadMore: () => setPages((value) => value + 1) };
 }
 
 export function DocumentsPage({ documents, section, onSection, onAdd, onOpen }: {
-  documents: Omit<ReturnType<typeof useDocuments>, "recentDocuments"> & { recentDocuments?: RunSummaryJson[] };
+  documents: Omit<ReturnType<typeof useDocuments>, "recentDocuments" | "historyRefreshKey"> & { recentDocuments?: RunSummaryJson[]; historyRefreshKey?: number };
   section: "progress" | "history";
   onSection: (section: "progress" | "history") => void;
   onAdd: () => void;
@@ -97,7 +104,7 @@ export function DocumentsPage({ documents, section, onSection, onAdd, onOpen }: 
     let cancelled = false;
     void Promise.allSettled([
       fetchHomeStats(),
-      fetchRuns({ documentGroup: "history", limit: 5 }),
+      fetchRuns({ documentGroup: "results", limit: 5 }),
     ]).then(([stats, results]) => {
       if (cancelled) return;
       setSummary(stats.status === "fulfilled" ? stats.value : null);
@@ -143,7 +150,7 @@ export function DocumentsPage({ documents, section, onSection, onAdd, onOpen }: 
       </button>)}
     </div>
     <section role="tabpanel" id={`documents-${section}-panel`} aria-labelledby={`documents-${section}`}>
-      {section === "history" ? <HistoryPage selectedId={null} onResumeDraft={(id) => onOpen({ id, status: "draft" })} refreshKey={documents.runs.map((run) => `${run.id}:${run.status}:${run.preparation?.status || ""}:${run.preparation?.phase || ""}`).join(",")} hideHeader onSelectRun={(id) => {
+      {section === "history" ? <HistoryPage selectedId={null} onResumeDraft={(id) => onOpen({ id, status: "draft" })} refreshKey={JSON.stringify([documents.historyRefreshKey, [...documents.runs].sort((a, b) => a.id - b.id).map((run) => [run.id, run.status, run.preparation?.status, run.preparation?.phase])])} hideHeader onSelectRun={(id) => {
         if (id != null) onOpen({ id, status: "completed" });
       }} /> : <>
         {deleteError && <p role="alert" style={ui.bodyText}>{deleteError}</p>}

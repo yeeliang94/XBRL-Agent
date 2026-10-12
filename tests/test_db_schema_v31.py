@@ -48,6 +48,9 @@ def test_v30_db_walks_forward(tmp_path):
     init_db(db)
     conn = sqlite3.connect(str(db))
     try:
+        # Strip newer activity triggers before rebuilding the historical table.
+        for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'").fetchall():
+            conn.execute(f'DROP TRIGGER "{name}"')
         conn.executescript(
             """
             PRAGMA foreign_keys=off;

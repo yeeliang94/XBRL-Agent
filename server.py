@@ -8605,6 +8605,7 @@ def _run_summary_to_dict(summary) -> dict:
     return {
         "id": summary.id,
         "created_at": summary.created_at,
+        "updated_at": summary.updated_at,
         "pdf_filename": summary.pdf_filename,
         "status": summary.status,
         "session_id": summary.session_id,

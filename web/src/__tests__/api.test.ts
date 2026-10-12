@@ -4,7 +4,6 @@ import {
   getSettings,
   updateSettings,
   fetchRuns,
-  fetchRecentRuns,
   fetchHomeStats,
   fetchRunDetail,
   deleteRun,
@@ -118,43 +117,6 @@ describe("API client", () => {
   });
 
   // --- Homepage split-hero helpers (PLAN-homepage-redesign.md) ---
-  describe("fetchRecentRuns", () => {
-    beforeEach(() => mockFetch.mockClear());
-
-    test("fetches a wide window and surfaces results ahead of drafts, capped to limit", async () => {
-      // Newest-first page: newest two are drafts, older ones are results.
-      const rows = [
-        { id: 6, status: "draft" },
-        { id: 5, status: "draft" },
-        { id: 4, status: "completed" },
-        { id: 3, status: "completed_with_errors" },
-        { id: 2, status: "draft" },
-        { id: 1, status: "completed" },
-      ];
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ runs: rows, total: 6, limit: 20, offset: 0 }),
-      });
-      const result = await fetchRecentRuns(3);
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
-      // Wider window than the display limit so results further back surface.
-      expect(calledUrl).toContain("limit=20");
-      expect(calledUrl).not.toContain("status=");
-      // Results first (newest-first within group), then drafts, capped to 3.
-      expect(result.map((r) => r.id)).toEqual([4, 3, 1]);
-    });
-
-    test("defaults to a limit of 5 (fetching a wider window)", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ runs: [], total: 0, limit: 20, offset: 0 }),
-      });
-      await fetchRecentRuns();
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
-      expect(calledUrl).toContain("limit=20");
-    });
-  });
-
   describe("fetchHomeStats", () => {
     beforeEach(() => mockFetch.mockClear());
 

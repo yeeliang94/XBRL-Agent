@@ -16,6 +16,6 @@ def test_v51_block_revisions_migrate_without_changing_notes(tmp_path):
     init_db(path)
     init_db(path)
     with repo.db_session(path) as conn:
-        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == CURRENT_SCHEMA_VERSION == 52
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == CURRENT_SCHEMA_VERSION
         assert conn.execute("SELECT html FROM notes_cells").fetchone()[0] == "<p>Original.</p>"
         assert conn.execute("SELECT COUNT(*) FROM notes_source_block_revisions").fetchone()[0] == 0

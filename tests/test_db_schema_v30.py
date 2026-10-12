@@ -57,6 +57,9 @@ def test_v29_db_walks_forward(tmp_path):
     conn = sqlite3.connect(str(db))
     try:
         # Simulate a v29 DB: drop the new tables and the new columns off runs.
+        # Strip newer activity triggers before rebuilding the historical table.
+        for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'").fetchall():
+            conn.execute(f'DROP TRIGGER "{name}"')
         conn.executescript(
             """
             PRAGMA foreign_keys=off;

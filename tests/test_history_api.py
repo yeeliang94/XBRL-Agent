@@ -159,6 +159,11 @@ def test_document_groups_filter_before_pagination_and_surface_preparation(api_en
     body = client.get("/api/runs", params={"document_group": "history", "status": "failed"}).json()
     assert body["total"] == 1
     assert body["runs"][0]["pdf_filename"] == "failed.pdf"
+    body = client.get("/api/runs", params={"document_group": "history"}).json()
+    assert body["total"] == 4
+    assert {draft, running}.issubset({run["id"] for run in body["runs"]})
+    assert all(run["updated_at"] for run in body["runs"])
+    assert client.get("/api/runs", params={"document_group": "results"}).json()["total"] == 2
     assert client.get("/api/runs", params={"document_group": "invalid"}).status_code == 422
 
 
