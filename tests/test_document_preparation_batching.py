@@ -168,7 +168,33 @@ def test_candidate_cell_evidence_ignores_spacing_and_lookalikes(tmp_path, quoted
             result.update(table_structure_verified=True, table_relationships=[{
                 "source_relationship": "Trade receivables 100",
                 "candidate_relationship": "Trade receivables 100", "matches": True,
-                "candidate_cells": [{"table": 0, "row": 0, "cell": 0, "text": quoted}],
+                "candidate_cells": [{"table": 0, "row": 0, "cell": 0, "text": quoted},
+                                    {"table": 0, "row": 0, "cell": 1, "text": "100"}],
+            }])
+        return result
+    prepared = run(source(tmp_path, 1), call)
+    assert prepared.pages[0]["verified"] is verified
+
+
+@pytest.mark.parametrize("cited, verified", [
+    ([(0, 0, 0, "Trade receivables")], False),            # heading only; 100 and 200 unsupported
+    ([(0, 0, 0, "Trade receivables"), (0, 1, 1, "100")], False),   # 200 still unsupported
+    ([(0, 0, 0, "Trade receivables"), (0, 1, 1, "100"), (0, 2, 1, "200")], True),
+    ([(0, 1, 1, "100"), (0, 2, 1, "200")], False),        # amounts with no label or heading
+])
+def test_positive_relationship_must_cite_the_cells_it_claims(tmp_path, cited, verified):
+    html = ("<table><tr><td>Trade receivables</td><td></td></tr>"
+            "<tr><td>Current</td><td>100</td></tr><tr><td>Non-current</td><td>200</td></tr></table>")
+    async def call(stage, images, context):
+        result = response(context)
+        if stage == "capturing":
+            result["html"] = html
+        elif stage == "verifying":
+            result.update(table_structure_verified=True, table_relationships=[{
+                "source_relationship": "Trade receivables: current 100, non-current 200",
+                "candidate_relationship": "Trade receivables: current 100, non-current 200",
+                "matches": True,
+                "candidate_cells": [{"table": t, "row": r, "cell": c, "text": x} for t, r, c, x in cited],
             }])
         return result
     prepared = run(source(tmp_path, 1), call)

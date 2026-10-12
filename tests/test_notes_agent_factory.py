@@ -148,6 +148,39 @@ def test_notes_deps_defaults_wrote_once_false(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("region", ["full", "top-half"])
+async def test_missing_policy_report_accepts_pages_inspected_by_zoom(tmp_path, monkeypatch, region):
+    from types import SimpleNamespace
+    from pydantic_ai.models.test import TestModel
+    from db import repository as repo
+    from db.schema import init_db
+    from notes import agent as na, reviewer_agent as ra
+
+    label = "*Disclosure of material accounting policy information"
+    db = tmp_path / "run.db"
+    init_db(db)
+    with repo.db_session(db) as conn:
+        run_id = repo.create_run(conn, "source.pdf", config={"notes_to_run": ["ACC_POLICIES"]})
+        conn.execute("INSERT INTO notes_nodes(node_uuid,template_id,sheet,row,label,kind,slot_role) "
+                     "VALUES ('required','mfrs-company-notes-policies-v1',?,4,?,'LEAF','INPUT')",
+                     (ra.POLICIES_SHEET, label))
+    agent, deps = create_notes_agent(NotesTemplateType.ACC_POLICIES, "unused.pdf", [], "company",
+        TestModel(), output_dir=str(tmp_path), filing_standard="mfrs", db_path=str(db), run_id=run_id)
+    funcs = {name: tool.function for ts in agent.toolsets for name, tool in getattr(ts, "tools", {}).items()}
+    ctx = SimpleNamespace(deps=deps)
+    monkeypatch.setattr(na, "count_pdf_pages", lambda path: 2)
+    async def render(path, page, dpi, *, policy, clip=None):
+        return b"png"
+    monkeypatch.setattr(na, "_render_one_page_single_flight", render)
+    args = dict(row=4, target_label=label, source_pages=[2], reason="Only specific policies are present.",
+                evidence="Page 2 opens directly with the revenue policy.")
+    await funcs["zoom_pdf_region"](ctx, 1, region)
+    assert "rejected" in funcs["report_missing_mandatory_field"](ctx, **args)  # page 2 not inspected
+    await funcs["zoom_pdf_region"](ctx, 2, region)
+    assert "Recorded" in funcs["report_missing_mandatory_field"](ctx, **args)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("standard,level,label", [
     ("mfrs", "company", "*Disclosure of material accounting policy information"),
     ("mpers", "group", "Disclosure of significant accounting policies"),

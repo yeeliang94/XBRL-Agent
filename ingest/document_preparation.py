@@ -35,7 +35,7 @@ from ingest.pdf_sidecar import (
 from notes._rate_limit import RATE_LIMIT_MAX_RETRIES, compute_backoff_delay, is_rate_limit_error
 from utils.atomic_io import replace_with_retry
 
-CONTRACT_VERSION = 16
+CONTRACT_VERSION = 17
 # Capture, verify and repair rounds per page. The third round runs only while
 # specific table findings remain and the previous repair changed the page.
 _MAX_PREPARATION_ROUNDS = 3
@@ -462,6 +462,8 @@ _PROMPTS = {
         "Then record the corresponding candidate relationships in table_relationships. "
         "Bind each relationship to candidate_cells from the supplied manifest: exact "
         "table/row/cell indices and text, including its headings, labels and amounts. "
+        "Every figure (amount or year) named in candidate_relationship must be cited "
+        "in that relationship's own candidate_cells, with at least one label or heading. "
         "Cite evidence for every candidate table. If a source section is absent from "
         "the candidate, report matches false rather than inventing candidate cells. "
         "Use one concise entry per section, covering all rows; create a separate "
@@ -814,10 +816,10 @@ def _table_verdict_unverified(*, has_tables: bool, verdict: bool | None,
     actual = {(c["table"], c["row"], c["cell"]): _normalise_cell_text(c["text"])
               for c in candidate_cells}
     covered_tables = set()
+    labelled_tables = {key[0] for key, text in actual.items() if _has_letters(text)}
     for relationship in relationships:
         evidence = relationship.get("candidate_cells") or []
-        if not evidence:
-            return True
+        cited_texts, cited_tables = [], set()
         for raw in evidence:
             try:
                 cell = CandidateCellEvidence.model_validate(raw)
@@ -826,9 +828,43 @@ def _table_verdict_unverified(*, has_tables: bool, verdict: bool | None,
             key = (cell.table, cell.row, cell.cell)
             if key not in actual or _normalise_cell_text(cell.text) != actual[key]:
                 return True
-            if cell.text.strip():
-                covered_tables.add(cell.table)
+            if actual[key]:
+                cited_texts.append(actual[key])
+                cited_tables.add(cell.table)
+        if not _relationship_backed_by_cells(
+                relationship["candidate_relationship"], cited_texts,
+                needs_label=bool(cited_tables & labelled_tables) or not cited_tables):
+            return True
+        covered_tables |= cited_tables
     return covered_tables != {c["table"] for c in candidate_cells}
+
+
+# An amount, year or other figure as written in a cell or a relationship:
+# "13,949", "(1,234)", "12.5", "2024". Commas are dropped before comparing.
+_FIGURE_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _has_letters(text: str) -> bool:
+    return re.search(r"[^\W\d_]", text) is not None
+
+
+def _figures(text: str) -> set[str]:
+    return {m.replace(",", "").rstrip(".") for m in _FIGURE_RE.findall(text)}
+
+
+def _relationship_backed_by_cells(candidate_relationship: str, cited_texts: list[str],
+                                  *, needs_label: bool) -> bool:
+    """A positive relationship must be bound to the cells it describes.
+
+    It needs at least one cited label or heading cell (unless its table has
+    no text cells at all), and every figure the candidate_relationship
+    mentions (amounts, years) must appear in its own cited cells. Citing one
+    real heading for a whole table is not evidence for the amounts under it.
+    """
+    if needs_label and not any(_has_letters(text) for text in cited_texts):
+        return False
+    cited_figures = set().union(*(_figures(text) for text in cited_texts))
+    return _figures(_normalise_cell_text(candidate_relationship)) <= cited_figures
 
 
 def _write_checkpoint_with_evidence(path: Path, checkpoint: dict) -> None:

@@ -3733,6 +3733,9 @@ def create_notes_agent(
             ctx.deps.pdf_path, page, _NOTES_RENDER_DPI,
             policy=_NOTES_RENDER_POLICY, clip=clip,
         )
+        # A zoomed read is an inspection of the page, so it can ground a
+        # report_missing_mandatory_field citation like view_pdf_pages does.
+        ctx.deps.viewed_pdf_pages.add(page)
         label = "full page" if clip is None else region.strip().lower()
         return [
             f"=== Page {page} ({label}) ===",
