@@ -96,9 +96,48 @@ def test_descriptive_body_text_stays_left_in_partly_numeric_column():
 
 
 def test_bold_and_inline_marks_are_preserved():
-    out = decorate_notes_html("<p>a <strong>bold</strong> <em>it</em></p>")
-    assert "<strong>bold</strong>" in out
+    html = ('<h3>13. Deferred tax</h3><p>a <strong>bold</strong> <em>it</em></p>'
+            '<table><tr><th><strong>2025</strong></th></tr>'
+            '<tr><td><b>Deferred tax assets</b></td></tr></table>')
+    out = decorate_notes_html(html)
+    soup = BeautifulSoup(out, "html.parser")
+    assert soup.h3.get_text() == "13. Deferred tax"
+    assert "font-weight: 600" in soup.h3["style"]
+    assert "font-weight: 600" in soup.p.strong["style"]
+    assert "font-weight: 600" in soup.th.strong["style"]
+    assert "font-weight: 600" in soup.td.b["style"]
     assert "<em>it</em>" in out
+    assert len(soup.table.find_all("tr")) == 2
+    assert " ".join(BeautifulSoup(html, "html.parser").stripped_strings) == " ".join(soup.stripped_strings)
+
+
+def test_semibold_preserves_explicit_weights_and_does_not_compound_nested_emphasis():
+    html = ('<h3><strong>Heading</strong></h3><p><strong>Outer <b>nested</b></strong></p>'
+            '<p><strong style="font-weight: 800">Explicit</strong></p>'
+            '<table><tr><td style="font-weight:700"><strong>Source label</strong></td></tr></table>')
+    soup = BeautifulSoup(decorate_notes_html(html, style=NotesTableStyle(heading_weight=700)), "html.parser")
+    assert "font-weight: 700" in soup.h3["style"]
+    assert "font-weight: 700" in soup.h3.strong["style"]
+    assert "font-weight: 600" in soup.p.strong["style"]
+    assert "font-weight: 600" in soup.p.b["style"]
+    assert soup.find("strong", string="Explicit")["style"] == "font-weight: 800"
+    assert "font-weight:700" in soup.td["style"]
+    assert "font-weight: 700" in soup.td.strong["style"]
+
+
+def test_emphasis_inherits_bold_ancestor_written_in_any_case_or_important():
+    html = ('<p><span style="font-weight: BOLD"><strong>upper</strong></span></p>'
+            '<p><span style="font-weight:800 !important"><b>important</b></span></p>')
+    soup = BeautifulSoup(decorate_notes_html(html), "html.parser")
+    assert "font-weight: 700" in soup.find("strong", string="upper")["style"]
+    assert "font-weight: 800" in soup.find("b", string="important")["style"]
+
+
+def test_emphasis_inherits_heading_weight_between_round_values():
+    soup = BeautifulSoup(decorate_notes_html(
+        "<h3><strong>Title</strong></h3>", style=NotesTableStyle(heading_weight=650)),
+        "html.parser")
+    assert "font-weight: 650" in soup.h3.strong["style"]
 
 
 def test_subnote_section_indents_its_table_and_prose_together():
