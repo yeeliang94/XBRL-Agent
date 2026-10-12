@@ -2183,7 +2183,7 @@ def _backfill_run_activity(conn: sqlite3.Connection) -> None:
             sources.append(f"SELECT id, {column} FROM runs")
     for table in _RUN_ACTIVITY_TABLES:
         columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-        for column in ("updated_at", "created_at", "started_at", "ended_at", "ts", "uploaded_at"):
+        for column in ("updated_at", "created_at", "started_at", "ended_at", "resolved_at", "ts", "uploaded_at"):
             if column in columns:
                 sources.append(f"SELECT run_id, {column} FROM {table}")
     sources.append("SELECT ra.run_id, ae.ts FROM agent_events ae "

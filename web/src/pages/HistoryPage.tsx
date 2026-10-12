@@ -76,6 +76,8 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
   // from `runs.length`, which keeps the two states in sync automatically.
   const [total, setTotal] = useState(0);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const loadMoreRequestRef = useRef<ReturnType<typeof fetchRuns> | null>(null);
   // Pagination errors are kept separate from the page-level `error` so a
   // failed Load more doesn't hide the rows the user has already loaded.
   // Initial-load failures still use `error` and blank the table.
@@ -168,8 +170,8 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
     let cancelled = false;
     const refreshOnly = listRequestRef.current?.filtersKey === filtersKey
       && listRequestRef.current.refetchKey === refetchKey;
-    const wantedRows = refreshOnly ? Math.max(PAGE_SIZE, loadedCountRef.current) : PAGE_SIZE;
     listRequestRef.current = { filtersKey, refetchKey };
+    setIsRefreshing(true);
     if (!refreshOnly) setIsLoading(true);
     setError(null);
     // Filter/refetch change implicitly retries pagination from page one,
@@ -178,6 +180,13 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
     // banner under fresh results.
     setLoadMoreError(null);
     const fetchVisiblePages = async () => {
+      // Pagination owns its errors. Finish any existing page request before
+      // deciding how many rows the refresh must preserve.
+      if (refreshOnly && loadMoreRequestRef.current) {
+        await loadMoreRequestRef.current.catch(() => undefined);
+      }
+      if (cancelled) return null;
+      const wantedRows = refreshOnly ? Math.max(PAGE_SIZE, loadedCountRef.current) : PAGE_SIZE;
       const res = await fetchRuns({ ...filters, documentGroup, limit: PAGE_SIZE, offset: 0 });
       for (let offset = PAGE_SIZE; offset < wantedRows && offset < res.total && !cancelled; offset += PAGE_SIZE) {
         const next = await fetchRuns({ ...filters, documentGroup, limit: PAGE_SIZE, offset });
@@ -187,7 +196,7 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
     };
     fetchVisiblePages()
       .then((res) => {
-        if (cancelled) return;
+        if (cancelled || !res) return;
         setRuns(res.runs);
         setTotal(res.total);
       })
@@ -202,7 +211,10 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
         }
       })
       .finally(() => {
-        if (!cancelled) setIsLoading(false);
+        if (!cancelled) {
+          setIsLoading(false);
+          setIsRefreshing(false);
+        }
       });
     return () => {
       cancelled = true;
@@ -217,18 +229,22 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
   // rapidly typing in the search box while a load-more is in flight used
   // to append rows from the OLD filter set onto the newly-filtered list.
   const handleLoadMore = useCallback(async () => {
+    if (isRefreshing || loadMoreRequestRef.current) return;
     const snapshotFiltersKey = filtersKeyRef.current;
     setIsLoadingMore(true);
     setLoadMoreError(null);
     try {
       const nextOffset = runs.length;
-      const res = await fetchRuns({ ...filters, documentGroup, limit: PAGE_SIZE, offset: nextOffset });
+      const request = fetchRuns({ ...filters, documentGroup, limit: PAGE_SIZE, offset: nextOffset });
+      loadMoreRequestRef.current = request;
+      const res = await request;
       // Filters changed mid-flight → the first-page effect has already
       // replaced `runs`, so appending these rows would corrupt the view.
       // The first-page effect owns the fresh list; drop this response.
       if (filtersKeyRef.current !== snapshotFiltersKey) {
         return;
       }
+      loadedCountRef.current = nextOffset + res.runs.length;
       setRuns((prev) => [...prev, ...res.runs]);
       setTotal(res.total);
     } catch (err) {
@@ -240,9 +256,10 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
       // blank the already-loaded rows via HistoryList's error early-return.
       setLoadMoreError(msg);
     } finally {
+      loadMoreRequestRef.current = null;
       setIsLoadingMore(false);
     }
-  }, [runs.length, filters, documentGroup]);
+  }, [runs.length, filters, documentGroup, isRefreshing]);
 
   // Fetch detail whenever `selectedId` changes. Running runs self-schedule one
   // follow-up at a time so a dropped live stream can resume from durable state
@@ -456,7 +473,7 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
         <button
           type="button"
           onClick={handleLoadMore}
-          disabled={isLoadingMore}
+          disabled={isLoadingMore || isRefreshing}
           className={uiClass.btnGhost}
           style={styles.loadMoreBtn}
         >

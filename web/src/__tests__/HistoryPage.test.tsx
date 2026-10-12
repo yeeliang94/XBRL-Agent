@@ -105,6 +105,34 @@ describe("HistoryPage", () => {
     await waitFor(() => expect(fetchRuns).toHaveBeenCalledTimes(4));
     expect(screen.getByText("SECOND-PAGE.pdf")).toBeVisible();
   });
+  test.each(["refresh first", "pagination first"])("preserves loaded documents when refresh and pagination overlap: %s", async (order) => {
+    const firstPage = Array.from({ length: 50 }, (_, i) => ({ ...baseRun, id: i + 1, pdf_filename: `DOC-${i + 1}.pdf` }));
+    const secondPage = Array.from({ length: 50 }, (_, i) => ({ ...baseRun, id: i + 51, pdf_filename: `DOC-${i + 51}.pdf` }));
+    const refreshedPage = firstPage.map((run, i) => i === 0 ? { ...run, pdf_filename: "REFRESHED-FIRST.pdf" } : run);
+    const response = (runs: RunSummaryJson[], offset = 0) => ({ runs, total: 100, limit: 50, offset });
+    let finishPending!: (value: ReturnType<typeof response>) => void;
+    fetchRuns.mockResolvedValueOnce(response(firstPage))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishPending = resolve; }));
+    const view = render(<HistoryPage refreshKey="initial" />);
+    const more = await screen.findByRole("button", { name: /load more/i });
+    if (order === "refresh first") {
+      view.rerender(<HistoryPage refreshKey="updated" />);
+      expect(screen.getByRole("button", { name: /load more/i })).toBeDisabled();
+      fetchRuns.mockResolvedValueOnce(response(secondPage, 50));
+      await act(async () => { finishPending(response(refreshedPage)); });
+      await waitFor(() => expect(screen.getByRole("button", { name: /load more/i })).toBeEnabled());
+      fireEvent.click(screen.getByRole("button", { name: /load more/i }));
+    } else {
+      fireEvent.click(more);
+      fetchRuns.mockResolvedValueOnce(response(refreshedPage)).mockResolvedValueOnce(response(secondPage, 50));
+      view.rerender(<HistoryPage refreshKey="updated" />);
+      expect(fetchRuns).toHaveBeenCalledTimes(2);
+      await act(async () => { finishPending(response(secondPage, 50)); });
+    }
+    expect(await screen.findByText("REFRESHED-FIRST.pdf")).toBeVisible();
+    expect(await screen.findByText("DOC-100.pdf")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /load more/i })).toBeNull();
+  });
   beforeEach(() => {
     fetchRuns.mockReset();
     vi.mocked(api.fetchRunDetail).mockReset();
