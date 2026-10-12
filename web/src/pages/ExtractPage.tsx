@@ -20,7 +20,8 @@ import type { AgentTabState } from "../components/AgentTabs";
 import { ValidatorTab } from "../components/ValidatorTab";
 import { NotesSubTabBar } from "../components/NotesSubTabBar";
 import { FormatterSubAgentActivity } from "../components/FormatterSubAgentActivity";
-import { deriveFormatterSheets, formatterProgressSummary, formatterRunningParts } from "../lib/formatterSubAgents";
+import { deriveFormatterSheets, formatterProgressSummary, formatterRunningParts, formatterSubAgentLabel } from "../lib/formatterSubAgents";
+import { notesSheetDisplayName } from "../lib/sheetLabels";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { buildToolTimeline, filterEventsBySubAgent } from "../lib/buildToolTimeline";
 import { buildReasoningTimeline } from "../lib/buildReasoningTimeline";
@@ -841,12 +842,22 @@ export function ActiveTabPanel({
     const message = formatting.message;
     // Once formatter passes report, Notes formatting reads like every other
     // workstream: chips per sheet and the activity stream. The stage line is
-    // kept only before then, or for a failure no sheet accounts for.
+    // kept only before then, or for problems not explained by a failed sheet.
     const formatterEvents = state.activeTab === "notes-formatting" ? state.agents["notes-formatting"]?.events ?? [] : [];
     const formatterSheets = deriveFormatterSheets(formatterEvents);
     const bySheet = formatterSheets.length > 0;
-    const showStageLine = !bySheet
-      || (formatting.status === "failed" && !formatterSheets.some((sheet) => sheet.status === "failed"));
+    const incomplete = [...state.events].reverse().find((event) =>
+      event.event === "error" && event.data.type === "notes_formatting_incomplete");
+    const outcomes = incomplete?.event === "error" ? incomplete.data.sheets : undefined;
+    let stageMessages: string[] = [];
+    if (!bySheet) stageMessages = [message];
+    else if (formatting.status === "failed") {
+      stageMessages = outcomes && Object.keys(outcomes).length > 0
+        ? Object.entries(outcomes)
+          .filter(([sheet, outcome]) => !outcome.ok && !formatterSheets.some((item) => item.sheet === sheet && item.status === "failed"))
+          .map(([sheet, outcome]) => `${notesSheetDisplayName(sheet)}: ${outcome.error || outcome.summary || "Appearance checking did not finish."}`)
+        : [message];
+    }
     return (
       <div role="tabpanel" aria-label={`${label} activity`} style={styles.activityCardAttached}>
         <div style={styles.activityHeader}>
@@ -865,9 +876,9 @@ export function ActiveTabPanel({
             )}
           </div>
         </div>
-        {showStageLine && <div style={{ padding: pwc.space.lg }}>
+        {stageMessages.length > 0 && <div style={{ padding: pwc.space.lg }}>
           <div role="status" aria-live="polite" style={{ color: pwc.grey900, fontSize: 14 }}>
-            {message}
+            {stageMessages.map((reason) => <div key={reason}>{reason}</div>)}
           </div>
           {total > 0 && !bySheet && (
             <div
@@ -884,8 +895,15 @@ export function ActiveTabPanel({
         </div>}
         {bySheet && (
           <FormatterSubAgentActivity events={formatterEvents} status={formatting.status}
-            technical={<AgentTimeline events={formatterEvents} toolTimeline={buildToolTimeline(formatterEvents)}
-              reasoningBlocks={[]} isRunning={formatting.status === "running"} />} />
+            technical={<>
+              {formatterEvents.map((event, index) => event.event === "status" && event.data.phase === "failed" && event.data.detail
+                ? <div key={index} style={{ padding: pwc.space.md, whiteSpace: "pre-wrap" }}>
+                  <strong>{formatterSubAgentLabel(event.data.sub_agent_id ?? "Notes formatting")}</strong>
+                  <div>{event.data.detail}</div>
+                </div> : null)}
+              <AgentTimeline events={formatterEvents} toolTimeline={buildToolTimeline(formatterEvents)}
+                reasoningBlocks={[]} isRunning={formatting.status === "running"} />
+            </>} />
         )}
       </div>
     );

@@ -547,6 +547,34 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(panel.queryByText(/row 2 is bold/)).toBeNull();
     expect(updates().getByText("Zooming into source page 12 (bottom half).")).toBeVisible();
     expect(updates().queryByText(/Checking formatted notes/)).toBeNull();
+    fireEvent.click(panel.getByRole("checkbox", { name: "Technical detail" }));
+    expect(panel.getByText("Table 0: row 2 is bold in the prepared output")).toBeVisible();
+    fireEvent.click(panel.getByRole("checkbox", { name: "Technical detail" }));
+    expect(panel.queryByText("Table 0: row 2 is bold in the prepared output")).toBeNull();
+  });
+
+  test.each(["skipped sheet", "stage failure"])("a failed sheet keeps a separate %s visible", (problem) => {
+    const detail = "Table 0: row 2 is bold in the prepared output";
+    const stageMessage = "Notes formatting did not finish. Saved content is available in Notes for review and retry.";
+    const skippedReason = "A notes formatter pass is already running.";
+    let state: AppState = { ...initialState, sessionId: "test-session", filename: "test.pdf", isComplete: true,
+      pipelineStage: "done", activeTab: "notes-formatting", notesInRun: ["CORP_INFO"],
+      events: [{ event: "pipeline_stage", timestamp: 1, data: { stage: "formatting_notes", started_at: 1 } }] };
+    state = appReducer(state, { type: "EVENT", payload: { event: "status", timestamp: 2,
+      data: { agent_id: "notes-formatting", agent_role: "NOTES_FORMATTING", sub_agent_id: "Notes-Issuedcapital", phase: "failed",
+        message: "1 note still looks different from the source PDF. Retry it from the Notes tab.", detail } } });
+    state = appReducer(state, { type: "EVENT", payload: { event: "error", timestamp: 3,
+      data: { type: "notes_formatting_incomplete", message: stageMessage,
+        ...(problem === "skipped sheet" ? { sheets: {
+          "Notes-Issuedcapital": { ok: false, error: detail },
+          "Notes-RelatedPartytran": { ok: false, skipped: true, error: skippedReason },
+        } } : {}) } } });
+    render(<ExtractPage {...makeProps({ state })} />);
+    const panel = within(screen.getByRole("tabpanel", { name: "Notes formatting activity" }));
+    expect(panel.getByTestId("formatting-failure")).toHaveTextContent("1 note still looks different");
+    expect(panel.getByText(problem === "skipped sheet"
+      ? `Related Party Transactions: ${skippedReason}` : stageMessage)).toBeVisible();
+    expect(panel.queryByText(detail)).toBeNull();
   });
 
   test("only an observed successful formatting pass is shown complete", () => {

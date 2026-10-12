@@ -275,6 +275,8 @@ describe("Direction A shell and responsive composition", () => {
     expect(designSystem).toContain("The navigator lists the latest stage first: Run checks (newest check first) once they start, then Financial statements, then Notes, with Document preparation at the bottom");
     expect(designSystem).toContain("Decision cards name the affected figure even when its value is unchanged");
     expect(designSystem).toContain("Keep tool operations, provider reasoning, tokens and request metadata in closed technical diagnostics");
+    expect(designSystem).toContain("Live Technical detail retains the full failed checker finding");
+    expect(designSystem).toContain("A failed sheet never hides a separate skipped-sheet reason or stage failure");
     expect(designSystem).toContain("the activity roster shows item states without a second completion total");
     expect(prototype).toContain("Live activity");
     expect(prototype).not.toContain("Provider reasoning");
@@ -285,6 +287,7 @@ describe("Direction A shell and responsive composition", () => {
 
 describe("Simplified template-oriented review", () => {
   test("pins the minimal Notes review contract", () => {
+    expect(designSystem).toContain("current worksheet’s displayed concepts, periods, category members and entities");
     expect(designSystem).toContain("Notes formatting rechecks use one compact notice beside the action, without internal row numbers");
     expect(designSystem).toContain("Notes use one divider between peer fields");
     for (const requirement of [
