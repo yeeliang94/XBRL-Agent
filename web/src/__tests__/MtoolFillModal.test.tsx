@@ -359,7 +359,7 @@ describe("MtoolFillModal", () => {
     expect(patchCalls).toBe(2);
   });
 
-  test("shows the notes count and an 'also fill notes' toggle", async () => {
+  test("shows the notes count and an 'include written notes' toggle", async () => {
     mockFetch((url) => {
       if (url.includes("/mtool-notes-fill"))
         return new Response(JSON.stringify({ meta: { counts: { notes: 2 } }, footnotes: [] }), { status: 200 });
@@ -368,7 +368,7 @@ describe("MtoolFillModal", () => {
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
     fireEvent.change(await screen.findByLabelText(/mtool template file/i), { target: { files: [new File(["x"], "t.xlsx")] } });
-    const toggle = screen.getByLabelText(/also fill notes/i) as HTMLInputElement;
+    const toggle = screen.getByLabelText(/include written notes/i) as HTMLInputElement;
     expect(toggle.checked).toBe(true);
   });
 
@@ -482,7 +482,7 @@ describe("MtoolFillModal", () => {
     // Toggle present and ON by default: a template exported straight from mTool
     // has no note spots provisioned, so leaving this off placed zero notes and
     // read as a broken fill rather than a missing opt-in (run 75).
-    const create = screen.getByLabelText(/add missing note spots/i) as HTMLInputElement;
+    const create = screen.getByLabelText(/add missing note fields/i) as HTMLInputElement;
     expect(create.checked).toBe(true);
     // Still operator-controllable in both directions.
     fireEvent.click(create);
@@ -629,14 +629,14 @@ describe("MtoolFillModal", () => {
     });
     await waitFor(() => expect(screen.getByLabelText(/notes preview/i)).toBeTruthy());
     // Flipping the toggle must clear the now-stale plan.
-    fireEvent.click(screen.getByLabelText(/add missing note spots/i));
+    fireEvent.click(screen.getByLabelText(/add missing note fields/i));
     expect(screen.queryByLabelText(/notes preview/i)).toBeNull();
     await screen.findByLabelText(/notes preview/i);
     expect(previewOptions.map((form) => form.get("create_missing_notes"))).toEqual(["true", "false"]);
-    fireEvent.click(screen.getByLabelText(/also fill notes/i));
+    fireEvent.click(screen.getByLabelText(/include written notes/i));
     expect(screen.queryByLabelText(/notes preview/i)).toBeNull();
     expect(previewOptions).toHaveLength(2);
-    fireEvent.click(screen.getByLabelText(/also fill notes/i));
+    fireEvent.click(screen.getByLabelText(/include written notes/i));
     await screen.findByLabelText(/notes preview/i);
     expect(previewOptions).toHaveLength(3);
     expect(previewOptions[2].get("create_missing_notes")).toBe("false");
@@ -1324,7 +1324,7 @@ describe("RunDetailView mTool button", () => {
     });
 
     const create = () =>
-      screen.getByLabelText(/add missing note spots/i) as HTMLInputElement;
+      screen.getByLabelText(/add missing note fields/i) as HTMLInputElement;
     expect(create().checked).toBe(true);
     fireEvent.click(create());
     expect(create().checked).toBe(false);
@@ -1422,7 +1422,7 @@ describe("mTool filing gates", () => {
         : Response.json({ unexpected: true });
       return Response.json(FILL_DOC);
     });
-    const message = await screen.findByText(/Run checks are unavailable:/);
+    const message = await screen.findByText(/Run checks unavailable:/);
     expect(message).toBeVisible();
     expect(message.closest("details")).toBeNull();
     chooseTemplate();
@@ -1807,6 +1807,11 @@ describe("mTool preparation lifecycle", () => {
     choose("old.xlsx");
     await waitFor(() => expect(screen.queryByText("Checking template…")).toBeNull());
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    const preparation = await screen.findByText("Preparing template…");
+    expect(preparation).toHaveAttribute("role", "status");
+    expect(preparation.style.border).toBe("");
+    expect(preparation.style.background).toBe("");
+    expect(screen.queryByText(/Creates a destination only when/)).toBeNull();
     rerender(<MtoolFillModal runId={42} open={false} onClose={close} />);
     rerender(<MtoolFillModal runId={43} open onClose={close} />);
     await act(async () => { finish(patchResponse(cleanReport)); });

@@ -212,6 +212,7 @@
     .review-rail { padding: 22px 14px; background: var(--grey-50); }
     .review-rail h4 { margin: 0 0 4px; }
     .rail-meta { color: var(--text-secondary); font-size: var(--type-metadata); }
+    input[type="search"]:focus { outline: 2px solid var(--black); outline-offset: -2px; border-color: transparent; box-shadow: none; }
     .rail-search { width: 100%; min-height: 44px; margin: 14px 0 8px; padding: 8px 9px; border: 1px solid var(--grey-300); border-radius: var(--radius-md); background: var(--white); font-size: var(--type-body); }
     .rail-item { width: 100%; min-height: 40px; padding: 8px 7px; border: 0; border-radius: var(--radius-sm); background: transparent; display: grid; grid-template-columns: 20px minmax(0,1fr) 16px; gap: 5px; text-align: left; font-size: var(--type-body); cursor: pointer; }
     .rail-item.active { background: var(--white); font-weight: var(--weight-control); }
@@ -384,6 +385,7 @@
             <tr><td>A validation or save error, shown directly below the control it concerns.</td><td>Reassurance, defaults and rationale: &ldquo;You can change this later&rdquo;, &ldquo;Default: 600 seconds. Increase this for long filings&hellip;&rdquo;, how a feature works internally.</td></tr>
           </tbody>
         </table>
+        <p>Template preparation uses one unboxed status line. Keep sheet selection and optional settings in Customize; show concise labels and move automatic-placement detail to hover text.</p>
         <h3>Limits</h3>
         <p>At most one helper line per control, no longer than about 12 words, in 13 px secondary text directly below the control. A section heading has no description, or one short line when the section changes something for everyone. Never use a paragraph of helper text, a grey explanatory box or a sentence that repeats a status shown elsewhere. Detected values appear preselected, with no tag or sentence; mark only an uncertain value with an attention icon beside its label or control, and put the reason in hover text.</p>
         <div class="do-dont" style="margin-top:24px">
@@ -610,7 +612,7 @@
         </div>
         <div class="do-dont" style="margin-top:24px">
           <div class="do"><h4>Figures</h4><p>Match mTool row order and period columns. Let the reviewer edit canonical values in place. Selecting a row immediately updates the PDF evidence.</p></div>
-          <div class="do"><h4>Notes</h4><p>Keep the note inventory visible and searchable. Expand a note into meaningful destination subheadings, not sheet names. A destination click switches fields and jumps the PDF in one action. Show editing tools only for the selected field.</p></div>
+          <div class="do"><h4>Notes</h4><p>Keep the note inventory visible. Place Search fields below Note content in the main pane. Filter the selected worksheet in place by field name only; never add a search-results list to the worksheet rail. Matching empty fields remain reachable, and unsaved edits remain mounted. Expand a note into meaningful destination subheadings, not sheet names. A destination click switches fields and jumps the PDF in one action. Show editing tools only for the selected field.</p></div>
         </div>
       </section>
 
@@ -684,6 +686,7 @@
       <section id="implementation">
         <div class="section-head"><h2>Implementation contract</h2><p>This document is the production design authority. Direction A in the prototype supplies composition and screen-state examples; this guide wins where they differ.</p></div>
         <div class="handoff"><strong>Current status</strong>The canonical production contract is <code>docs/xbrl-design-system.html</code>. Production code and pinning tests follow this guide.</div>
+        <p>Search inputs use a single dark focus edge inside the existing border, with no offset outline or shadow.</p>
         <h3>UI change review gate</h3>
         <div class="checklist">
           <div class="check"><span>✓</span><div>A new operator can identify location, attention and next action within five seconds.</div></div>

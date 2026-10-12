@@ -380,3 +380,12 @@ test("Stacked worksheet navigation never covers the figures beneath it", () => {
   const narrow = css.slice(css.indexOf(".review-workspace > .review-template-rail {"));
   expect(narrow.slice(0, narrow.indexOf("}"))).toContain("position: static !important");
 });
+
+// CSS focus geometry cannot be evaluated by jsdom; pin the shared contract.
+test("search controls use one focus edge and Notes filters fields in the content pane", () => {
+  expect(designSystem).toContain("Filter the selected worksheet in place by field name only");
+  expect(designSystem).toContain("Template preparation uses one unboxed status line");
+  expect(designSystem).toContain("Search inputs use a single dark focus edge");
+  const css = readReference("../index.css");
+  expect(css).toMatch(/input\[type="search"\]:focus\s*\{[^}]*outline: 2px solid #000000;[^}]*outline-offset: -2px;[^}]*border-color: transparent !important;[^}]*box-shadow: none !important;/);
+});

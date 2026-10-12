@@ -208,6 +208,11 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     openField(screen.getByRole("button", { name: "Review Human only" }));
     fireEvent.click(screen.getByRole("button", { name: /^Edit$/ }));
     const editor = screen.getByTestId("notes-review-editor");
+    const search = screen.getByRole("searchbox", { name: "Search note field names" });
+    fireEvent.change(search, { target: { value: "Other field" } });
+    expect(screen.getByTestId("notes-review-editor")).toBe(editor);
+    expect(screen.getByText("Editing · outside this filter")).toBeVisible();
+    fireEvent.change(search, { target: { value: "" } });
     rerender(<NotesReviewTab runId={42} human={human} comparisonHighlights={[]} onlyHighlighted onShowAllComparisonFields={showAll} />);
     expect(screen.getByTestId("notes-review-editor")).toBe(editor);
     expect(screen.getByText("Editing · outside this filter")).toBeVisible();
@@ -280,11 +285,35 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(screen.queryByRole("checkbox", { name: "Only missed by AI" })).toBeNull();
     fireEvent.click(screen.getByRole("checkbox", { name: "Hide empty fields" }));
     expect(screen.queryByRole("button", { name: "Review Empty target" })).toBeNull();
-    fireEvent.change(screen.getByRole("searchbox", { name: "Search all note fields" }), { target: { value: "Empty target" } });
-    fireEvent.click(within(screen.getByRole("navigation", { name: "Matching note fields" })).getByRole("button"));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search note field names" }), { target: { value: "Empty target" } });
+    const fields = screen.getByRole("region", { name: "XBRL notes fields" });
+    expect(within(fields).getByRole("searchbox", { name: "Search note field names" })).toBeVisible();
+    expect(screen.queryByRole("navigation", { name: "Matching note fields" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Review Corporate info" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Review Empty target" }));
     expect(screen.getByRole("button", { name: "Review Empty target" })).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("checkbox", { name: "Hide empty fields" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Hide empty fields" })).toBeChecked();
     expect(pages).toHaveBeenLastCalledWith([3]);
+  });
+
+  test("field search matches names only and clearing it restores the worksheet", async () => {
+    mockFetchOnce(SAMPLE);
+    render(<NotesReviewTab runId={42} />);
+    await screen.findByRole("button", { name: "Review Corporate info" });
+    const search = screen.getByRole("searchbox", { name: "Search note field names" });
+    fireEvent.change(search, { target: { value: "  CORPORATE  " } });
+    expect(screen.getByRole("button", { name: "Review Corporate info" })).toBeVisible();
+    expect(screen.getAllByRole("button", { name: /^Review / })).toHaveLength(1);
+    // Worksheet identifiers and note body text must not count as field names.
+    fireEvent.change(search, { target: { value: "Notes-CI" } });
+    expect(screen.getByRole("status")).toHaveTextContent("No fields match this view.");
+    expect(screen.queryByRole("button", { name: /^Review / })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show all fields" }));
+    expect(search).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Review Corporate info" })).toBeVisible();
+    fireEvent.change(search, { target: { value: "<p>" } });
+    expect(screen.queryByRole("button", { name: /^Review / })).toBeNull();
+    expect(within(screen.getByRole("navigation", { name: "Notes sheet navigator" })).getAllByRole("button")).toHaveLength(SAMPLE.sheets.length);
   });
 
   test("keeps pane headings outside navigation scrolling and lets note content expand", async () => {

@@ -667,16 +667,6 @@ export function NotesReviewTab({
     ),
     [sheets],
   );
-  const filteredSourceNotes = useMemo(() => {
-    const query = noteSearch.trim().toLowerCase();
-    const inventory = sourceNotes ?? [];
-    if (!query) return inventory;
-    return inventory.filter((note) =>
-      `${note.note_num} ${note.title}`
-        .toLowerCase()
-        .includes(query),
-    );
-  }, [noteSearch, sourceNotes]);
   const activeCellKey = selectedCellKey ?? (selectedSourceNote == null ? (noteEntries.find((entry) => entry.sheet.sheet === active.sheet) ?? noteEntries[0])?.key : null) ?? null;
   // The sheet navigator is a real view switch: only this sheet is mounted.
   // Falling back to the first available sheet keeps legacy runs usable before
@@ -798,8 +788,6 @@ export function NotesReviewTab({
               <h2 style={{ ...ui.sectionTitle, margin: 0 }}>mTool worksheets</h2>
             </div>
             <div aria-label="Worksheet and source note list" role="region" style={styles.noteRailBody}>
-            <input type="search" aria-label="Search all note fields" placeholder="Search fields" value={noteSearch}
-              onChange={(event) => setNoteSearch(event.target.value)} style={styles.noteRailSearch} />
                 <nav style={{ display: "flex", flexDirection: "column", gap: 4 }} aria-label="Notes sheet navigator">
                   {(sheets ?? []).map((sheet) => {
                     const number = notesSheetNumber(sheet.sheet, filingStandard);
@@ -830,15 +818,6 @@ export function NotesReviewTab({
                   })}
                 </nav>
 
-            {noteSearch.trim() && <nav aria-label="Matching note fields" style={{ display: "flex", flexDirection: "column" }}>
-              {noteEntries.filter(({ cell, sheet }) => `${cell.label} ${sheet.sheet}`.toLowerCase().includes(noteSearch.trim().toLowerCase())).map(({ cell, sheet, key }) => (
-                <button key={key} type="button" disabled={saveBlocked || moveBusy} aria-current={activeCellKey === key ? "true" : undefined}
-                  style={{ ...styles.workspaceSheetButton, ...(activeCellKey === key ? ui.reviewSelection : {}) }}
-                  onClick={() => { setHideEmptyFields(false); setOnlyMissedFields(false); onShowAllComparisonFields?.(); setActive((current) => ({ sheet: sheet.sheet, key: current.key + 1 })); setFocusRow(cell.row); handleWorkspaceCellActivate(sheet.sheet, cell.row); reportCellPages(cell.source_pages, onActiveCellPages); }}>
-                  <span style={{ minWidth: 0 }}>{cell.label}{isBlankHtml(cell.html) && cell.kind !== "numeric" ? " · Empty" : ""}</span>
-                </button>
-              ))}
-            </nav>}
             <section aria-label="Source note inventory" style={{ marginTop: 16, paddingTop: 12 }}>
             <div style={styles.noteRailHeader}>
               <div>
@@ -859,13 +838,7 @@ export function NotesReviewTab({
               {!sourceNotesError && sourceNotes?.length === 0 && (
                 <p style={styles.noteRailEmpty}>No source-note inventory is available for this run.</p>
               )}
-              {!sourceNotesError && sourceNotes != null && sourceNotes.length > 0
-                && filteredSourceNotes.length === 0 && (
-                <p style={styles.noteRailEmpty} role="status">
-                  No source notes match your search.
-                </p>
-              )}
-              {filteredSourceNotes.map((note) => {
+              {(sourceNotes ?? []).map((note) => {
                 const selected = note.note_num === selectedSourceNote;
                 const resolved = note.reviewer_verdict === "not_applicable" || note.reviewer_verdict === "confirmed_absent";
                 const needsReview = sourceNoteNeedsReview(note);
@@ -1006,6 +979,8 @@ export function NotesReviewTab({
                 </label>}
               </div>
             </div>
+            <input type="search" aria-label="Search note field names" placeholder="Search fields" value={noteSearch}
+              onChange={(event) => setNoteSearch(event.target.value)} style={styles.fieldSearch} />
             {loadError ? (
               categoryRefreshFailed ? <div role="alert" style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
                 <p style={styles.dim}>Category saved. Notes could not be refreshed.</p>
@@ -1034,12 +1009,13 @@ export function NotesReviewTab({
                   onEditingChange={setEditing}
                   moveBusy={moveBusy}
                   attentionRows={null}
+                  fieldSearch={noteSearch}
                   hideEmptyFields={hideEmptyFields}
                   onlyMissedFields={onlyMissedFields && hasHumanComparison}
                   comparisonHighlights={comparisonHighlights}
                   onlyHighlighted={onlyHighlighted}
                   editing={editing}
-                  onShowAllFields={() => { setHideEmptyFields(false); setOnlyMissedFields(false); onShowAllComparisonFields?.(); }}
+                  onShowAllFields={() => { setNoteSearch(""); setHideEmptyFields(false); setOnlyMissedFields(false); onShowAllComparisonFields?.(); }}
                   onActiveCellPages={onActiveCellPages}
                   selectedCellKey={selectedCellKey}
                   onCellActivate={handleWorkspaceCellActivate}
@@ -1076,6 +1052,7 @@ function SheetSection({
   moveBusy,
   attentionRows,
   hideEmptyFields,
+  fieldSearch,
   onlyMissedFields,
   comparisonHighlights = [],
   onlyHighlighted = false,
@@ -1104,6 +1081,7 @@ function SheetSection({
   onEditingChange: (editing: boolean) => void;
   attentionRows: number[] | null;
   hideEmptyFields: boolean;
+  fieldSearch: string;
   onlyMissedFields: boolean;
   comparisonHighlights?: readonly ComparisonHighlight[];
   onlyHighlighted?: boolean;
@@ -1257,10 +1235,14 @@ function SheetSection({
   });
 
   const hasPendingRowSave = Object.keys(rowSaveStatuses).length > 0;
+  const fieldQuery = fieldSearch.trim().toLowerCase();
   const visibleRows = sheet.rows.filter((cell) => {
+    // Retain unsaved edits even when their field name no longer matches.
+    const pendingEdit = selectedCellKey === `${sheet.sheet}:${cell.row}` && (editing || hasPendingRowSave);
+    if (fieldQuery && !cell.label.toLowerCase().includes(fieldQuery)) return pendingEdit;
     if (cell.invalid_target || selectedCellKey === `${sheet.sheet}:${cell.row}` && ((!onlyMissedFields && !onlyHighlighted) || editing || hasPendingRowSave)) return true;
     const presence = noteFieldPresence(cell, human, humanFigures);
-    return (!hideEmptyFields || presence.filled) && (!onlyMissedFields || presence.missed)
+    return (Boolean(fieldQuery) || !hideEmptyFields || presence.filled) && (!onlyMissedFields || presence.missed)
       && (!onlyHighlighted || noteMatchesHighlights(cell, human, humanFigures, comparisonHighlights));
   }).filter((cell) => attentionRows == null || attentionRows.includes(cell.row) || cell.invalid_target);
   const numericColumns = Object.keys(NUMERIC_VALUE_COLUMNS).filter((key) =>
@@ -1347,7 +1329,7 @@ function SheetSection({
             </div>
           )}
           {attentionRows?.length === 0 && <p role="status">No placed field issues in this sheet. Check the source inventory for unplaced or unresolved notes.</p>}
-          {visibleRows.length === 0 && (hideEmptyFields || onlyMissedFields || onlyHighlighted) && <div style={{ padding: pwc.space.md }}>
+          {visibleRows.length === 0 && (fieldQuery || hideEmptyFields || onlyMissedFields || onlyHighlighted) && <div style={{ padding: pwc.space.md }}>
             <p role="status" style={styles.dim}>No fields match this view.</p>
             <button type="button" className={uiClass.btnGhost} onClick={onShowAllFields}>Show all fields</button>
           </div>}
@@ -1397,7 +1379,7 @@ function SheetSection({
             if (cell.kind === "numeric") return row;
             const selected = selectedCellKey === `${sheet.sheet}:${cell.row}`;
             const highlighted = noteMatchesHighlights(cell, human, humanFigures, comparisonHighlights);
-            const retainedForEditing = selected && (editing || hasPendingRowSave) && ((onlyMissedFields
+            const retainedForEditing = selected && (editing || hasPendingRowSave) && ((Boolean(fieldQuery) && !cell.label.toLowerCase().includes(fieldQuery)) || (onlyMissedFields
               && !noteFieldPresence(cell, human, humanFigures).missed) || (onlyHighlighted && !highlighted));
             const expanded = isFieldOpen(cell);
             const compared = Boolean(human && field);
@@ -2604,10 +2586,10 @@ const styles = {
     color: pwc.grey700,
     fontSize: 12,
   } as React.CSSProperties,
-  noteRailSearch: {
+  fieldSearch: {
     ...ui.input,
     width: "100%",
-    marginBottom: pwc.space.sm,
+    marginBottom: pwc.space.lg,
   } as React.CSSProperties,
   noteRailList: {
     minHeight: 0,
