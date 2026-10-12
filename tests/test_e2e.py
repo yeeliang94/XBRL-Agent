@@ -348,8 +348,8 @@ def test_group_filing_e2e_mocked(full_pipeline_env):
 
 @pytest.mark.parametrize("notes_tieout_failed", [False, True])
 def test_clean_run_always_fires_triage(full_pipeline_env, monkeypatch, notes_tieout_failed):
-    """A clean run with facts launches review triage even with obsolete
-    settings present.
+    """A run with facts and no reviewer-actionable failure launches review
+    triage even with obsolete settings present.
 
     The fact-presence probe is forced True so triage launches; the reviewer's
     own guard then finds no rows and reports ``no_extracted_facts_to_review``.
@@ -416,14 +416,15 @@ def test_clean_run_always_fires_triage(full_pipeline_env, monkeypatch, notes_tie
     # And the reviewing stage was emitted at the boundary.
     stages = [e["data"].get("stage") for e in events
               if e["event"] == "pipeline_stage" and isinstance(e.get("data"), dict)]
+    # Runs 183-185: a failed notes↔face tie-out is not reviewer-actionable, so
+    # it must not suppress the figures triage a fully clean run receives. The
+    # tie-out itself stays failed for filing readiness and notes review.
+    assert correction_events, "figures triage must launch"
+    assert all(e["data"].get("phase") != "skipped" for e in correction_events)
+    assert "reviewing" in stages
     if notes_tieout_failed:
-        assert correction_events and all(e["data"].get("phase") == "skipped" for e in correction_events)
-        assert "reviewing" not in stages
         terminal = next(e["data"] for e in events if e["event"] == "run_complete")
         assert any(check["status"] == "failed" for check in terminal["cross_checks"])
-    else:
-        assert correction_events, "clean run must launch reviewer triage"
-        assert "reviewing" in stages
 
     # Peer-review HIGH (2026-06-21): the reviewer's own guard finds no real
     # facts, so the spot-check fails with `no_extracted_facts_to_review` and its CORRECTION

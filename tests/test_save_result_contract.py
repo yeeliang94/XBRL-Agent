@@ -759,3 +759,29 @@ def test_save_result_finalises_without_resending_facts(tmp_path):
     assert "Results saved to" in msg
     assert deps.result_saved is True
     assert json.loads((tmp_path / "SOFP_result.json").read_text()) == {}
+
+
+def test_verified_gap_lets_the_first_acknowledgement_finish(tmp_path):
+    """Runs 183-185: verify_totals already explained the mandatory gap and the
+    audited completion path, so a first acknowledgement is not refused again."""
+    from unittest.mock import patch as mock_patch
+    from tools.verifier import VerificationResult
+
+    agent, deps, ctx = _gate_open_ctx(tmp_path)
+    (tmp_path / "SOFP_filled.xlsx").write_bytes(b"")
+    tools = {name: tool.function for ts in agent.toolsets
+             for name, tool in (getattr(ts, "tools", {}) or {}).items()}
+    gap = VerificationResult(
+        is_balanced=True, matches_pdf=None, mismatches=[],
+        mandatory_unfilled=["*Non-controlling interests"],
+    )
+    with mock_patch("extraction.agent._verify_statement_impl", return_value=gap):
+        rendered = tools["verify_totals"](ctx)
+    assert "acknowledge_unresolved=true" in rendered
+
+    msg = tools["save_result"](
+        ctx, acknowledge_unresolved=True,
+        unresolved_reason="*Non-controlling interests: not applicable, Company filing; page 5 checked",
+    )
+    assert "Results saved to" in msg
+    assert deps.completed_with_flag is True

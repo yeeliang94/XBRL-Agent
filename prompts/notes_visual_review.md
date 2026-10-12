@@ -34,18 +34,32 @@ A thick continuous solid bottom rule is still single. Classify an edge as
 double only when two separate strokes with a visible gap occur on that same
 edge. Do not convert a thick single rule into a double rule. If the scan cannot
 resolve that gap, report uncertainty rather than demand a double underline.
+Each table arrives as its own packet with the text before it and its first
+row. Judge every table only against its own source table and years; a note's
+current-year and comparative tables often look alike, so match them by the
+year line and row labels before comparing.
 Report exact note row, table, year, row label and offending edge in the reason
-when correction is needed. If the copied table itself differs from the PDF —
+when correction is needed. For every finding that is not a pass, copy into
+observed_text an exact row label or cell text from that table's canonical
+candidate naming the affected row. A structure finding without such a quote is
+not acted on. If the copied table itself differs from the PDF —
 a total or data row captured as heading cells, a missing, extra or merged row,
 an amount under the wrong column, or a heading over the wrong column — set
 issue_kind to structure, mark it unresolved and describe the difference. That
 table is re-copied from the source; appearance corrections cannot fix it. Use
 issue_kind style for everything else.
 Wrong source-page identity is issue_kind source_provenance; added or missing
-words or figures are source_content; captured emphasis that must be removed
+words or figures are source_content (when a table also has another issue,
+quote the wrong or missing words in content_defect and keep the separate issue
+in reason); captured emphasis that must be removed
 is source_emphasis. These stay unresolved for source correction or human
 review; cite the recorded page and the exact note, table, row label and
 amounts. Do not request formatting changes to repair them.
+Formatting can only add bold to a whole row; it cannot remove bold or
+underline copied from the source, and it cannot bold part of a row. Extra bold
+on a row the FORMATTER LAYOUT marks bold is style (the layout can drop it).
+Extra bold or underline that was copied with the source text, or emphasis the
+source shows on only part of a row, is source_emphasis.
 
 Apply the STANDARDISED MTOOL PROFILE: amount-column names, currency captions,
 period headers and figures are right-aligned, descriptions left-aligned. The

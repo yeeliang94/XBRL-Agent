@@ -58,8 +58,9 @@ async def propose_cleanup(*, cells, pdf_path, model, usage, output_dir):
         try:
             apply_patch(cells, patch, ctx.deps.viewed)
         except ValueError as exc:
-            raise ModelRetry(f'Invalid cleanup proposal: {exc}. Correct the proposal using '
-                             'the supplied blocks and pages actually viewed; keep uncertain blocks.') from exc
+            raise ModelRetry(f'Invalid cleanup proposal: {exc}. Every listed removal must be '
+                             'corrected or dropped; removals not listed are valid and may be kept. '
+                             'Use the supplied blocks and pages actually viewed; keep uncertain blocks.') from exc
         return patch
 
     @agent.tool
