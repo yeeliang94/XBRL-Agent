@@ -1190,10 +1190,11 @@ describe("ConceptsPage", () => {
     fireEvent.mouseDown(within(revenuePolicyRow!).getByTestId("notes-review-editor"));
     expect(shared).toHaveAttribute("aria-current", "true");
 
-    fireEvent.change(screen.getByRole("searchbox", { name: "Search all note fields" }), {
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search note field names" }), {
       target: { value: "not in the inventory" },
     });
-    expect(screen.getByText("No source notes match your search.")).toBeTruthy();
+    expect(screen.getByText("No fields match this view.")).toBeVisible();
+    expect(shared).toBeVisible();
   });
 
   test("the old notes checklist card is not repeated in figures", async () => {

@@ -488,6 +488,7 @@ export function NotesReviewTab({
   }, [hasHumanComparison]);
   useEffect(() => {
     if (!focusCell || saveBlocked || moveBusy) return;
+    setNoteSearch("");
     setHideEmptyFields(false);
     setOnlyMissedFields(false);
     onShowAllComparisonFields?.();
@@ -716,6 +717,7 @@ export function NotesReviewTab({
     pages: number[] = sourceNotePages(note),
   ) => {
     if (saveBlocked || moveBusy) return;
+    setNoteSearch("");
     setHideEmptyFields(false);
     setOnlyMissedFields(false);
     setSelectedSourceNote(note.note_num);
