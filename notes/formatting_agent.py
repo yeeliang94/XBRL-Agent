@@ -15,6 +15,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Collection
 from typing import Any, Callable, Optional, Union
@@ -33,8 +34,10 @@ from notes.format_patch import (
     FormatPatchError,
     apply_sheet_patch,
 )
-from notes.format_schema import SheetFormatPatch, patch_to_dict
+from notes.format_schema import NoteLayout, SheetLayout, layout_to_dict
+from notes.table_layout import LayoutError, layout_manifest, layout_operations
 from notes.format_verify import table_rows as _direct_table_rows
+from notes.rule_map import rule_map_text
 from notes.table_theme import firm_theme, resolve_run_theme
 from model_settings import build_model_settings, describe_model_runtime
 
@@ -81,13 +84,13 @@ _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "notes_formatte
 
 _STRUCTURED_OUTPUT_INSTRUCTION = """\
 === OUTPUT MODE: STRUCTURED ===
-Return one SheetFormatPatch through the enforced structured-output schema.
-Do not write JSON text, Markdown, commentary, or a second copy of the patch.
+Return one SheetLayout through the enforced structured-output schema.
+Do not write JSON text, Markdown, commentary, or a second copy of the layout.
 """
 
 _JSON_FALLBACK_INSTRUCTION = """\
 === OUTPUT MODE: JSON FALLBACK ===
-Return exactly one JSON object matching the SheetFormatPatch fields described
+Return exactly one JSON object matching the SheetLayout fields described
 above. Do not wrap it in Markdown and do not add commentary before or after it.
 """
 
@@ -150,14 +153,14 @@ def structured_output_enabled() -> bool:
 def _output_json(output: Any) -> str:
     """Normalise an agent result to the JSON text the screening path expects.
 
-    With `output_type` set, `result.output` is a validated `SheetFormatPatch`
+    With `output_type` set, `result.output` is a validated `SheetLayout`
     and `str()` of it would be a Python repr. Everything downstream — the
     screening gates, and the retry prompts that quote the model's own answer
     back to it — works on JSON text, so convert once here rather than
     branching in four places.
     """
-    if isinstance(output, SheetFormatPatch):
-        return json.dumps(patch_to_dict(output), ensure_ascii=False)
+    if isinstance(output, SheetLayout):
+        return json.dumps(layout_to_dict(output), ensure_ascii=False)
     return str(output)
 
 # Failure taxonomy persisted to notes_format_tasks.error_type (schema v27) —
@@ -217,7 +220,7 @@ def create_notes_formatter_agent(
     base_prompt = _PROMPT_PATH.read_text(encoding="utf-8").strip()
     output_type = str
     if structured_output_enabled():
-        output_type = SheetFormatPatch
+        output_type = SheetLayout
         base_prompt += "\n\n" + _STRUCTURED_OUTPUT_INSTRUCTION.strip()
     else:
         base_prompt += "\n\n" + _JSON_FALLBACK_INSTRUCTION.strip()
@@ -459,6 +462,11 @@ async def run_notes_formatter(
 
     outcome = None
     status = "failed"
+    # The first pass and a post-re-copy pass write snapshots separately; one
+    # shared start time keeps the second from wiping the first's revert copy.
+    if pass_started_at is None:
+        pass_started_at = datetime.now(timezone.utc).isoformat(
+            timespec="microseconds").replace("+00:00", "Z")
     try:
         outcome = await _run_notes_formatter_impl(
             run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
@@ -467,6 +475,15 @@ async def run_notes_formatter(
             pass_started_at=pass_started_at, trace_label=trace_label, on_phase=_phase,
             activity=activity,
         )
+        from notes.visual_review import structure_findings
+        structural = structure_findings(outcome)
+        if structural:
+            outcome = await _recopy_and_reformat(
+                outcome, structural, run_id=run_id, db_path=db_path, pdf_path=pdf_path,
+                sheet=sheet, model=model, model_name=model_name, output_dir=output_dir,
+                usage=usage, pass_started_at=pass_started_at, trace_label=trace_label,
+                on_phase=_phase, activity=activity,
+            )
         outcome.update(_usage_fields(usage))
         status = "completed" if outcome.get("ok") else "failed"
         return outcome
@@ -507,6 +524,80 @@ async def run_notes_formatter(
 
 
 
+async def _recopy_and_reformat(outcome: dict, structural: dict, *, run_id: int, db_path: str,
+                               pdf_path: str, sheet: str, model, model_name: str,
+                               output_dir: str, usage: RunUsage, pass_started_at,
+                               trace_label, on_phase, activity=None) -> dict:
+    """Re-copy wrongly copied tables from the PDF, then format the rebuilt notes.
+
+    The rebuilt notes get one ordinary formatting pass with its own visual
+    check. A table that cannot be re-copied keeps its original finding.
+    """
+    from notes.table_recopy import recopy_tables
+
+    recopy = await recopy_tables(run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
+                                 findings=structural, model=model, model_name=model_name,
+                                 on_phase=on_phase)
+    usage.incr(RunUsage(input_tokens=recopy["usage"]["prompt_tokens"],
+                        output_tokens=recopy["usage"]["completion_tokens"]))
+    result = {**outcome, "table_recopy": recopy}
+    rebuilt = set(recopy["rebuilt_rows"])
+    if not rebuilt:
+        for row, reason in recopy["errors"].items():
+            if str(row) in (result.get("row_errors") or {}) or row in (result.get("row_errors") or {}):
+                key = row if row in result["row_errors"] else str(row)
+                result["row_errors"][key] += "; " + reason
+        return result
+    try:
+        final = await _run_notes_formatter_impl(
+            run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet, model=model,
+            output_dir=output_dir, usage=usage, style_sources=None, rows=sorted(rebuilt),
+            pass_started_at=pass_started_at,
+            trace_label=f"{trace_label or 'notes_format_' + sheet}_after_recopy", on_phase=on_phase,
+            activity=activity,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — the first pass and re-copy are already saved
+        # Keep their changed-row counts and receipts; only the rebuilt rows
+        # stay unresolved.
+        logger.warning("Formatting re-copied notes failed run=%s sheet=%s", run_id, sheet,
+                       exc_info=True)
+        final = {"ok": False, "changed_rows": 0,
+                 "error": f"Formatting the re-copied note failed: {type(exc).__name__}: {exc}"}
+    errors = {int(row): error for row, error in (outcome.get("row_errors") or {}).items()
+              if int(row) not in rebuilt}
+    errors.update({int(row): error for row, error in (final.get("row_errors") or {}).items()})
+    if not final.get("ok") and not final.get("row_errors"):
+        errors.update({row: final.get("error") or "Re-copied note formatting is unresolved." for row in rebuilt})
+    for row, reason in recopy["errors"].items():
+        if row in errors:
+            errors[row] += "; " + reason
+    verified = {str(row): identity for row, identity in (outcome.get("verified_rows") or {}).items()
+                if int(row) not in rebuilt}
+    verified.update({str(row): identity for row, identity in (final.get("verified_rows") or {}).items()})
+    result.update(
+        ok=not errors, verified_rows=verified,
+        changed_rows=int(outcome.get("changed_rows") or 0) + int(final.get("changed_rows") or 0),
+        after_recopy=final,
+        summary=(f"Re-copied {len(recopy['corrected'])} table(s) from the source PDF. "
+                 + (final.get("summary") or "")),
+    )
+    warnings = recopy.get("warnings") or {}
+    if warnings:
+        # The note is right for this run, so not a failure, but the user must
+        # hear that a rerun of the upload may bring the old table back.
+        result["recopy_warnings"] = warnings
+        result["summary"] += " " + " ".join(
+            f"Row {row}: {text}" for row, text in sorted(warnings.items()))
+    for key in ("error", "error_type", "failed_rows", "row_errors"):
+        result.pop(key, None)
+    if errors:
+        result.update(error="; ".join(errors.values()), error_type="visual_review_failed",
+                      failed_rows=sorted(errors), row_errors=errors)
+    return result
+
+
 async def _run_notes_formatter_impl(
     *,
     run_id: int,
@@ -539,6 +630,15 @@ async def _run_notes_formatter_impl(
         c for c in filled_cells
         if formatter_cell_is_candidate(c, style_sources)
     ]
+    # Never overwrite a note a person edited, even on an explicit retry.
+    person_edited = sorted(c.row for c in cells if c.style_source == "human")
+    cells = [c for c in cells if c.style_source != "human"]
+    if not cells and person_edited:
+        return {
+            "ok": False,
+            "error": "These notes were edited by a person; the formatter does not overwrite them.",
+            "error_type": "precondition_failed", "person_edited_rows": person_edited,
+        }
     if not cells:
         if filled_cells and style_sources is not None:
             return {
@@ -570,9 +670,8 @@ async def _run_notes_formatter_impl(
     # Handoff item 2: hand the agent the deterministic mTool size verdicts
     # (lite / flat / oversize) for this sheet, computed with the run's
     # resolved theme, so its judgement targets the right remedy per flag.
-    size_signals = collect_size_signals(
-        cells, _resolve_notes_table_theme(db_path, run_id),
-    )
+    output_theme = _resolve_notes_table_theme(db_path, run_id)
+    size_signals = collect_size_signals(cells, output_theme)
     agent, deps = create_notes_formatter_agent(
         run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet, model=model,
     )
@@ -590,6 +689,7 @@ async def _run_notes_formatter_impl(
     prompt = _build_user_prompt(
         sheet, cells, page_set, size_signals,
         source_pages_attached=pages_attached,
+        appearance=output_theme,
     )
     initial_prompt: Any = [prompt, *source_content] if pages_attached else prompt
     if deps is not None:
@@ -646,8 +746,18 @@ async def _run_notes_formatter_impl(
     # Validate each notes cell independently, retaining all operations for a
     # row as one unit. A bad target must not discard unrelated valid notes.
     repair_attempted = False
+    padding = NotesTableStyle.from_theme(output_theme).cell_padding_px
+    layouts_by_row: dict[int, dict] = {}
+
+    def _keep_layouts(layout: dict, accepted: dict) -> None:
+        rows_ok = {cell["row"] for cell in accepted["cells"]}
+        layouts_by_row.update({note["row"]: note for note in layout.get("notes") or []
+                               if isinstance(note, dict) and note.get("row") in rows_ok})
+
     try:
-        patch, rejected_patch, row_errors = _partition_valid_patch(rows_for_patch, patch)
+        layout = patch
+        patch, rejected_patch, row_errors = _partition_layout(rows_for_patch, layout, padding)
+        _keep_layouts(layout, patch)
     except FormatPatchError as exc:
         # No trustworthy row identity: repair the whole patch once, without
         # coercing model-authored row numbers into writable targets.
@@ -666,11 +776,12 @@ async def _run_notes_formatter_impl(
         if err is not None:
             return failure
         try:
-            patch, rejected_patch, row_errors = _partition_valid_patch(
-                rows_for_patch, screened.patch,
+            patch, rejected_patch, row_errors = _partition_layout(
+                rows_for_patch, screened.patch, padding,
             )
         except FormatPatchError:
             return failure
+        _keep_layouts(screened.patch, patch)
         if not apply_sheet_patch(rows_for_patch, patch).changed_rows:
             return failure
         summary = screened.summary
@@ -687,12 +798,13 @@ async def _run_notes_formatter_impl(
             # The repair owns only rejected rows. It cannot replace previously
             # accepted decisions, nor silently style a different note.
             try:
-                repaired, _, repair_errors = _partition_valid_patch(
+                repaired, _, repair_errors = _partition_layout(
                     {row: html for row, html in rows_for_patch.items() if row in row_errors},
-                    screened.patch,
+                    screened.patch, padding,
                 )
             except FormatPatchError:
                 repaired, repair_errors = {"cells": []}, {}
+            _keep_layouts(screened.patch, repaired)
             for cell in repaired["cells"]:
                 row = cell["row"]
                 check = apply_sheet_patch(rows_for_patch, {"cells": [cell]})
@@ -715,7 +827,8 @@ async def _run_notes_formatter_impl(
         run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
         model=model, usage=usage, formatter_run=_agent_run,
         output_dir=output_dir, trace_label=trace_label or f"notes_format_{sheet}",
-        on_phase=on_phase, activity=activity,
+        on_phase=on_phase, originals=rows_for_patch, layouts=layouts_by_row,
+        cell_padding=padding, activity=activity,
     )
     for row, html in corrected_rows.items():
         applied.rows[row] = html
@@ -756,6 +869,13 @@ async def _run_notes_formatter_impl(
         for row, html in sorted(applied.rows.items()):
             live = live_cells.get(row)
             launch = cells_by_row[row]
+            # Re-check ownership under the write lock: a person may have saved
+            # this note (even with identical HTML) after launch, and the HTML
+            # compare-and-swap alone would then strip their ownership.
+            if live is not None and live.style_source == "human":
+                person_edited.append(row)
+                row_errors.pop(row, None)
+                continue
             if (live is None or live.html != rows_for_patch[row]
                 or live.source_pages != launch.source_pages
                 or live.source_generation_id != launch.source_generation_id):
@@ -807,6 +927,8 @@ async def _run_notes_formatter_impl(
                                   else "Formatting applied.")
     if skipped_rows:
         summary_out += f" {len(skipped_rows)} row(s) skipped — edited during formatting."
+    if person_edited:
+        summary_out += f" {len(person_edited)} person-edited row(s) left unchanged."
     return {
         "ok": not row_errors, "summary": summary_out,
         "visual_review": visual_review,
@@ -817,48 +939,52 @@ async def _run_notes_formatter_impl(
            if row_errors else {}),
         "changed_rows": written,
         "skipped_rows": skipped_rows,
-        "patch": patch, "before_text_hash": applied.before_text_hash,
+        **({"person_edited_rows": sorted(person_edited)} if person_edited else {}),
+        "patch": patch, "layouts": {str(row): note for row, note in sorted(layouts_by_row.items())},
+        "before_text_hash": applied.before_text_hash,
         "after_text_hash": applied.after_text_hash,
     }
 
 
-def _partition_valid_patch(
-    current_rows: dict[int, str], patch: dict[str, Any],
+def _partition_layout(
+    current_rows: dict[int, str], layout: dict[str, Any],
+    cell_padding: tuple[int, int] = (3, 3),
 ) -> tuple[dict[str, Any], dict[str, Any], dict[int, str]]:
-    """Isolate notes rows; never salvage individual operations within a row."""
-    cells = patch.get("cells")
-    if not isinstance(cells, list):
-        raise FormatPatchError("patch.cells must be a list")
-    grouped: dict[int, list[dict[str, Any]]] = {}
-    for cell in cells:
-        if not isinstance(cell, dict):
-            raise FormatPatchError("cell patch must be an object")
-        if type(cell.get("row")) is not int:
-            raise FormatPatchError("cell patch row must be an integer")
-        grouped.setdefault(cell["row"], []).append(cell)
+    """Compile each note row's layout independently into patch operations.
+
+    Returns ``(patch, rejected_layout, row_errors)``. A row whose layout does
+    not fit its live tables is rejected whole with specific messages; valid
+    rows proceed. Raises FormatPatchError only when row identity is unusable.
+    """
+    notes = layout.get("notes")
+    if not isinstance(notes, list):
+        raise FormatPatchError("layout.notes must be a list")
+    grouped: dict[int, list[Any]] = {}
+    for note in notes:
+        if not isinstance(note, dict) or type(note.get("row")) is not int:
+            raise FormatPatchError("each note layout needs an integer row")
+        grouped.setdefault(note["row"], []).append(note)
     accepted, rejected, errors = [], [], {}
     for row, entries in grouped.items():
         try:
-            if any(not isinstance(entry.get("operations"), list) for entry in entries):
-                raise FormatPatchError(f"row {row} operations must be a list")
-            merged = {"row": row, "operations": [
-                op for entry in entries for op in entry["operations"]
-            ]}
-            if any(
-                isinstance(op, dict) and isinstance(op.get("style"), dict)
-                and "underline" in op["style"]
-                for op in merged["operations"]
-            ):
-                raise FormatPatchError(
-                    "text underline is not a formatter operation; use a table border"
-                )
-            apply_sheet_patch(current_rows, {"cells": [merged]})
-        except FormatPatchError as exc:
+            if len(entries) > 1:
+                raise FormatPatchError("the row is described more than once")
+            if row not in current_rows:
+                raise FormatPatchError(f"row {row} is not a filled notes cell")
+            try:
+                note = NoteLayout.model_validate(entries[0])
+            except ValueError as exc:
+                raise FormatPatchError(f"invalid layout: {exc}") from exc
+            ops = layout_operations(current_rows[row], note.tables, cell_padding)
+            ops += [op.model_dump(exclude_none=True) for op in note.blocks]
+            cell = {"row": row, "operations": ops}
+            apply_sheet_patch(current_rows, {"cells": [cell]})
+        except (FormatPatchError, LayoutError) as exc:
             rejected.extend(entries)
             errors[row] = f"row {row}: {exc}"
         else:
-            accepted.append(merged)
-    return ({**patch, "cells": accepted}, {**patch, "cells": rejected}, errors)
+            accepted.append(cell)
+    return ({"cells": accepted}, {**layout, "notes": rejected}, errors)
 
 
 def collect_size_signals(
@@ -945,18 +1071,18 @@ def _build_user_prompt(
     size_signals: Optional[list[dict[str, Any]]] = None,
     *,
     source_pages_attached: bool = False,
+    appearance: Optional[dict[str, Any]] = None,
 ) -> str:
     compact_rows = []
     for c in cells:
-        geometry = _table_geometry(c.html)
         compact_rows.append({
             "row": c.row, "label": c.label, "html": c.html,
             "evidence": c.evidence, "source_pages": c.source_pages,
-            # Give the first turn the same closed coordinate catalog a repair
-            # would receive. This prevents the common one-cell-row/column-2
-            # mistake without duplicating the full derived geometry beside
-            # the source HTML or weakening the deterministic validator.
-            "allowed_targets": _allowed_targets_from_geometry(geometry),
+            # One entry per physical line; the raw HTML stores each twice.
+            "current_rules": rule_map_text(c.html),
+            # Grid columns per cell: the coordinates a layout uses. Word
+            # source-styled tables are omitted and need no layout.
+            "layout_tables": layout_manifest(c.html),
         })
     source_instruction = (
         f"Source page images {pages} are attached below. Do not call "
@@ -969,7 +1095,8 @@ def _build_user_prompt(
         f"Format sheet {sheet!r}. {source_instruction} Then return one JSON "
         "patch for this sheet only."
         f"{_size_signals_block(size_signals or [])}\n\n"
-        "Use only coordinates present in each row's allowed_targets catalog. "
+        "RESOLVED OUTPUT APPEARANCE: " + json.dumps(appearance or firm_theme()) + "\n"
+        "Describe every table listed in each row's layout_tables, using its grid columns. "
         f"CURRENT CELLS:\n{json.dumps(compact_rows, ensure_ascii=False)}"
     )
 
@@ -1021,90 +1148,23 @@ async def _preload_source_pages(
 
 def _build_validation_repair_prompt(
     sheet: str,
-    patch: dict[str, Any],
+    layout: dict[str, Any],
     error: str,
     rows_for_patch: dict[int, str],
 ) -> str:
-    geometry = {
-        row: _table_geometry(html) for row, html in sorted(rows_for_patch.items())
-    }
-    failed_rows = {
-        int(item.get("row"))
-        for item in (patch.get("cells") or [])
-        if isinstance(item, dict) and isinstance(item.get("row"), int)
-    }
-    allowed_targets = {
-        row: _allowed_targets_from_geometry(geometry.get(row, []))
-        for row in sorted(failed_rows)
-        if row in geometry
-    }
+    coordinates = {row: layout_manifest(html) for row, html in sorted(rows_for_patch.items())}
     return (
-        "Your previous formatter patch failed deterministic validation and was "
-        "not saved. Return one full corrected JSON patch using only targets "
-        "that exist in the current HTML. If you cannot safely map the source "
-        "formatting to existing cells, return a no-op patch with cells: [] and "
-        "a low-risk summary. That safe fallback will retain the original "
-        "validation_failed classification; it is not ordinary successful "
-        "formatting. Do not change content.\n\n"
+        "Your previous layout did not fit the live tables and was not saved. "
+        "Return one corrected SheetLayout for these rows only. Each row needs "
+        "exactly one layout per table in its coordinates, one column role per "
+        "grid column, and lines whose columns start and end on whole cells. If "
+        "you cannot describe a table safely, omit that row; it stays unresolved. "
+        "Do not change content.\n\n"
         f"SHEET: {sheet}\n"
         f"VALIDATION ERROR: {error}\n"
-        f"FAILED PATCH:\n{json.dumps(patch, ensure_ascii=False)}\n\n"
-        f"CURRENT TABLE GEOMETRY BY ROW:\n"
-        f"{json.dumps(geometry, ensure_ascii=False)}\n\n"
-        "ALLOWED TARGETS FOR FAILED ROWS (generated from that geometry):\n"
-        f"{json.dumps(allowed_targets, ensure_ascii=False)}"
+        f"FAILED LAYOUT:\n{json.dumps(layout, ensure_ascii=False)}\n\n"
+        f"LAYOUT COORDINATES BY ROW:\n{json.dumps(coordinates, ensure_ascii=False)}"
     )
-
-
-def _allowed_targets_from_geometry(
-    tables: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Return only target shapes that can match the supplied table geometry.
-
-    This is repair guidance, not a second validator.  ``format_patch`` remains
-    authoritative; the generated choices stop the model from guessing table
-    indexes or row/cell coordinates that the current HTML cannot contain.
-    """
-    allowed: list[dict[str, Any]] = []
-    for table in tables:
-        table_idx = table.get("table")
-        rows = table.get("rows") or []
-        if not isinstance(table_idx, int):
-            continue
-        allowed.extend([
-            {"table": table_idx, "range": "all"},
-            {"table": table_idx, "range": "table"},
-        ])
-        if rows:
-            allowed.append({"table": table_idx, "range": "header"})
-            allowed.append({
-                "table": table_idx,
-                "rows": [r.get("r") for r in rows if isinstance(r.get("r"), int)],
-                "valid_cells": [
-                    {"r": r.get("r"), "c": cell.get("c")}
-                    for r in rows
-                    for cell in (r.get("cells") or [])
-                    if isinstance(r.get("r"), int)
-                    and isinstance(cell, dict)
-                    and isinstance(cell.get("c"), int)
-                ],
-            })
-            if any(
-                "total" in str(cell.get("text") or "").lower()
-                for r in rows for cell in (r.get("cells") or [])
-                if isinstance(cell, dict)
-            ):
-                allowed.append({"table": table_idx, "range": "total_rows"})
-            if any(
-                re.fullmatch(
-                    r"\(?-?\d[\d,]*(?:\.\d+)?\)?",
-                    str(cell.get("text") or "").strip(),
-                )
-                for r in rows for cell in (r.get("cells") or [])
-                if isinstance(cell, dict)
-            ):
-                allowed.append({"table": table_idx, "range": "numeric_cells"})
-    return allowed
 
 
 def _build_output_rejected_prompt(
@@ -1117,8 +1177,8 @@ def _build_output_rejected_prompt(
         "Your previous response was rejected before it could be validated:\n"
         f"REJECTION: {error}\n\n"
         "Return the SAME formatting decisions as ONE raw JSON object using the "
-        "patch schema — no prose, no Markdown fences, nothing before or after "
-        f"the JSON. The patch's \"sheet\" must be {sheet!r}.\n\n"
+        "SheetLayout schema — no prose, no Markdown fences, nothing before or after "
+        f"the JSON. The layout's \"sheet\" must be {sheet!r}.\n\n"
         f"YOUR REJECTED RESPONSE:\n{snippet}"
     )
 

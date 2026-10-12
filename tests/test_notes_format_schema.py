@@ -1,18 +1,12 @@
-"""The formatter's declared output shape must match what the validator takes.
+"""The formatter's declared output shape: a table layout, enforced by the provider.
 
-The formatter returned free-form text that `_parse_json_patch` repaired —
-stripping ```json fences, then hunting for the first balanced object when the
-model wrapped its answer in prose. That repair existed because the shape was
-only ASKED for, in the prompt. `notes/format_schema.py` declares it instead,
-so the provider enforces it.
+The formatter describes what each table IS (column roles, row roles, lines);
+`notes/table_layout.py` validates that against the live note and compiles it.
+These tests pin the schema boundary: unknown keys are refused, unset keys are
+not serialised, and an empty answer is valid.
 
-The remaining risk is DRIFT: new validator keys must be represented in the
-schema unless deliberately legacy-only, as text underline now is. These tests
-hold the AI vocabulary to the validator's supported keys.
-
-Not covered: whether a model answers a nested schema as well as it answers
-prose. That needs a live formatter run. `XBRL_NOTES_FORMATTER_STRUCTURED=0` is
-the way back if it does not.
+Not covered: answer quality on a nested schema. That needs a live formatter
+run. `XBRL_NOTES_FORMATTER_STRUCTURED=0` is the way back if it does not.
 """
 from __future__ import annotations
 
@@ -20,140 +14,49 @@ import json
 import typing
 
 import pytest
+from pydantic import ValidationError
 
 from notes import format_patch
-from notes.format_patch import apply_cell_operations
-from notes.format_schema import (
-    SheetFormatPatch,
-    Style,
-    Target,
-    patch_to_dict,
-)
-
-_TABLE = (
-    "<table>"
-    "<tr><th>Item</th><th>2024</th><th>2023</th></tr>"
-    "<tr><td>Widgets</td><td>1,000</td><td>900</td></tr>"
-    "<tr><td>Total</td><td>1,000</td><td>900</td></tr>"
-    "</table>"
-)
+from notes.format_schema import NoteLayout, SheetLayout, layout_to_dict
 
 
-def _apply(operations: list[dict]) -> str:
-    patch = SheetFormatPatch.model_validate(
-        {
-            "sheet": "S",
-            "cells": [{"row": 1, "operations": operations}],
-            "format_summary": "t",
-        }
-    )
-    return apply_cell_operations(
-        _TABLE, patch_to_dict(patch)["cells"][0]["operations"]
-    )
-
-
-# ---------------------------------------------------------------------------
-# The schema matches the validator except for legacy text underline.
-# ---------------------------------------------------------------------------
-
-def test_every_ai_style_key_the_validator_accepts_exists_on_the_schema():
-    """Only legacy underline is intentionally excluded from the AI contract."""
-    accepted = set(format_patch.STYLE_TO_CSS) | {
-        "clear_border", "fill", "text_align", "indent", "padding",
-        "space_before", "space_after", "table_width", "bold", "italic",
-    }
-    missing = accepted - set(Style.model_fields)
-    assert not missing, f"schema cannot express style keys: {sorted(missing)}"
-
-
-def test_every_target_mode_the_validator_accepts_exists_on_the_schema():
-    for field in ("table", "range", "cols", "cell", "rows", "blocks"):
-        assert field in Target.model_fields, field
-
-
-def test_border_widths_and_styles_match_the_validator():
-    from notes.format_schema import BorderStyle, BorderWidth
-
-    assert set(typing.get_args(BorderWidth)) == format_patch.BORDER_WIDTHS
-    assert set(typing.get_args(BorderStyle)) == format_patch.BORDER_STYLES
-
-
-def test_text_align_matches_the_validator():
+def test_block_alignment_matches_the_validator():
     from notes.format_schema import TextAlign
 
     assert set(typing.get_args(TextAlign)) == format_patch.TEXT_ALIGN
 
 
-def test_sides_match_the_validator():
-    from notes.format_schema import Side
-
-    assert set(typing.get_args(Side)) == set(format_patch.SIDES)
-
-
-# ---------------------------------------------------------------------------
-# End to end: schema output must survive the real validator.
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize("name,ops", [
-    ("prompt example 1 — borderless with summation rules", [
-        {"target": {"table": 0, "range": "all"},
-         "style": {"clear_border": ["top", "right", "bottom", "left"]}},
-        {"target": {"table": 0, "range": "total_rows", "cols": [2, 3]},
-         "style": {"border_top": {"width": "1px", "style": "solid", "color": "#000000"},
-                   "border_bottom": {"width": "3px", "style": "double", "color": "#000000"}}},
-        {"target": {"table": 0, "range": "numeric_cells"},
-         "style": {"text_align": "right"}},
-    ]),
-    ("prompt example 2 — one coloured top border", [
-        {"target": {"table": 0, "cell": {"r": 3, "c": 2}},
-         "style": {"border_top": {"width": "1px", "style": "solid", "color": "#666666"}}},
-    ]),
-    ("bare 'hidden' border literal", [
-        {"target": {"table": 0, "range": "header"}, "style": {"border_bottom": "hidden"}},
-    ]),
-    ("fill + bold + padding", [
-        {"target": {"table": 0, "range": "header"},
-         "style": {"fill": "header_fill", "bold": True, "padding": "4px 8px"}},
-    ]),
-    ("rows target + table_width", [
-        {"target": {"table": 0, "rows": [1]}, "style": {"italic": True}},
-        {"target": {"table": 0, "range": "table"}, "style": {"table_width": "100%"}},
-    ]),
+@pytest.mark.parametrize("note", [
+    {"row": 1, "tables": [{"table": 0, "columns": ["label"], "colour": "red"}]},
+    {"row": 1, "blocks": [{"target": {"blocks": "all"}, "style": {"underline": True}}]},
+    {"row": 1, "tables": [{"table": 0, "columns": ["figures"]}]},
+    {"row": 1, "tables": [{"table": 0, "columns": ["label"],
+                           "lines": [{"after_row": 1, "from_col": 1, "to_col": 1, "kind": "thick"}]}]},
 ])
-def test_schema_output_passes_the_validator(name, ops):
-    assert _apply(ops), name
+def test_unknown_keys_and_values_are_refused(note):
+    with pytest.raises(ValidationError):
+        NoteLayout.model_validate(note)
 
 
 def test_unset_keys_are_dropped_not_serialised_as_null():
-    """`exclude_none` is load-bearing: `_apply_style` iterates the keys it is
-    handed, so a `"border_top": null` would reach `_border_value(None)` and
-    raise, and a `"table": null` would defeat the `blocks` branch."""
-    patch = SheetFormatPatch.model_validate({
-        "sheet": "S",
-        "cells": [{"row": 1, "operations": [
-            {"target": {"blocks": "all"}, "style": {"indent": "1em"}},
-        ]}],
-        "format_summary": "t",
-    })
-    dumped = patch_to_dict(patch)
+    layout = SheetLayout.model_validate({"sheet": "S", "format_summary": "t", "notes": [
+        {"row": 1, "blocks": [{"target": {"blocks": "all"}, "style": {"indent": "1em"}}]},
+    ]})
+    dumped = layout_to_dict(layout)
     assert "null" not in json.dumps(dumped)
-    op = dumped["cells"][0]["operations"][0]
-    assert op["target"] == {"blocks": "all"}
-    assert op["style"] == {"indent": "1em"}
+    assert dumped["notes"][0]["blocks"][0]["style"] == {"indent": "1em"}
 
 
-def test_an_empty_patch_is_valid():
-    """"Nothing needs restyling" is a real answer and must not be forced into
-    an invented operation."""
-    patch = SheetFormatPatch.model_validate({
-        "sheet": "S", "cells": [], "format_summary": "Already correct.",
-    })
-    assert patch_to_dict(patch)["cells"] == []
+def test_an_empty_layout_is_valid():
+    """"Nothing needs formatting" is a real answer, never an invented layout."""
+    layout = SheetLayout.model_validate({"sheet": "S", "notes": [], "format_summary": "Already correct."})
+    assert layout_to_dict(layout)["notes"] == []
 
 
-def test_formatter_schema_does_not_request_confidence_or_text_underline():
-    assert "confidence" not in SheetFormatPatch.model_fields
-    assert "underline" not in Style.model_fields
+def test_formatter_schema_has_no_confidence_or_styling_keys():
+    assert "confidence" not in SheetLayout.model_fields
+    table = SheetLayout.model_json_schema()["$defs"]["TableLayout"]["properties"]
+    assert not {"border_bottom", "text_align", "fill"} & set(table)
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +88,7 @@ def test_agent_declares_the_output_type_when_enabled(monkeypatch, tmp_path):
         run_id=1, sheet="Notes-Listofnotes", pdf_path="/tmp/no.pdf",
         db_path=str(tmp_path / "x.db"), model=TestModel(),
     )
-    assert agent.output_type is SheetFormatPatch
+    assert agent.output_type is SheetLayout
     prompt = agent._system_prompts[0]
     assert "OUTPUT MODE: STRUCTURED" in prompt
     assert "Return JSON only" not in prompt
@@ -211,8 +114,8 @@ def test_a_validated_patch_is_converted_to_json_for_the_screening_path():
     that quote the answer back all work on JSON text."""
     from notes.formatting_agent import _output_json
 
-    patch = SheetFormatPatch.model_validate({
-        "sheet": "Notes-CI", "cells": [], "format_summary": "t",
+    patch = SheetLayout.model_validate({
+        "sheet": "Notes-CI", "notes": [], "format_summary": "t",
     })
     assert json.loads(_output_json(patch))["sheet"] == "Notes-CI"
     # Free-form output (kill switch on) still passes through untouched.

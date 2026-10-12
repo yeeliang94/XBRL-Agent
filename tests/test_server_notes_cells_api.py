@@ -331,17 +331,19 @@ def test_patch_notes_cell_updates_html_and_updated_at(client_and_run) -> None:
     # updated_at is refreshed so the UI can show "Saved just now".
     assert body["updated_at"]
     with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
-        stored_identity = conn.execute(
-            "SELECT concept_uuid FROM notes_cells "
+        stored_identity, style_source = conn.execute(
+            "SELECT concept_uuid, style_source FROM notes_cells "
             "WHERE run_id = ? AND sheet = 'Notes-CI' AND row = 5",
             (run_id,),
-        ).fetchone()[0]
+        ).fetchone()
         expected_identity = conn.execute(
             "SELECT node_uuid FROM notes_nodes "
             "WHERE template_id = 'mfrs-company-notes-corporateinfo-v1' "
             "AND row = 5",
         ).fetchone()[0]
     assert stored_identity == expected_identity
+    # A person now owns the styling; the formatter must never overwrite it.
+    assert style_source == "human"
 
 
 def test_patch_notes_cell_preserves_subnote_with_table(client_and_run) -> None:
