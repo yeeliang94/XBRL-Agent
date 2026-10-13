@@ -20,6 +20,7 @@ from db import repository as repo
 from notes.formatting_agent import (
     formatter_cell_is_candidate, list_formatter_cells_for_run, run_notes_formatter,
 )
+from notes.formatter_activity import FormatterActivity
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,11 @@ def merge_part_results(parts: list[dict[str, Any]]) -> dict[str, Any]:
         failed_rows = sorted(
             row for p in failures for row in p.get("failed_rows") or []
         )
+        limited_rows = sorted(
+            row for p in failures for row in p.get("limited_rows") or []
+        )
+        if limited_rows:
+            merged["limited_rows"] = limited_rows
         if failed_rows:
             merged["failed_rows"] = failed_rows
             merged["row_errors"] = {
@@ -207,26 +213,22 @@ async def run_pdf_auto_format(
             )
 
     async def _bounded(**kwargs):
-        def status(phase: str, message: str) -> None:
-            if on_event is None:
-                return
-            try:
-                on_event("status", {
-                    "phase": phase, "message": message,
-                    "sub_agent_id": kwargs.get("trace_label") or kwargs["sheet"],
-                    "sheet": kwargs["sheet"],
-                })
-            except Exception:  # noqa: BLE001 — display only
-                logger.warning("formatter slot event failed", exc_info=True)
-
-        status("queued", "Waiting for a free slot.")
+        # Allocate the durable part before waiting. Polling sees both active
+        # and queued parts, including those beyond the concurrency limit.
+        sub_agent_id = kwargs.get("trace_label") or kwargs["sheet"]
+        with repo.db_session(db_path) as conn:
+            agent_id = repo.create_run_agent(conn, run_id, "NOTES_FORMATTING",
+                                             variant=sub_agent_id, model=model_name)
+        activity = FormatterActivity(sub_agent_id=sub_agent_id, sheet=kwargs["sheet"],
+                                     on_event=on_event, db_path=db_path, run_agent_id=agent_id)
+        activity.status("queued", "Waiting for a free slot.")
+        acquired = False
+        result = None
+        status = "failed"
         try:
             await model_slots.acquire()
-        except asyncio.CancelledError:
-            # No formatter has started to report this part's terminal status.
-            status("cancelled", "Formatting stopped")
-            raise
-        try:
+            acquired = True
+            kwargs["activity"] = activity
             if on_phase is not None:
                 kwargs["on_phase"] = lambda message: on_phase(kwargs["sheet"], message)
             if on_event is not None:
@@ -234,13 +236,25 @@ async def run_pdf_auto_format(
             if timeout_s and timeout_s != float("inf"):
                 # Lets the pass tell its time limit from a deliberate stop.
                 kwargs["deadline"] = time.monotonic() + timeout_s
-                return await asyncio.wait_for(
+                result = await asyncio.wait_for(
                     formatter(model=model_factory(), **kwargs), timeout=timeout_s,
                 )
-            coro = formatter(model=model_factory(), **kwargs)
-            return await coro
+            else:
+                result = await formatter(model=model_factory(), **kwargs)
+            status = "completed" if result.get("ok") else "failed"
+            return result
+        except asyncio.CancelledError:
+            status = "cancelled"
+            raise
+        except Exception as exc:
+            result = _failure_result(exc, timeout_s, run_id, kwargs["sheet"])
+            raise
         finally:
-            model_slots.release()
+            if acquired:
+                model_slots.release()
+            # The formatter closes its own part with usage. This closes a part
+            # it never entered (stopped while queued, model setup failure).
+            activity.finish(status, result)
 
     async def one(sheet: str) -> tuple[str, dict[str, Any]]:
         previous = None

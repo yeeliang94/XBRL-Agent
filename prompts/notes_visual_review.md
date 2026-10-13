@@ -46,8 +46,19 @@ not acted on. If the copied table itself differs from the PDF —
 a total or data row captured as heading cells, a missing, extra or merged row,
 an amount under the wrong column, or a heading over the wrong column — set
 issue_kind to structure, mark it unresolved and describe the difference. That
-table is re-copied from the source; appearance corrections cannot fix it. Use
-issue_kind style for everything else.
+table is re-copied from the source; appearance corrections cannot fix it.
+Use issue_kind unsupported_layout and status unresolved when the difference
+requires a capability the layout cannot express: inset or gapped rules within
+cell edges, formatting an arbitrary text fragment, or indenting only one
+hard-break line inside the same paragraph. Quote the affected row label or
+cell text in observed_text; an unquoted claim is treated as an ordinary
+style correction. The note keeps its other formatting and is flagged for a person.
+Do not request another equivalent layout to repair such a difference.
+Cell overrides support horizontal and top/middle/bottom vertical alignment.
+Paragraph overrides support alignment and indentation of each existing `<p>`
+listed in the cell manifest. Those are supported style corrections. A `<br>`
+does not create another paragraph. Use issue_kind style for other supported
+appearance corrections.
 Wrong source-page identity is issue_kind source_provenance; added or missing
 words or figures are source_content (when a table also has another issue,
 quote the wrong or missing words in content_defect and keep the separate issue
@@ -86,7 +97,8 @@ or note placement. This check does not certify native Word or mTool rendering.
 
 For every correction finding, identify the table index, row number, row label
 and the grid columns affected, and say what the layout should be: a column's
-role, a row's bold/indent/shading, or a line's row and column span. Check the row label and both year
+role, a row's bold/indent/shading, a cell's horizontal/vertical alignment,
+an existing paragraph's indent/alignment, or a line's row and column span. Check the row label and both year
 amounts against the same source row before deciding where a rule belongs.
 A standalone year in the description column is a left-aligned row label.
 When a prior finding and your source interpretation disagree, zoom the cited

@@ -1448,7 +1448,31 @@ Key invariants:
     whole cell edges on at least one side, which carries it, and never cross a
     rowspan; `frame: grid` boxes every cell) and compiles it
     into patch operations, starting with a `reset_formatting` of owned cell
-    properties (border, text-align, background, padding). Code owns alignment:
+    properties (border, text-align, vertical-align, background, padding). Cell
+    overrides may set horizontal and/or top/middle/bottom vertical alignment.
+    Paragraph overrides address an existing cell-owned `<p>` by its manifest
+    index and set alignment and/or bounded indentation in 2em levels. Nested
+    table paragraphs use their own cell coordinates; hard-break lines are not
+    separate paragraphs. Recompilation clears previous cell-paragraph alignment
+    and indentation before applying the replacement layout, preserving text,
+    paragraph structure and source emphasis. Editor cell attributes retain
+    vertical alignment; prepared Copy/mTool HTML retains both capabilities.
+    Native save/reopen fidelity is not certified by these HTML checks.
+    `unsupported_layout` findings (inset/gapped cell-edge rules, arbitrary text
+    fragments, individual hard-break indentation) remain unresolved and bypass
+    style correction and source re-copy, even if the checker calls them passed.
+    The finding must quote this table in `observed_text`; an unquoted claim is
+    downgraded to an ordinary style correction. A note whose only findings are
+    such limits (`limited_rows`) keeps and saves its best-effort formatting but
+    stays failed with no verification receipt; its status says formatting was
+    saved and directs manual review instead of another style retry.
+    Each formatter part is closed once by `FormatterActivity.finish` (first
+    outcome and usage win). Audit writes remain retryable until commit, without
+    repeating the terminal event; status steps save immediately, tool steps are batched.
+    Pinned by `tests/test_notes_format_schema.py`,
+    `tests/test_notes_html_sanitize_css.py`, `tests/test_notes_table_layout.py`,
+    `tests/test_notes_visual_review.py`, and `cellFormatting.test.ts`.
+    Code owns alignment:
     right only when every covered column is amount/date. Invalid rows enter
     the bounded repair; valid rows proceed. A visual correction compiles onto
     the pass's ORIGINAL HTML, so it replaces the first layout entirely; bold
@@ -1871,6 +1895,20 @@ The wall-clock guard stops new model thinking at the deadline while
 an already issued tool call may finish under its separate timeout.
 
 ### 19. Pipeline-stage + cross-check progress events
+
+Formatter parts allocate an audit row before waiting for a model slot and
+persist each status/tool event while running. Final flushing retries only
+unsaved events; worker-thread emissions retain event timestamps and insert
+once. Saved progress uses all current call rows, including parts without
+events. Both activity views follow the selected sheet; Technical detail groups
+tools and phases by part and retains earlier attempts under Formatting calls.
+History keeps polling a terminal run while a formatter retry is active, then
+stops when that child finishes. A formatter launch from Notes restarts stopped
+detail polling without remounting the workspace. Its durable task keeps polling
+active before the worker creates its audit row; completion triggers a final detail
+refresh. Waiting, working and terminal states remain distinct. Pinned by
+`tests/test_notes_auto_format.py`, `tests/test_notes_format_patch.py`, and
+`web/src/__tests__/RunDetailView.test.tsx` and `web/src/__tests__/HistoryPage.test.tsx`.
 
 Upload preparation exposes durable progress through `/api/preparation/{session_id}`
 and records `preparation_progress` events. Queued/working/retrying/succeeded/failed/

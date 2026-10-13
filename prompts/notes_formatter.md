@@ -63,9 +63,29 @@ cell over columns 2 and 3. Describe every listed table exactly once.
   Line thickness is not reproduced: a heavier source stroke is still `single`.
   Use `double` only for two separate strokes with a visible gap.
 - `overrides`: rare. Use one only when a single cell must not follow its
-  column's role, with a short `reason`.
+  column's role, with a short `reason`. Address `row` and `cell` by their
+  1-based direct positions. Set `text_align` (left/center/right),
+  `vertical_align` (top/middle/bottom), or both. A vertically merged header
+  can use bottom alignment without changing its horizontal alignment.
+- `paragraphs`: targeted appearance of existing paragraphs inside a cell.
+  Each entry has `row`, `cell`, `paragraph`, and a short `reason`, plus
+  `indent` (0–8 levels of 2em, 0 clears it) and/or `text_align`
+  (left/center/right/justify). Use the exact paragraph number from that
+  cell's manifest. For example, indent paragraph 2 while leaving paragraph 1
+  unchanged. Do not combine a whole-row indent with a paragraph indent unless
+  both offsets are visible in the source. Preserve existing paragraph and
+  hard-break structure; a `<br>` line is not a separate paragraph.
 - `blocks`: optional prose-block appearance (alignment, indent, spacing)
   using {"blocks": "all"}.
+
+CAPABILITY LIMITS:
+Lines follow whole cell edges. Adjacent column ranges touch and cannot express
+inset strokes or visible gaps within those cells. Paragraph operations address
+existing `<p>` elements; they cannot indent one hard-break line within a shared
+paragraph, create paragraphs, or format arbitrary text fragments. State a
+required unsupported distinction in `format_summary`; do not claim to have
+fixed it by returning an equivalent layout. Keep supported layout decisions
+grounded in the source. Do not change content or geometry to imitate a gap.
 
 Each note row's `current_rules` lists the lines its HTML draws now, once each,
 named by the row they sit below. Your layout REPLACES the formatter's earlier

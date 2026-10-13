@@ -18,6 +18,8 @@ interface Props {
   toolTimeline: ToolTimelineEntry[];
   reasoningBlocks?: ReasoningBlock[];
   isRunning: boolean;
+  /** Formatter phase boundaries remain visible even without tool calls. */
+  showStatusSteps?: boolean;
 }
 
 // Pluck the most recent terminal event so the row can summarise the run.
@@ -370,7 +372,7 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
   );
 }
 
-export function AgentTimeline({ events, toolTimeline, reasoningBlocks, isRunning }: Props) {
+export function AgentTimeline({ events, toolTimeline, reasoningBlocks, isRunning, showStatusSteps = false }: Props) {
   // Auto-scroll — stick to bottom unless the user has scrolled up. Same
   // pattern ChatFeed used, so users get a consistent feel after the swap.
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -392,6 +394,7 @@ export function AgentTimeline({ events, toolTimeline, reasoningBlocks, isRunning
     const rows: Array<
       | { kind: "reasoning"; at: number; order: number; block: ReasoningBlock }
       | { kind: "tool"; at: number; order: number; entry: ToolTimelineEntry }
+      | { kind: "status"; at: number; order: number; message: string }
     > = [];
     resolvedReasoning.forEach((block, order) => {
       rows.push({ kind: "reasoning", at: block.startedAt, order, block });
@@ -399,8 +402,12 @@ export function AgentTimeline({ events, toolTimeline, reasoningBlocks, isRunning
     toolTimeline.forEach((entry, order) => {
       rows.push({ kind: "tool", at: entry.startTime, order, entry });
     });
+    if (showStatusSteps) events.forEach((event, order) => {
+      if (event.event === "status" && event.data.message) rows.push({ kind: "status", at: (event.timestamp ?? 0) * 1000,
+        order, message: event.data.message });
+    });
     return rows.sort((a, b) => a.at - b.at || a.order - b.order);
-  }, [resolvedReasoning, toolTimeline]);
+  }, [resolvedReasoning, toolTimeline, events, showStatusSteps]);
 
   // Scroll triggers: a new tool row OR the terminal row appearing. The
   // terminal row is its own visual element and doesn't change toolTimeline
@@ -416,6 +423,7 @@ export function AgentTimeline({ events, toolTimeline, reasoningBlocks, isRunning
     resolvedReasoning.length,
     resolvedReasoning[resolvedReasoning.length - 1]?.content.length,
     terminal,
+    showStatusSteps ? events.length : 0,
   ]);
   const isEmpty = activityRows.length === 0 && terminal === null;
 
@@ -450,6 +458,11 @@ export function AgentTimeline({ events, toolTimeline, reasoningBlocks, isRunning
             block={row.block}
             isRunning={isRunning}
           />
+        ) : row.kind === "status" ? (
+          <div key={`status:${row.at}:${row.order}`} style={{ padding: "8px 16px", fontSize: 13, overflowWrap: "anywhere" }}>
+            <span style={{ color: pwc.grey500, marginRight: 8 }}>{row.at ? `${new Date(row.at).toISOString().slice(11, 19)} UTC` : "Time unavailable"}</span>
+            {row.message}
+          </div>
         ) : (
           <ToolCallCard key={`tool:${row.entry.tool_call_id}`} entry={row.entry} />
         ),

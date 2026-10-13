@@ -7,7 +7,8 @@ from bs4 import BeautifulSoup
 from notes.format_verify import verify_format_only
 from notes.rule_map import table_rules
 from notes.table_layout import (
-    LayoutError, LineSpec, RowSpec, TableLayout, compile_layouts, validate_layouts,
+    CellOverride, LayoutError, LineSpec, ParagraphOverride, RowSpec, TableLayout,
+    compile_layouts, layout_manifest, validate_layouts,
 )
 
 ROLL = ("<table><tr><th></th><th>2024<br>RM</th><th>2023<br>RM</th></tr>"
@@ -69,6 +70,54 @@ def test_recompile_replaces_previous_formatter_styling():
     second = compile_layouts(first, [TableLayout(table=0, columns=["label", "amount", "amount"])])
     assert "background-color" not in second and "padding" not in second
     assert table_rules(second) == []
+
+
+def test_cell_alignment_and_targeted_paragraph_indent_survive_prepared_output():
+    from mtool.notes_exporter import prepare_note_output
+
+    html = ('<table><tr><th rowspan="2">Company</th><th>2025</th></tr>'
+            '<tr><td>RM</td></tr><tr><td><p>Ordinary <strong>shares</strong></p>'
+            '<p>At 1 January/31 December</p></td><td>10</td></tr></table>')
+    layout = TableLayout(table=0, columns=["label", "amount"],
+                         overrides=[CellOverride(row=1, cell=1, vertical_align="bottom", reason="Merged header")],
+                         paragraphs=[ParagraphOverride(row=3, cell=1, paragraph=2, indent=1,
+                                                       text_align="left", reason="Indented balance label")])
+    manifest = layout_manifest(html)[0]["rows"][2]["cells"][0]
+    assert [p["paragraph"] for p in manifest["paragraphs"]] == [1, 2]
+    out = compile_layouts(html, [layout])
+    assert verify_format_only(html, out).ok
+    for representation in (out, prepare_note_output(out)["html"]):
+        soup = BeautifulSoup(representation, "html.parser")
+        assert "vertical-align: bottom" in soup.find("th").get("style", "")
+        first, second = soup.find_all("p")
+        assert "margin-left" not in first.get("style", "")
+        assert "margin-left: 2em" in second.get("style", "")
+        assert soup.find("strong").get_text() == "shares"
+    replaced = compile_layouts(out, [TableLayout(table=0, columns=["label", "amount"])])
+    assert "vertical-align" not in replaced and "margin-left" not in replaced
+    assert verify_format_only(html, replaced).ok
+    cleared = compile_layouts(out, [TableLayout(table=0, columns=["label", "amount"], paragraphs=[
+        ParagraphOverride(row=3, cell=1, paragraph=2, indent=0, reason="Clear previous indent")])])
+    assert "margin-left" not in cleared and verify_format_only(html, cleared).ok
+
+
+@pytest.mark.parametrize("paragraph", [1, 2])
+def test_paragraph_targets_cannot_address_hard_break_lines_or_nested_table_paragraphs(paragraph):
+    html = ('<table><tr><td>Ordinary shares<br>At 1 January/31 December'
+            '<table><tr><td><p>Nested paragraph</p></td></tr></table></td></tr></table>')
+    assert layout_manifest(html)[0]["rows"][0]["cells"][0]["paragraphs"] == []
+    layouts = [TableLayout(table=0, columns=["label"], paragraphs=[
+        ParagraphOverride(row=1, cell=1, paragraph=paragraph, indent=1, reason="Source indent")]),
+        TableLayout(table=1, columns=["label"])]
+    with pytest.raises(LayoutError, match="paragraph .* does not exist"):
+        compile_layouts(html, layouts)
+
+
+def test_duplicate_paragraph_overrides_are_rejected():
+    html = '<table><tr><td><p>Label</p></td></tr></table>'
+    paragraph = ParagraphOverride(row=1, cell=1, paragraph=1, indent=1, reason="Source indent")
+    with pytest.raises(LayoutError, match="described twice"):
+        compile_layouts(html, [TableLayout(table=0, columns=["label"], paragraphs=[paragraph, paragraph])])
 
 
 def test_source_bold_is_never_removed():
