@@ -53,10 +53,11 @@ class TableAssessment(BaseModel):
                     "present alongside another issue; empty otherwise.",
     )
     issue_kind: Literal["style", "structure", "source_content", "source_provenance",
-                        "source_emphasis"] = Field(
+                        "source_emphasis", "unsupported_layout"] = Field(
         default="style",
         description='"structure" when the copied table itself differs from the PDF '
                     "(heading vs data cells, rows, columns, merged cells); source_content, "
+                    "unsupported_layout when the required appearance cannot be expressed by the layout; "
                     "source_provenance or source_emphasis for wrong words/figures, wrong "
                     "source page or captured emphasis that must be removed; otherwise style.",
     )
@@ -128,16 +129,22 @@ def _table_packets(canonical: str, prepared: str) -> str | None:
     return "\n".join(parts)
 
 
-def structure_findings(outcome: dict) -> dict[int, list[tuple[int, str]]]:
-    """Current structural findings per failed note row: (table, reason)."""
+def _current_table_assessments(outcome: dict) -> dict[tuple[int, int], dict]:
     reviews = outcome.get("visual_reviews") or [outcome.get("visual_review") or {}]
-    failed = {int(row) for row in outcome.get("failed_rows") or []}
     current: dict[tuple[int, int], dict] = {}
     for review in reviews:
         for item in review.get("tables", []) + (review.get("recheck") or {}).get("tables", []):
             current[(item["row"], item["table"])] = item
+    if outcome.get("after_recopy"):
+        current.update(_current_table_assessments(outcome["after_recopy"]))
+    return current
+
+
+def structure_findings(outcome: dict) -> dict[int, list[tuple[int, str]]]:
+    """Current structural findings per failed note row: (table, reason)."""
+    failed = {int(row) for row in outcome.get("failed_rows") or []}
     found: dict[int, list[tuple[int, str]]] = {}
-    for (row, table), item in sorted(current.items()):
+    for (row, table), item in sorted(_current_table_assessments(outcome).items()):
         if (row in failed and item.get("issue_kind") == "structure" and item.get("status") != "pass"
                 and item.get("recopy_eligible", True)):
             found.setdefault(row, []).append((table, item.get("reason", "")))
@@ -227,6 +234,7 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
                             layouts=None, activity=None):
     """A fresh context on every check; no formatter conversation is evidence."""
     from notes.formatting_agent import _preload_source_pages, _table_geometry
+    from notes.table_layout import layout_manifest
 
     by_row = {cell.row: cell for cell in cells}
     expected = {(row, index) for row, html in rows.items()
@@ -238,8 +246,15 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
         try:
             prepared, identity = prepare_note_evidence(rows[row], style)
             evidence[row] = identity
+            paragraphs = [
+                {"table": table["table"], "row": tr["row"], "cell": index,
+                 "paragraphs": cell["paragraphs"]}
+                for table in layout_manifest(rows[row]) for tr in table["rows"]
+                for index, cell in enumerate(tr["cells"], 1) if cell["paragraphs"]
+            ]
             content_by_row[row] = (
                 f"FORMATTED NOTE ROW {row}; geometry: " + json.dumps(_table_geometry(rows[row]))
+                + ("\nCELL PARAGRAPH COORDINATES: " + json.dumps(paragraphs) if paragraphs else "")
                 + "\nOUTPUT PROFILE: " + json.dumps(asdict(style))
                 + f"\nPREPARATION TIER: {identity.get('tier', 'unknown')}"
                 + "\nRULE MAP (one entry per physical line, resolved from both cells):\n"
@@ -313,6 +328,7 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
         for index, table in enumerate(BeautifulSoup(rows[row], "html.parser").find_all("table"))
     }
     rejected: set[int] = set()
+    limits: dict[int, str] = {}
     for index, assessment in enumerate(decision.tables):
         key = (assessment.row, assessment.table)
         if key not in reviewable or key in seen:
@@ -357,6 +373,21 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
             # Neither a style patch nor a table re-copy repairs these.
             assessment.status = "unresolved"
             issue = "Source correction or human review required: " + assessment.reason
+        elif (assessment.issue_kind == "unsupported_layout"
+              and (not assessment.observed_text.strip()
+                   or _plain(assessment.observed_text) not in table_text.get(key, ""))):
+            # An unquoted "cannot be drawn" claim is not evidence about this
+            # table: give it one ordinary correction instead of giving up.
+            assessment.issue_kind = "style"
+            assessment.status = "needs_correction"
+            issue = assessment.reason
+        elif assessment.issue_kind == "unsupported_layout":
+            # A known formatter limit, not a wrong result: the note keeps its
+            # best-effort formatting but stays flagged for a person.
+            assessment.status = "unresolved"
+            _add_error(limits, assessment.row, f"Table {assessment.table}: needs a layout the "
+                       "formatter cannot produce: " + assessment.reason)
+            continue
         elif assessment.status != "pass":
             issue = assessment.reason
         elif assessment.issue_kind == "structure":
@@ -368,11 +399,15 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
             _add_error(errors, assessment.row, finding)
     for row, _ in reviewable - seen:
         _add_error(errors, row, "Visual assessment omitted a table.")
+    # Rows whose only findings are formatter limits; they remain unresolved.
+    limitation_rows = sorted(row for row in limits if row not in errors)
+    for row, finding in limits.items():
+        _add_error(errors, row, finding)
     dumped = decision.model_dump()
     for index, item in enumerate(dumped["tables"]):
         if index in rejected or (item["row"], item["table"]) in ineligible:
             item["recopy_eligible"] = False
-    return errors, {**dumped, "evidence": evidence}
+    return errors, {**dumped, "evidence": evidence, "limitation_rows": limitation_rows}
 
 
 async def review_and_correct_rows(
@@ -388,6 +423,8 @@ async def review_and_correct_rows(
     ``originals`` is the HTML each row had when the pass started. A correction
     layout compiles onto it, so it fully replaces the earlier candidate.
     ``layouts`` (the accepted layout per row) is reviewer context only.
+    ``review["limitation_rows"]`` lists failed rows whose only findings are
+    formatter limits; their current HTML is returned so it can be kept.
     """
     from notes.formatting_agent import _output_json, _partition_layout, _screen_patch
     from notes.table_layout import layout_manifest
@@ -416,6 +453,8 @@ async def review_and_correct_rows(
     try:
         phase("Checking formatted notes against the source PDF…")
         errors, review = await check(rows, "_visual")
+        # Unresolved only by a formatter limit: the caller keeps their HTML.
+        limited = set(review.get("limitation_rows") or [])
         # Structural findings go back to preparation (notes/table_recopy.py);
         # an appearance correction cannot repair a wrongly copied table.
         correctable = {item["row"] for item in review.get("tables", [])
@@ -471,7 +510,11 @@ async def review_and_correct_rows(
                         _add_error(errors, row, correction_errors[row])
                 else:
                     errors.pop(row, None)
-            return errors, review, {row: html for row, html in corrected.items() if row not in errors}
+            limited |= {row for row in recheck.get("limitation_rows") or []
+                        if row not in correction_errors}
+            review["limitation_rows"] = sorted(limited)
+            return errors, review, {row: html for row, html in corrected.items()
+                                    if row not in errors or row in limited}
         except UsageLimitExceeded:
             logger.warning("Visual correction exhausted formatter budget run=%s sheet=%s", run_id, sheet)
             review["correction_error"] = "Formatting correction reached its request budget."

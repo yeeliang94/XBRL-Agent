@@ -145,6 +145,7 @@ export interface ConceptsPageProps {
   // template view has none.
   initialCrossChecks?: CrossCheckResult[];
   onPreparationBlocked?: (blocked: boolean) => void;
+  onFormattingStarted?: (runId: number, sheet: string) => void;
   /** Open the unified review workspace directly on its persistent Notes
    *  index/editor/source composition. Used by the run-detail Notes route. */
   initialView?: "figures" | "notes";
@@ -320,6 +321,7 @@ export function ConceptsPage({
   runId,
   initialCrossChecks,
   onPreparationBlocked,
+  onFormattingStarted,
   initialView = "figures",
   humanFile = null,
   onReplaceHumanFile,
@@ -1335,6 +1337,7 @@ export function ConceptsPage({
               focusCell={notesFocusCell}
               onActiveCellPages={handleNotesCellPages}
               onPreparationBlocked={handleNotesPreparationBlocked}
+              onFormattingStarted={onFormattingStarted}
               comparisonHighlights={humanActive ? comparisonHighlights : undefined}
               onlyHighlighted={humanActive && onlyHighlighted}
               onShowAllComparisonFields={showAllComparisonFields}

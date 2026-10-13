@@ -6,8 +6,8 @@ side by side, the way the Sheet-12 notes sub-agents are shown:
 
 * live: ``on_event(event_type, data)`` pushes the event to the run's shared
   event queue (server.py wraps it with ``agent_id="notes-formatting"``);
-* saved: the same events are appended to the sub-agent's own ``run_agents``
-  row when it finishes, so History can replay them per sub-agent.
+* saved: each event is appended to the sub-agent's own ``run_agents`` row
+  while it runs, so History polling can follow active work too.
 
 Every payload carries ``sub_agent_id`` (equal to the ``run_agents.variant``
 of the same pass) and ``sheet``. Reporting is advisory: a failing callback or
@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import threading
 from datetime import datetime, timezone
 from itertools import count
 from typing import Any, Callable
@@ -58,8 +59,7 @@ def queue_event_sink(queue: "asyncio.Queue", agent_id: str, agent_role: str) -> 
 
 
 def _event_time() -> str:
-    """When an event happened. Saved events keep it, because they are written
-    only when the pass ends; microseconds keep parallel passes in order."""
+    """Keep occurrence time across flush retries and parallel worker threads."""
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
@@ -76,20 +76,39 @@ def _result_summary(content: Any) -> str:
     return str(content)[:_RESULT_SUMMARY_CHARS] if content else ""
 
 
+# Step changes save at once so History sees them; tool steps between them are
+# batched, keeping per-event database writes off the formatter's hot path.
+_SAVE_INTERVAL_S = 2.0
+
+
 class FormatterActivity:
     """Collects and forwards one formatter sub-agent's activity events."""
 
-    def __init__(self, *, sub_agent_id: str, sheet: str, on_event: EventSink | None = None):
+    def __init__(self, *, sub_agent_id: str, sheet: str, on_event: EventSink | None = None,
+                 db_path: str | None = None, run_agent_id: int | None = None):
         self.sub_agent_id = sub_agent_id
         self.sheet = sheet
         self._on_event = on_event
         self.events: list[tuple[str, dict, str]] = []
         self._tool_started: dict[str, float] = {}
         self._call_numbers = count(1)
+        self.db_path = db_path
+        self.run_agent_id = run_agent_id
+        self._saved_count = 0
+        self._last_save = 0.0
+        self._finished = False
+        self._finish_fields: dict[str, Any] | None = None
+        # Tools can emit from worker threads while the agent emits on its loop.
+        self._lock = threading.RLock()
 
     def emit(self, event_type: str, data: dict) -> None:
         payload = {**data, "sub_agent_id": self.sub_agent_id, "sheet": self.sheet}
-        self.events.append((event_type, payload, _event_time()))
+        with self._lock:
+            self.events.append((event_type, payload, _event_time()))
+            due = (event_type == "status"
+                   or time.monotonic() - self._last_save >= _SAVE_INTERVAL_S)
+            if due and self.db_path is not None and self.run_agent_id is not None:
+                self.save(self.db_path, self.run_agent_id)
         if self._on_event is None:
             return
         try:
@@ -118,22 +137,69 @@ class FormatterActivity:
         })
 
     def save(self, db_path: str, run_agent_id: int) -> None:
-        """Append the collected events to this sub-agent's run_agents row."""
-        if not self.events:
-            return
+        """Flush only unsaved events; failed writes remain available to retry."""
         from db import repository as repo
 
-        try:
-            with repo.db_session(db_path) as conn:
-                for event_type, payload, ts in self.events:
-                    phase = payload.get("phase")
-                    repo.log_event(
-                        conn, run_agent_id=run_agent_id, event_type=event_type,
-                        payload=payload, phase=phase if isinstance(phase, str) else None,
-                        ts=ts,
-                    )
-        except Exception:  # noqa: BLE001 — History detail is advisory
-            logger.warning(
-                "Could not save formatter activity run_agent=%s", run_agent_id,
-                exc_info=True,
-            )
+        with self._lock:
+            pending = self.events[self._saved_count:]
+            if not pending:
+                return
+            try:
+                with repo.db_session(db_path) as conn:
+                    for event_type, payload, ts in pending:
+                        phase = payload.get("phase")
+                        repo.log_event(
+                            conn, run_agent_id=run_agent_id, event_type=event_type,
+                            payload=payload, phase=phase if isinstance(phase, str) else None,
+                            ts=ts,
+                        )
+                self._saved_count += len(pending)
+                self._last_save = time.monotonic()
+            except Exception:  # noqa: BLE001 — History detail is advisory
+                logger.warning(
+                    "Could not save formatter activity run_agent=%s", run_agent_id,
+                    exc_info=True,
+                )
+
+    def finish(self, status: str, outcome: dict | None = None, **usage: Any) -> bool:
+        """Close this part once: final step, remaining steps, audit row.
+
+        The formatter closes its own part with usage; the caller that queued
+        it calls this too, which closes a part the formatter never entered.
+        The first outcome and usage win. Failed audit writes may be retried
+        without repeating the terminal event. Returns whether this call
+        persisted completion (or closed a part with no audit row).
+        """
+        with self._lock:
+            if self._finished:
+                return False
+            if self._finish_fields is None:
+                outcome = outcome or {}
+                self._finish_fields = {
+                    "status": status, "error_type": outcome.get("error_type"),
+                    "error_message": outcome.get("error"), **usage,
+                }
+                if status == "completed":
+                    self.status("completed", "Formatting finished")
+                elif status == "cancelled":
+                    self.status("cancelled", "Formatting stopped")
+                else:
+                    from notes.formatting_agent import plain_failure
+                    # The plain sentence leads; the raw finding stays as technical detail.
+                    self.emit("status", {
+                        "phase": "failed", "message": plain_failure(outcome),
+                        "error_type": outcome.get("error_type"), "detail": outcome.get("error") or "",
+                    })
+            if self.db_path is not None and self.run_agent_id is not None:
+                from db import repository as repo
+
+                self.save(self.db_path, self.run_agent_id)
+                try:
+                    with repo.db_session(self.db_path) as conn:
+                        repo.finish_run_agent(conn, self.run_agent_id, **self._finish_fields)
+                except Exception:  # noqa: BLE001 — audit never replaces the outcome
+                    logger.warning("Could not close formatter part run_agent=%s", self.run_agent_id,
+                                   exc_info=True)
+                    return False
+            self._finished = True
+            return True

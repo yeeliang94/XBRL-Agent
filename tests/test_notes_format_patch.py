@@ -615,19 +615,22 @@ async def test_formatter_reports_its_activity_live_and_saves_it(monkeypatch, for
 
 
 def test_saved_formatter_activity_keeps_when_each_event_happened(monkeypatch, formatter_db):
-    # Events are written when the pass ends; History orders parallel passes
-    # by the time each event happened, not by the save time.
+    # History can read active steps, in event-time order, before completion.
     import notes.formatter_activity as activity_module
     from db import repository as repo
 
     times = iter(["2026-10-11T01:00:00.000001Z", "2026-10-11T01:00:00.000002Z"])
     monkeypatch.setattr(activity_module, "_event_time", lambda: next(times))
-    activity = activity_module.FormatterActivity(sub_agent_id="x", sheet="x")
-    activity.status("started", "Formatting started")
-    activity.status("completed", "Formatting finished")
     db, _, run_id = formatter_db
     with repo.db_session(db) as conn:
         agent_id = repo.create_run_agent(conn, run_id, "NOTES_FORMATTING", variant="x")
+    activity = activity_module.FormatterActivity(sub_agent_id="x", sheet="x",
+                                                db_path=str(db), run_agent_id=agent_id)
+    activity.status("started", "Formatting started")
+    with repo.db_session(db) as conn:
+        assert [e.payload["phase"] for e in repo.fetch_events(conn, agent_id)] == ["started"]
+    activity.status("completed", "Formatting finished")
+    activity.save(str(db), agent_id)
     activity.save(str(db), agent_id)
     with repo.db_session(db) as conn:
         assert [e.ts for e in repo.fetch_events(conn, agent_id)] == [
@@ -635,9 +638,114 @@ def test_saved_formatter_activity_keeps_when_each_event_happened(monkeypatch, fo
         ]
 
 
+def test_formatter_activity_batches_tool_steps_between_status_saves(monkeypatch, formatter_db):
+    # Status steps save at once for History; tool steps wait for the next save
+    # instead of costing one database write each.
+    import notes.formatter_activity as activity_module
+    from db import repository as repo
+
+    now = [100.0]
+    monkeypatch.setattr(activity_module.time, "monotonic", lambda: now[0])
+    db, _, run_id = formatter_db
+    with repo.db_session(db) as conn:
+        agent_id = repo.create_run_agent(conn, run_id, "NOTES_FORMATTING", variant="x")
+    activity = activity_module.FormatterActivity(sub_agent_id="x", sheet="x",
+                                                db_path=str(db), run_agent_id=agent_id)
+
+    def saved():
+        with repo.db_session(db) as conn:
+            return len(repo.fetch_events(conn, agent_id))
+
+    activity.status("started", "Formatting started")
+    assert saved() == 1
+    activity.emit("tool_call", {"tool_name": "view_page"})
+    activity.emit("tool_result", {"tool_name": "view_page"})
+    assert saved() == 1
+    now[0] += activity_module._SAVE_INTERVAL_S
+    activity.emit("tool_call", {"tool_name": "zoom"})
+    assert saved() == 4
+
+
+@pytest.mark.parametrize("write_fails", [False, True])
+def test_formatter_part_closes_once_whoever_finishes_first(monkeypatch, formatter_db, write_fails):
+    from db import repository as repo
+    from notes.formatter_activity import FormatterActivity
+
+    db, _, run_id = formatter_db
+    with repo.db_session(db) as conn:
+        agent_id = repo.create_run_agent(conn, run_id, "NOTES_FORMATTING", variant="x")
+    activity = FormatterActivity(sub_agent_id="x", sheet="x", db_path=str(db), run_agent_id=agent_id)
+    with monkeypatch.context() as patch:
+        if write_fails:
+            finish_run_agent = repo.finish_run_agent
+
+            def failed_write(*args, **kwargs):
+                finish_run_agent(*args, **kwargs)
+                raise RuntimeError("temporary audit write failure")
+
+            patch.setattr(repo, "finish_run_agent", failed_write)
+        assert activity.finish("completed", {"ok": True}, total_tokens=42) is (not write_fails)
+    if write_fails:
+        with repo.db_session(db) as conn:
+            assert conn.execute("SELECT status FROM run_agents WHERE id=?", (agent_id,)).fetchone()[0] == "running"
+        # The caller's fallback retries persistence, retaining the formatter's
+        # original outcome and usage instead of replacing them with its own.
+        assert activity.finish("failed", {"error_type": "model_error", "error": "late"}) is True
+    assert activity.finish("failed", {"error_type": "model_error", "error": "late"}) is False
+    with repo.db_session(db) as conn:
+        status, tokens, error = conn.execute(
+            "SELECT status, total_tokens, error_message FROM run_agents WHERE id=?", (agent_id,)).fetchone()
+        phases = [e.payload["phase"] for e in repo.fetch_events(conn, agent_id)]
+    assert (status, tokens, error) == ("completed", 42, None)
+    assert phases == ["completed"]
+
+
+def test_formatter_activity_retries_failed_writes_without_duplicates(monkeypatch, formatter_db):
+    from concurrent.futures import ThreadPoolExecutor
+    from db import repository as repo
+    from notes.formatter_activity import FormatterActivity
+
+    db, _, run_id = formatter_db
+    with repo.db_session(db) as conn:
+        agent_id = repo.create_run_agent(conn, run_id, "NOTES_FORMATTING", variant="x")
+    activity = FormatterActivity(sub_agent_id="x", sheet="x", db_path=str(db), run_agent_id=agent_id)
+    with monkeypatch.context() as patch:
+        patch.setattr(repo, "log_event", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("write failed")))
+        activity.status("started", "Formatting started")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(lambda n: activity.status("working", f"Step {n}"), range(4)))
+    activity.save(str(db), agent_id)
+    with repo.db_session(db) as conn:
+        events = repo.fetch_events(conn, agent_id)
+    assert len(events) == 5
+    assert {e.payload["message"] for e in events} == {"Formatting started", *(f"Step {n}" for n in range(4))}
+
+
 class _SlowAgent:
     async def run(self, *_args, **_kwargs):
         await asyncio.sleep(30)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", ["model_error", "turn_budget"])
+async def test_formatter_exception_retains_its_audit_reason(monkeypatch, formatter_db, error_type):
+    from db import repository as repo
+    from pydantic_ai.exceptions import UsageLimitExceeded
+
+    exception = RuntimeError("request failed") if error_type == "model_error" else UsageLimitExceeded("budget exhausted")
+    class FailedAgent:
+        async def run(self, *args, **kwargs):
+            raise exception
+
+    with pytest.raises(type(exception)):
+        await _run_formatter_with_fake_agent(monkeypatch, formatter_db, FailedAgent())
+    db, _, run_id = formatter_db
+    with repo.db_session(db) as conn:
+        row = conn.execute("SELECT id, status, error_type, error_message FROM run_agents WHERE run_id=?", (run_id,)).fetchone()
+        assert row[1:] == ("failed", error_type, f"{type(exception).__name__}: {exception}")
+        final = repo.fetch_events(conn, row[0])[-1].payload
+    assert final["phase"] == "failed" and final["error_type"] == error_type
+    assert final["detail"] == row[3]
 
 
 def _final_phase(live):
@@ -671,16 +779,22 @@ async def test_formatter_time_limit_is_reported_as_failed(monkeypatch, formatter
 
 
 def test_failed_pass_leads_with_a_plain_sentence():
-    from notes.formatting_agent import _plain_failure
+    from notes.formatting_agent import plain_failure
 
     finding = "Table 1: Note 26, row 3: the candidate combines two rows ..."
-    assert _plain_failure({"error_type": "visual_review_failed", "error": finding,
+    assert plain_failure({"error_type": "visual_review_failed", "error": finding,
                            "failed_rows": [12], "table_recopy": {}}) == (
         "1 note still looks different from the source PDF after re-copying its "
         "tables. Retry it from the Notes tab.")
-    assert _plain_failure({"error_type": "visual_review_failed", "failed_rows": [12, 14]}) == (
+    assert plain_failure({"error_type": "visual_review_failed", "failed_rows": [12, 14]}) == (
         "2 notes still look different from the source PDF. Retry it from the Notes tab.")
-    assert finding not in _plain_failure({"error_type": "model_error", "error": finding})
+    assert finding not in plain_failure({"error_type": "model_error", "error": finding})
+    # Every failed note saved with only a formatter limit: no pointless retry.
+    message = plain_failure({"error_type": "visual_review_failed", "failed_rows": [12], "limited_rows": [12]})
+    assert "Formatting was saved" in message and "Check them manually" in message and "Retry" not in message
+    # A real mismatch on any other note still asks for a retry.
+    assert "Retry" in plain_failure({"error_type": "visual_review_failed", "failed_rows": [12, 14],
+                                     "limited_rows": [12]})
 
 
 @pytest.mark.asyncio
@@ -839,6 +953,35 @@ async def test_failed_visual_recheck_saves_only_unrelated_passed_note(monkeypatc
         cells = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
         assert cells[112].html == _TABLE_HTML
         assert cells[113].html != _TABLE_HTML
+
+
+@pytest.mark.asyncio
+async def test_note_failed_only_by_a_formatter_limit_keeps_its_formatting(monkeypatch, formatter_db):
+    # A note that is right except for a layout the formatter cannot draw is
+    # saved formatted, stays failed for a person, and gets no receipt.
+    from db import repository as repo
+    db, _, run_id = formatter_db
+    finding = "Table 0: needs a layout the formatter cannot produce: inset rule under 2024."
+    async def check(**kwargs):
+        return {112: finding}, {"tables": [
+            {"row": 112, "table": 0, "status": "unresolved", "issue_kind": "unsupported_layout",
+             "reason": "inset rule under 2024."},
+        ], "limitation_rows": [112]}
+    fake = _FakeAgent([_GOOD_PATCH])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
+    assert not result["ok"] and result["changed_rows"] == 1
+    assert result["failed_rows"] == [112] and result["limited_rows"] == [112]
+    assert "112" not in result["verified_rows"] and 112 not in result["verified_rows"]
+    assert fake.calls == 1  # no correction attempt for a known limit
+    with repo.db_session(db) as conn:
+        cells = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
+    assert cells[112].html != _TABLE_HTML
+    assert "Formatting was saved" in fa_plain_failure(result)
+
+
+def fa_plain_failure(outcome):
+    from notes.formatting_agent import plain_failure
+    return plain_failure(outcome)
 
 
 @pytest.mark.asyncio

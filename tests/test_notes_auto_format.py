@@ -391,6 +391,9 @@ async def test_each_pass_reports_waiting_before_it_gets_a_model_slot(auto_format
     async def fake_formatter(**kwargs):
         label = kwargs.get("trace_label") or kwargs["sheet"]
         assert ("queued", label) in [(data["phase"], data["sub_agent_id"]) for _, data in events]
+        with repo.db_session(db_path) as conn:
+            saved = repo.fetch_events(conn, kwargs["activity"].run_agent_id)
+        assert saved[0].payload["phase"] == "queued"
         return {"ok": True, "changed_rows": 0}
 
     await run_pdf_auto_format(
@@ -442,6 +445,10 @@ async def test_stop_terminalizes_queued_parts_and_preserves_completed_work(auto_
     ))
     try:
         await asyncio.wait_for(all_queued.wait(), timeout=2)
+        with repo.db_session(db_path) as conn:
+            calls = conn.execute("SELECT id, variant FROM run_agents WHERE run_id=?", (run_id,)).fetchall()
+            assert len(calls) == 3
+            assert all(repo.fetch_events(conn, call[0])[0].payload["phase"] == "queued" for call in calls)
     finally:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -450,6 +457,9 @@ async def test_stop_terminalizes_queued_parts_and_preserves_completed_work(auto_
     assert latest == {"Notes-CI": "completed",
                       "notes_format_Notes-Listofnotes_part1": "cancelled",
                       "notes_format_Notes-Listofnotes_part2": "cancelled"}
+    with repo.db_session(db_path) as conn:
+        saved = conn.execute("SELECT variant, status FROM run_agents WHERE run_id=?", (run_id,)).fetchall()
+    assert dict(saved) == latest
 
 
 def test_parts_of_one_pass_share_the_revert_snapshot(auto_format_db, monkeypatch):

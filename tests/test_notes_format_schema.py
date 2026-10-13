@@ -32,6 +32,14 @@ def test_block_alignment_matches_the_validator():
     {"row": 1, "tables": [{"table": 0, "columns": ["figures"]}]},
     {"row": 1, "tables": [{"table": 0, "columns": ["label"],
                            "lines": [{"after_row": 1, "from_col": 1, "to_col": 1, "kind": "thick"}]}]},
+    {"row": 1, "tables": [{"table": 0, "columns": ["label"], "overrides": [
+        {"row": 1, "cell": 1, "vertical_align": "baseline", "reason": "Header"}]}]},
+    {"row": 1, "tables": [{"table": 0, "columns": ["label"], "overrides": [
+        {"row": 1, "cell": 1, "reason": "No alignment"}]}]},
+    {"row": 1, "tables": [{"table": 0, "columns": ["label"], "paragraphs": [
+        {"row": 1, "cell": 1, "paragraph": 1, "indent": 9, "reason": "Too deep"}]}]},
+    {"row": 1, "tables": [{"table": 0, "columns": ["label"], "paragraphs": [
+        {"row": 1, "cell": 1, "paragraph": 1, "reason": "No style"}]}]},
 ])
 def test_unknown_keys_and_values_are_refused(note):
     with pytest.raises(ValidationError):

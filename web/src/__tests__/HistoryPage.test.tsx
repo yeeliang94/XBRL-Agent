@@ -675,7 +675,7 @@ describe("HistoryPage", () => {
     });
   });
 
-  test("polls a running detail until it reaches a terminal status", async () => {
+  test.each([false, true])("polls until the run or its formatter retry finishes (retry: %s)", async (formatterRetry) => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       fetchRuns.mockResolvedValue({ runs: [], total: 0, limit: 50, offset: 0 });
@@ -683,7 +683,7 @@ describe("HistoryPage", () => {
         id: 77,
         created_at: "2026-04-10T00:00:00Z",
         pdf_filename: "LIVE.pdf",
-        status: "running",
+        status: formatterRetry ? "completed" : "running",
         session_id: "sess-77",
         output_dir: "/tmp/out/sess-77",
         merged_workbook_path: null,
@@ -691,7 +691,9 @@ describe("HistoryPage", () => {
         started_at: "2026-04-10T00:00:00Z",
         ended_at: null,
         config: { statements: ["SOFP"] },
-        agents: [],
+        agents: formatterRetry ? [{ id: 21, statement_type: "NOTES_FORMATTING", variant: "Notes-CI",
+          model: "model-a", status: "running", started_at: "2026-04-10T00:01:00Z", ended_at: null,
+          workbook_path: null, total_tokens: 0, total_cost: 0, events: [] }] : [],
         cross_checks: [],
       };
       vi.mocked(api.fetchRunDetail)
@@ -700,6 +702,7 @@ describe("HistoryPage", () => {
           ...running,
           status: "completed",
           ended_at: "2026-04-10T00:01:00Z",
+          agents: running.agents.map((agent) => ({ ...agent, status: "completed", ended_at: "2026-04-10T00:02:00Z" })),
         });
 
       render(<HistoryPage selectedId={77} onSelectRun={() => {}} />);
@@ -719,6 +722,72 @@ describe("HistoryPage", () => {
       });
       expect(api.fetchRunDetail).toHaveBeenCalledTimes(2);
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("formatting from Notes restarts stopped polling and preserves the open workspace", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const originalFetch = globalThis.fetch;
+    let launched = false;
+    let finished = false;
+    window.history.replaceState({}, "", "/history/77?tab=notes");
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      let body: unknown = { concepts: [] };
+      if (url.includes("/notes_cells")) body = { sheets: [{ sheet: "Notes-CI", rows: [
+        { row: 4, label: "Corporate info", html: "<p>ACME</p>", source_pages: [3], evidence: "Page 3", updated_at: "" },
+      ] }] };
+      else if (url.includes("/notes-format/status")) body = {
+        status: finished ? "done" : launched ? "running" : "idle", sheet: "Notes-CI", error: null,
+      };
+      else if (url.includes("/notes-format")) {
+        launched = true;
+        body = { ok: true, status: "running", sheet: "Notes-CI" };
+      }
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    try {
+      fetchRuns.mockResolvedValue({ runs: [], total: 0, limit: 50, offset: 0 });
+      const completed = {
+        id: 77, created_at: "2026-04-10T00:00:00Z", pdf_filename: "RETRY.pdf", status: "completed",
+        session_id: "sess-77", output_dir: "/tmp/out/sess-77", merged_workbook_path: null,
+        scout_enabled: false, started_at: "2026-04-10T00:00:00Z", ended_at: "2026-04-10T00:01:00Z",
+        config: { statements: ["SOFP"] }, agents: [], cross_checks: [],
+      };
+      const call = {
+        id: 21, statement_type: "NOTES_FORMATTING", variant: "Notes-CI", model: "model-a", status: "running",
+        started_at: "2026-04-10T00:02:00Z", ended_at: null, workbook_path: null, total_tokens: 0, total_cost: 0, events: [],
+      };
+      vi.mocked(api.fetchRunDetail).mockResolvedValueOnce(completed)
+        // The accepted launch can precede creation of its worker audit row.
+        .mockResolvedValueOnce(completed)
+        .mockResolvedValueOnce({ ...completed, agents: [call] })
+        .mockResolvedValue({ ...completed, agents: [{ ...call, status: "completed", ended_at: "2026-04-10T00:03:00Z" }] });
+      render(<HistoryPage selectedId={77} onSelectRun={() => {}} initialRunTab="notes" />);
+      const format = await screen.findByTestId("notes-format-button");
+      await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+      expect(api.fetchRunDetail).toHaveBeenCalledTimes(1);
+      fireEvent.click(format);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      await waitFor(() => expect(api.fetchRunDetail).toHaveBeenCalledTimes(2));
+      expect(format).toBeInTheDocument();
+      expect(format).toHaveTextContent("Formatting...");
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(api.fetchRunDetail).toHaveBeenCalledTimes(3);
+      expect(format).toBeInTheDocument();
+      finished = true;
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      await waitFor(() => expect(api.fetchRunDetail).toHaveBeenCalledTimes(5));
+      fireEvent.click(within(screen.getByRole("tablist", { name: "Run detail sections" }))
+        .getByRole("tab", { name: /^activity$/i }));
+      expect(within(screen.getByRole("tablist", { name: "Run workstreams" }))
+        .getByRole("tab", { name: /Notes formatting/ })).toHaveTextContent("Formatting retries finished.");
+      await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+      expect(api.fetchRunDetail).toHaveBeenCalledTimes(5);
+    } finally {
+      globalThis.fetch = originalFetch;
+      window.history.replaceState({}, "", "/");
       vi.useRealTimers();
     }
   });

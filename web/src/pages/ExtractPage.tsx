@@ -20,7 +20,7 @@ import type { AgentTabState } from "../components/AgentTabs";
 import { ValidatorTab } from "../components/ValidatorTab";
 import { NotesSubTabBar } from "../components/NotesSubTabBar";
 import { FormatterSubAgentActivity } from "../components/FormatterSubAgentActivity";
-import { deriveFormatterSheets, formatterProgressSummary, formatterRunningParts, formatterSubAgentLabel } from "../lib/formatterSubAgents";
+import { deriveFormatterSheets, formatterProgressSummary, formatterRunningParts } from "../lib/formatterSubAgents";
 import { notesSheetDisplayName } from "../lib/sheetLabels";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { buildToolTimeline, filterEventsBySubAgent } from "../lib/buildToolTimeline";
@@ -894,16 +894,7 @@ export function ActiveTabPanel({
           )}
         </div>}
         {bySheet && (
-          <FormatterSubAgentActivity events={formatterEvents} status={formatting.status}
-            technical={<>
-              {formatterEvents.map((event, index) => event.event === "status" && event.data.phase === "failed" && event.data.detail
-                ? <div key={index} style={{ padding: pwc.space.md, whiteSpace: "pre-wrap" }}>
-                  <strong>{formatterSubAgentLabel(event.data.sub_agent_id ?? "Notes formatting")}</strong>
-                  <div>{event.data.detail}</div>
-                </div> : null)}
-              <AgentTimeline events={formatterEvents} toolTimeline={buildToolTimeline(formatterEvents)}
-                reasoningBlocks={[]} isRunning={formatting.status === "running"} />
-            </>} />
+          <FormatterSubAgentActivity events={formatterEvents} status={formatting.status} />
         )}
       </div>
     );

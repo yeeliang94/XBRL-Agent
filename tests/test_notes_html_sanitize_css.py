@@ -48,6 +48,7 @@ def test_allowed_css_properties_is_exactly_the_editor_set() -> None:
         "border-color",
         "color",
         "text-align",
+        "vertical-align",  # agent-authored cell alignment preserved by the editor
         "width",        # column width on <table>/<col> (resizable table)
         "min-width",    # TipTap's always-emitted layout width on <table>/<col>
         "margin-left",  # paragraph indent
@@ -64,6 +65,19 @@ def test_allowed_css_properties_is_exactly_the_editor_set() -> None:
 def test_cell_padding_survives_on_td() -> None:
     out = _clean('<table><tr><td style="padding: 4px 8px">x</td></tr></table>')
     assert "padding: 4px 8px" in out.lower()
+
+
+@pytest.mark.parametrize("value", ["top", "middle", "bottom"])
+def test_vertical_alignment_is_preserved_only_on_table_tags(value) -> None:
+    out = _clean(f'<table><tr><td style="vertical-align: {value}">x</td></tr></table>')
+    assert f"vertical-align: {value}" in out
+    out = _clean(f'<p style="vertical-align: {value}">x</p>')
+    assert "vertical-align" not in out
+
+
+def test_invalid_vertical_alignment_is_stripped() -> None:
+    cleaned, warnings = sanitize_notes_html('<table><tr><td style="vertical-align: calc(2px)">x</td></tr></table>')
+    assert "vertical-align" not in cleaned and warnings
 
 
 def test_block_spacing_survives_on_paragraph() -> None:
