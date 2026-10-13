@@ -16,9 +16,9 @@ from __future__ import annotations
 from typing import Literal, Optional
 
 from bs4 import BeautifulSoup, Tag
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from notes.format_patch import FormatPatchError, _build_grid, apply_cell_operations
+from notes.format_patch import FormatPatchError, _build_grid, apply_cell_operations, cell_paragraphs
 from mtool.notes_decorate import is_numeric_cell_text
 from notes.format_verify import table_rows
 
@@ -53,8 +53,31 @@ class CellOverride(BaseModel):
     model_config = ConfigDict(extra="forbid")
     row: int = Field(ge=1)
     cell: int = Field(ge=1, description="1-based direct cell number within the row")
-    text_align: Literal["left", "center", "right"]
+    text_align: Optional[Literal["left", "center", "right"]] = None
+    vertical_align: Optional[Literal["top", "middle", "bottom"]] = None
     reason: str = Field(min_length=3, description="Why the column role does not apply here")
+
+    @model_validator(mode="after")
+    def require_alignment(self):
+        if self.text_align is None and self.vertical_align is None:
+            raise ValueError("a cell override must specify an alignment")
+        return self
+
+
+class ParagraphOverride(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    row: int = Field(ge=1)
+    cell: int = Field(ge=1, description="1-based direct cell number within the row")
+    paragraph: int = Field(ge=1, description="1-based existing p element from the cell's paragraph manifest")
+    indent: Optional[int] = Field(default=None, ge=0, le=8, description="Indent in 2em levels; 0 clears it")
+    text_align: Optional[Literal["left", "center", "right", "justify"]] = None
+    reason: str = Field(min_length=3)
+
+    @model_validator(mode="after")
+    def require_style(self):
+        if self.indent is None and self.text_align is None:
+            raise ValueError("a paragraph override must specify indent or alignment")
+        return self
 
 
 class TableLayout(BaseModel):
@@ -68,6 +91,7 @@ class TableLayout(BaseModel):
     rows: list[RowSpec] = Field(default_factory=list, description="Only rows that are not plain items")
     lines: list[LineSpec] = Field(default_factory=list, description="Every source-visible horizontal line")
     overrides: list[CellOverride] = Field(default_factory=list)
+    paragraphs: list[ParagraphOverride] = Field(default_factory=list)
 
 
 def layout_tables(html: str) -> list[int]:
@@ -111,11 +135,20 @@ def _table_errors(table: Tag, layout: TableLayout) -> list[str]:
         elif _line_side(grid, positions, line) is None:
             errors.append(f"{label} cuts through merged cells on both sides of the edge; "
                           "widen or narrow it to whole cells on at least one side")
-    for item in layout.overrides:
+    targets = set()
+    for item in [*layout.overrides, *layout.paragraphs]:
         cells = (rows[item.row - 1].find_all(["th", "td"], recursive=False)
                  if item.row <= n_rows else [])
         if item.cell > len(cells):
             errors.append(f"{name}: override targets row {item.row} cell {item.cell}, which does not exist")
+            continue
+        key = (item.row, item.cell, getattr(item, "paragraph", None))
+        if key in targets:
+            errors.append(f"{name}: override target {key} is described twice")
+        targets.add(key)
+        if isinstance(item, ParagraphOverride) and item.paragraph > len(cell_paragraphs(cells[item.cell - 1])):
+            errors.append(f"{name}: paragraph {item.paragraph} does not exist in row {item.row} cell {item.cell}; "
+                          "a hard break is not a separate paragraph")
     return errors
 
 
@@ -213,7 +246,17 @@ def _operations(table: Tag, layout: TableLayout, cell_padding: tuple[int, int]) 
             # The patch engine mirrors the edge onto neighbours it fully covers.
             cell_op(first_row + 1, direct, {f"border_{side}": border})
     for item in layout.overrides:
-        cell_op(item.row, item.cell, {"text_align": item.text_align})
+        cell_op(item.row, item.cell, {key: value for key, value in {
+            "text_align": item.text_align, "vertical_align": item.vertical_align,
+        }.items() if value is not None})
+    for item in layout.paragraphs:
+        style = {}
+        if item.indent:
+            style["indent"] = f"{item.indent * 2}em"
+        if item.text_align is not None:
+            style["text_align"] = item.text_align
+        ops.append({"target": {"table": layout.table, "cell": {"r": item.row, "c": item.cell},
+                               "paragraph": item.paragraph}, "style": style})
     return ops
 
 
@@ -264,7 +307,13 @@ def describe_layouts(layouts: list[TableLayout]) -> str:
             where = "above row 1" if line.after_row == 0 else f"below row {line.after_row}"
             out.append(f"  {line.kind} line {where}, columns {line.from_col}-{line.to_col}")
         for item in layout.overrides:
-            out.append(f"  override row {item.row} cell {item.cell}: {item.text_align} ({item.reason})")
+            values = ", ".join(f"{key}={value}" for key, value in
+                               (("text_align", item.text_align), ("vertical_align", item.vertical_align))
+                               if value is not None)
+            out.append(f"  override row {item.row} cell {item.cell}: {values} ({item.reason})")
+        for item in layout.paragraphs:
+            out.append(f"  row {item.row} cell {item.cell} paragraph {item.paragraph}: "
+                       f"indent={item.indent}, text_align={item.text_align} ({item.reason})")
     return "\n".join(out) if out else "no tables"
 
 
@@ -281,7 +330,10 @@ def layout_manifest(html: str) -> list[dict]:
             for cell in tr.find_all(["th", "td"], recursive=False):
                 cols = sorted({c for _, c in positions.get(id(cell), [])})
                 span = [cols[0] + 1, cols[-1] + 1] if cols else []
-                cells.append({"grid_columns": span, "text": cell.get_text(" ", strip=True)[:40]})
+                cells.append({"grid_columns": span, "text": cell.get_text(" ", strip=True)[:40],
+                              "paragraphs": [{"paragraph": i, "text": p.get_text(" ", strip=True)[:120],
+                                              "hard_breaks": len(p.find_all("br"))}
+                                             for i, p in enumerate(cell_paragraphs(cell), 1)]})
             rows.append({"row": r, "cells": cells})
         out.append({"table": index, "grid_columns": (max(c for _, c in grid) + 1) if grid else 0,
                     "rows": rows})

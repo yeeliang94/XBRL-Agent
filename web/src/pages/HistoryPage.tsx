@@ -291,7 +291,8 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
         consecutiveFailures = 0;
         setDetail(next);
         setDetailError(null);
-        if (next.status === "running") schedulePoll();
+        if (next.status === "running" || next.agents.some((agent) =>
+          agent.statement_type === "NOTES_FORMATTING" && agent.status === "running")) schedulePoll();
       } catch (err: unknown) {
         if (cancelled) return;
         setDetailError(userMessage(err));

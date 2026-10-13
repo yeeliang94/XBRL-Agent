@@ -75,9 +75,39 @@ test("saved formatting shows sheets, a plain failure and calls behind Technical 
   const calls = within(screen.getByRole("list", { name: "Formatting calls" }));
   expect(calls.getByText("notes_format_Notes-Listofnotes_part2")).toBeVisible();
   expect(calls.getByText(finding)).toBeVisible();
-  // Earlier attempts stay on record here even though the latest one counts.
-  expect(calls.getByText("Older attempt failure")).toBeVisible();
+  expect(calls.queryByText("Older attempt failure")).toBeNull();
+  expect(calls.queryByText("Notes-Issuedcapital")).toBeNull();
+  // All retains earlier attempts; selecting a sheet scopes both views.
+  fireEvent.click(chips.getByRole("tab", { name: "All" }));
+  expect(within(screen.getByRole("list", { name: "Formatting calls" })).getByText("Older attempt failure")).toBeVisible();
   expect(screen.getByRole("list", { name: "Formatting calls" })).toHaveTextContent("39,885 tokens");
+});
+
+test("polling includes unfinished formatter parts before their first saved step", () => {
+  const part = "notes_format_Notes-Listofnotes_part";
+  const completed = makeAgent({ id: 21, statement_type: "NOTES_FORMATTING", variant: part + "1", status: "completed",
+    events: [{ event: "status", timestamp: 2, data: { sub_agent_id: part + "1", phase: "completed", message: "Formatting finished" } }] as SSEEvent[] });
+  const running = makeAgent({ id: 22, statement_type: "NOTES_FORMATTING", variant: part + "2", status: "running", ended_at: null,
+    total_tokens: 0, events: [] });
+  const queued = makeAgent({ id: 23, statement_type: "NOTES_FORMATTING", variant: part + "3", status: "running", ended_at: null,
+    events: [{ event: "status", timestamp: 3, data: { sub_agent_id: part + "3", phase: "queued", message: "Waiting for a free slot." } }] as SSEEvent[] });
+  const props = { onDelete: () => {}, onDownload: () => {} };
+  const { rerender } = render(<RunDetailView {...props} detail={makeDetail({ status: "running", agents: [completed, running, queued] })} />);
+  clickRunTab(/^activity$/i);
+  const formatterTab = () => within(screen.getByRole("tablist", { name: "Run workstreams" })).getByRole("tab", { name: /Notes formatting/ });
+  expect(formatterTab()).toHaveTextContent("1 of 3 parts done");
+  expect(formatterTab()).toHaveTextContent("1 running");
+  fireEvent.click(formatterTab());
+  expect(within(screen.getByRole("tablist", { name: "Formatting by sheet" }))
+    .getByRole("tab", { name: "List of Notes · 1 of 3" })).toBeVisible();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Technical detail" }));
+  expect(screen.getByRole("list", { name: "Formatting calls" })).toHaveTextContent("Usage available when this part finishes");
+  expect(screen.getByRole("list", { name: "Formatting calls" })).not.toHaveTextContent("· 0 tokens");
+  const call = { event: "tool_call", timestamp: 4, data: { sub_agent_id: part + "2", tool_name: "zoom_pdf_region",
+    tool_call_id: "part2:zoom", args: { page: 5 } } } as SSEEvent;
+  rerender(<RunDetailView {...props} detail={makeDetail({ status: "running", agents: [completed, { ...running, events: [call] }, queued] })} />);
+  expect(screen.getByText(/zoom pdf region/i)).toBeVisible();
+  expect(formatterTab()).toHaveTextContent("1 of 3 parts done");
 });
 
 test("saved formatting retains a stage failure outside recorded sheet calls", () => {
@@ -100,7 +130,7 @@ test("saved formatting retains a stage failure outside recorded sheet calls", ()
   expect(screen.getByRole("tablist", { name: "Formatting by sheet" })).toBeVisible();
 });
 
-test("saved formatting keeps a separate stage failure beside a failed sheet", () => {
+test.each(["separate", "accounted", "skipped"])("saved formatting suppresses only an accounted-for stage failure (%s)", (problem) => {
   const stageFailure = "Formatting stopped before saving the remaining sheets.";
   const finding = "Table 1: Note 26, row 3 combines two source rows.";
   const ended = Date.parse("2026-04-10T10:00:00Z") / 1000;
@@ -111,14 +141,16 @@ test("saved formatting keeps a separate stage failure beside a failed sheet", ()
         phase: "failed", message: "1 note still looks different from the source PDF. Retry it from the Notes tab.",
         detail: finding } } as unknown as SSEEvent] }),
   ], run_events: [
-    { event: "error", timestamp: ended, data: { type: "notes_formatting_incomplete", message: stageFailure } },
+    { event: "error", timestamp: ended, data: { type: "notes_formatting_incomplete", message: stageFailure,
+      sheets: problem !== "separate" ? { "Notes-Listofnotes": { ok: false, error: finding, skipped: problem === "skipped" } } : undefined } },
     { event: "pipeline_stage", timestamp: ended, data: { stage: "formatting_notes", status: "failed" } },
   ] })} onDelete={() => {}} onDownload={() => {}} />);
   clickRunTab(/^activity$/i);
   fireEvent.click(within(screen.getByRole("tablist", { name: "Run workstreams" }))
     .getByRole("tab", { name: /Notes formatting/ }));
   expect(screen.getByTestId("formatting-failure")).toHaveTextContent("List of Notes: 1 note still looks different");
-  expect(within(screen.getByTestId("agent-error-message")).getByText(stageFailure)).toBeVisible();
+  if (problem === "accounted") expect(screen.queryByTestId("agent-error-message")).toBeNull();
+  else expect(within(screen.getByTestId("agent-error-message")).getByText(stageFailure)).toBeVisible();
 });
 
 test.each([false, true])("formatting retries replace older failures with current working and success states (stage: %s)", (hasStage) => {

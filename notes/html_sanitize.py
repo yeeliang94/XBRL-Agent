@@ -240,6 +240,7 @@ def _build_css_property_validators() -> dict[str, "callable"]:
         "background-color": _is_color,
         "color": _is_color,
         "text-align": lambda v: v in _TEXT_ALIGN_VALUES,
+        "vertical-align": lambda v: v in {"top", "middle", "bottom"},
         # Column width (on <table>/<col>) and paragraph indent (margin-left).
         # `min-width` is emitted by TipTap's resizable table on EVERY un-sized
         # table/column — it must round-trip too, or the sanitiser strips its
@@ -290,6 +291,7 @@ ALLOWED_CSS_PROPERTIES: frozenset[str] = frozenset(_CSS_PROPERTY_VALIDATORS)
 #   - <mark>      : highlight fill (+ the `color: inherit` it emits)
 #   - <p>/<h3>/<li>: paragraph alignment (TextAlign) + indent (margin-left)
 _TABLE_STYLE_PROPS: frozenset[str] = frozenset({
+    "vertical-align",
     "background-color",
     "border-top", "border-right", "border-bottom", "border-left",
     # The all-sides + grouped forms the browser collapses uniform per-side

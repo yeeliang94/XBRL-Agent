@@ -64,6 +64,7 @@ async def test_a_structural_finding_is_never_a_pass(review_harness):
 @pytest.mark.asyncio
 async def test_formatter_layout_is_context_beside_the_actual_output(review_harness):
     kwargs, _, harness = review_harness
+    kwargs["rows"][112] = kwargs["rows"][112].replace("Closing 2024", "<p>Closing 2024</p><p>At year end</p>")
     layout = {"row": 112, "tables": [{"table": 0, "columns": ["label", "amount"],
                                       "lines": [{"after_row": 1, "from_col": 2, "to_col": 2}]}]}
     await vr.check_visual_rows(**kwargs, layouts={112: layout})
@@ -71,6 +72,7 @@ async def test_formatter_layout_is_context_beside_the_actual_output(review_harne
                    if isinstance(part, str) and "FORMATTED NOTE ROW 112" in part)
     assert "columns 1=label, 2=amount" in content
     assert "single line below row 1, columns 2-2" in content
+    assert '"paragraph": 2, "text": "At year end"' in content
     # The real candidate and prepared output stay the evidence, table by table.
     assert "TABLE 0 CANONICAL CANDIDATE HTML:" in content and "TABLE 0 PREPARED OUTPUT HTML:" in content
 
@@ -103,10 +105,12 @@ async def test_unquoted_structure_claim_and_content_defect_never_trigger_recopy(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["source_content", "source_provenance", "source_emphasis"])
-async def test_source_defect_never_enters_style_correction(review_harness, kind):
+@pytest.mark.parametrize("kind", ["source_content", "source_provenance", "source_emphasis", "unsupported_layout"])
+@pytest.mark.parametrize("status", ["needs_correction", "pass"])
+async def test_source_defect_never_enters_style_correction(review_harness, kind, status):
     kwargs, decision, _ = review_harness
-    decision[0].update(issue_kind=kind, status="needs_correction", reason="Recorded page lacks this table.")
+    decision[0].update(issue_kind=kind, status=status, reason="Recorded layout cannot represent this table.",
+                       observed_text="Closing 2024")
     async def formatter_run(prompt):
         raise AssertionError("Source defects cannot be repaired by style changes")
     errors, review, corrected = await vr.review_and_correct_rows(
@@ -114,11 +118,67 @@ async def test_source_defect_never_enters_style_correction(review_harness, kind)
         db_path="unused", pdf_path="unused", sheet=kwargs["sheet"], model="unused",
         usage=RunUsage(), formatter_run=formatter_run, output_dir="", trace_label="test",
     )
-    assert "human review" in errors[112] and corrected == {}
+    assert ("cannot produce" if kind == "unsupported_layout" else "human review") in errors[112]
+    assert corrected == {}
     assert review["tables"][0]["issue_kind"] == kind
     assert review["tables"][0]["status"] == "unresolved"
     # Source defects go to human review, not to the structural re-copy.
     assert vr.structure_findings({"failed_rows": [112], "visual_review": review}) == {}
+    # Only a formatter limit lets the note keep its best-effort formatting.
+    assert review["limitation_rows"] == ([112] if kind == "unsupported_layout" else [])
+
+
+@pytest.mark.asyncio
+async def test_unquoted_unsupported_claim_gets_an_ordinary_correction(review_harness):
+    # "Cannot be drawn" is not evidence unless it quotes the table; otherwise
+    # it would let the checker skip correction and fail a fixable note.
+    kwargs, decision, _ = review_harness
+    decision[0].update(issue_kind="unsupported_layout", status="unresolved",
+                       reason="Inset rule cannot be drawn.", observed_text="Not in this table")
+    errors, result = await vr.check_visual_rows(**kwargs)
+    assert result["tables"][0]["issue_kind"] == "style"
+    assert result["tables"][0]["status"] == "needs_correction"
+    assert result["limitation_rows"] == []
+    assert "Inset rule cannot be drawn." in errors[112]
+
+
+@pytest.mark.asyncio
+async def test_limit_only_row_keeps_corrected_html_after_recheck(review_harness, monkeypatch):
+    # A style finding is corrected; the recheck leaves only a formatter limit,
+    # so the corrected candidate is returned instead of discarded.
+    kwargs, decision, _ = review_harness
+    decision[0].update(issue_kind="style", status="needs_correction", reason="Amounts should be right-aligned.",
+                       observed_text="Closing 2024")
+    checks = iter([
+        ({112: "Table 0: Amounts should be right-aligned."},
+         {"tables": [dict(decision[0])], "limitation_rows": []}),
+        ({112: "Table 0: needs a layout the formatter cannot produce: inset rule"},
+         {"tables": [], "limitation_rows": [112]}),
+    ])
+
+    async def fake_check(**_):
+        return next(checks)
+
+    monkeypatch.setattr(vr, "check_visual_rows", fake_check)
+    corrected_html = "<table><tr><td>Closing 2024</td><td style=\"text-align: right\">1</td></tr></table>"
+
+    async def formatter_run(prompt):
+        return SimpleNamespace(output={})
+
+    import notes.formatting_agent as fa
+    monkeypatch.setattr(fa, "_screen_patch", lambda output, sheet, revised=False: (
+        None, SimpleNamespace(patch={"notes": []}), None))
+    monkeypatch.setattr(fa, "_partition_layout", lambda base, patch, padding: (
+        {"cells": [{"row": 112, "html": corrected_html}]}, None, {}))
+    monkeypatch.setattr(vr, "apply_sheet_patch", lambda base, patch: SimpleNamespace(rows={112: corrected_html}))
+    errors, review, corrected = await vr.review_and_correct_rows(
+        rows=kwargs["rows"], cells=kwargs["cells"], style=kwargs["style"], run_id=1,
+        db_path="unused", pdf_path="unused", sheet=kwargs["sheet"], model="unused",
+        usage=RunUsage(), formatter_run=formatter_run, output_dir="", trace_label="test",
+    )
+    assert 112 in errors
+    assert review["limitation_rows"] == [112]
+    assert corrected == {112: corrected_html}
 
 
 @pytest.mark.asyncio

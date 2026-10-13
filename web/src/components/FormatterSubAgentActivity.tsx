@@ -5,6 +5,8 @@ import { deriveFormatterSheets, labelFormatterEvents } from "../lib/formatterSub
 import { pwc } from "../lib/theme";
 import { ActivityStream } from "./ActivityStream";
 import { NotesSubTabBar } from "./NotesSubTabBar";
+import { AgentTimeline } from "./AgentTimeline";
+import { deriveFormatterSubAgents, formatterSubAgentLabel } from "../lib/formatterSubAgents";
 
 /** Notes-formatting activity with one chip per notes sheet, laid out like
  *  every other workstream: chips, a failure note when one applies, then the
@@ -15,22 +17,23 @@ export function FormatterSubAgentActivity({ events, status, recorded = false, te
   status: AgentTabStatus;
   recorded?: boolean;
   /** Shown in place of the stream when Technical detail is ticked. */
-  technical?: ReactNode;
+  technical?: (sheet: string | null) => ReactNode;
 }) {
   const [sheetKey, setSheetKey] = useState<string | null>(null);
   const sheets = useMemo(() => deriveFormatterSheets(events), [events]);
   const selected = sheets.find((sheet) => sheet.sheet === sheetKey) ?? null;
-  const stream = useMemo(() => {
+  const scopedEvents = useMemo(() => {
     const ids = new Set(selected?.subAgentIds ?? []);
-    // "All" keeps to each part's named status lines; a sheet's chip adds its
-    // individual steps, which would not say which sheet they belong to here.
-    const shown = selected
+    return selected
       ? events.filter((event) => ids.has(String((event.data as unknown as Record<string, unknown>).sub_agent_id ?? "")))
-      : events.filter((event) => event.event === "status");
+      : events;
+  }, [events, selected]);
+  const stream = useMemo(() => {
+    const shown = selected ? scopedEvents : scopedEvents.filter((event) => event.event === "status");
     // Part names only help when a sheet was split; a single pass reads plainly.
     const labelled = !selected || selected.subAgentIds.length > 1 ? labelFormatterEvents(shown) : shown;
     return { events: labelled, toolTimeline: buildToolTimeline(labelled) };
-  }, [events, selected]);
+  }, [scopedEvents, selected]);
   if (sheets.length === 0) return null;
   const shownStatus = selected?.status ?? status;
   // A failure is reported once the sheet (or, on "All", the whole pass) ends.
@@ -70,13 +73,36 @@ export function FormatterSubAgentActivity({ events, status, recorded = false, te
       status={shownStatus}
       recorded={recorded}
       streamKey={`notes-formatting:${selected?.sheet ?? "all"}`}
-      technical={technical}
+      technical={<>
+        {technical?.(selected?.sheet ?? null)}
+        <FormatterTechnicalActivity events={scopedEvents} />
+      </>}
     />
   </>;
 }
 
+/** Separate timelines keep parallel parts' tool calls and phases distinct. */
+function FormatterTechnicalActivity({ events }: { events: SSEEvent[] }) {
+  return <div>
+    <p style={styles.execution}>Parts run in parallel; checks and corrections run in sequence within each part.</p>
+    {deriveFormatterSubAgents(events).map((part) => {
+      const steps = events.filter((event) => event.data.sub_agent_id === part.subAgentId);
+      return <section key={part.subAgentId} aria-label={formatterSubAgentLabel(part.subAgentId)}>
+        <h3 style={styles.partHeading}>{part.label}</h3>
+        {steps.map((event, index) => event.event === "status" && event.data.phase === "failed" && event.data.detail
+          ? <div key={index} style={styles.detail}>{String(event.data.detail)}</div> : null)}
+        <AgentTimeline events={steps} toolTimeline={buildToolTimeline(steps)} reasoningBlocks={[]}
+          isRunning={part.status === "running" || part.status === "pending"} showStatusSteps />
+      </section>;
+    })}
+  </div>;
+}
+
 // Same "What went wrong" treatment as a failed workstream in RunDetailView.
 const styles = {
+  execution: { fontSize: 13, color: pwc.grey700, padding: "0 16px" },
+  partHeading: { fontSize: 14, fontWeight: pwc.weight.medium, padding: "12px 16px 0" },
+  detail: { padding: "8px 16px", whiteSpace: "pre-wrap" as const, overflowWrap: "anywhere" as const },
   failure: {
     display: "grid",
     gap: 4,

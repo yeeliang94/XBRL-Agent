@@ -1,4 +1,4 @@
-import type { AgentTabStatus, SSEEvent } from "./types";
+import type { AgentTabStatus, RunAgentJson, SSEEvent } from "./types";
 import { notesSheetDisplayName } from "./sheetLabels";
 
 /** One notes-formatter sub-agent: a whole notes sheet or one group of its tables. */
@@ -32,6 +32,34 @@ const PHASE_STATUS: Record<string, AgentTabStatus> = {
   failed: "failed",
   cancelled: "cancelled",
 };
+
+/** Durable call rows are the roster, even before a part has saved any steps.
+ * Older completed calls without part metadata retain their legacy display. */
+export function formatterEventsFromCalls(calls: RunAgentJson[]): SSEEvent[] {
+  const hasRoster = calls.some((call) => call.status === "running"
+    || call.events.some((event) => "sub_agent_id" in event.data));
+  if (!hasRoster) return calls.flatMap((call) => call.events);
+  return calls.flatMap((call) => {
+    const sub_agent_id = call.variant ?? `call:${call.id}`;
+    const phase = ["completed", "succeeded"].includes(call.status) ? "completed"
+      : ["cancelled", "aborted"].includes(call.status) ? "cancelled"
+      : call.status === "failed" ? "failed" : "started";
+    const startTime = (Date.parse(call.started_at ?? "") || 0) / 1000;
+    const start: SSEEvent = { event: "status", timestamp: startTime,
+      data: { sub_agent_id, phase: "started", message: "Formatting started" } };
+    const events = call.events.map((event) => ({ ...event,
+      data: { ...event.data, sub_agent_id } }) as SSEEvent);
+    // A terminal audit row remains authoritative when an event write failed.
+    const lastStatus = [...events].reverse().find((event) => event.event === "status");
+    const terminal: SSEEvent[] = phase !== "started" && lastStatus?.data.phase !== phase
+      ? [{ event: "status", timestamp: Math.max((Date.parse(call.ended_at ?? "") || 0) / 1000,
+        startTime, ...events.map((event) => event.timestamp ?? 0)),
+        data: { sub_agent_id, phase, message: phase === "completed" ? "Formatting finished"
+          : phase === "cancelled" ? "Formatting stopped" : "Formatting did not finish. Review it from Notes.",
+          detail: call.error_message ?? "" } }] : [];
+    return [...(events.some((event) => event.event === "status") ? [] : [start]), ...events, ...terminal];
+  }).sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+}
 
 /** Formatter sub-agents in first-seen order, each with its latest status. */
 export function deriveFormatterSubAgents(events: SSEEvent[]): FormatterSubAgent[] {
@@ -90,7 +118,7 @@ export function deriveFormatterSheets(events: SSEEvent[]): FormatterSheet[] {
       label: notesSheetDisplayName(sheet),
       subAgentIds: parts.map((part) => part.subAgentId),
       status,
-      partsDone: statuses.filter((s) => s === "complete" || s === "failed").length,
+      partsDone: statuses.filter((s) => ["complete", "failed", "cancelled"].includes(s)).length,
       partsTotal: parts.length,
       failures: parts.filter((part) => part.status === "failed")
         .map((part) => failures.get(part.subAgentId) ?? "").filter(Boolean),

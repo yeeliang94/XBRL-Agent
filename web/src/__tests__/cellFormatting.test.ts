@@ -256,6 +256,20 @@ describe("styled cell extension round-trip (real editor)", () => {
     editor.destroy();
   });
 
+  it.each(["td", "th"])("preserves vertical alignment when a %s is edited", (tag) => {
+    const editor = makeEditor(
+      `<table><tbody><tr><${tag} style="vertical-align: bottom">Header</${tag}></tr></tbody></table>`,
+    );
+    const attrs = firstCellAttrs(editor);
+    expect(attrs.verticalAlign).toBe("bottom");
+    expect(buildCellStyle(attrs)).toBe("vertical-align: bottom");
+    const saved = editor.getHTML();
+    editor.destroy();
+    const reopened = makeEditor(saved);
+    expect(firstCellAttrs(reopened).verticalAlign).toBe("bottom");
+    reopened.destroy();
+  });
+
   it("expands a browser-collapsed `border` shorthand to all four sides", () => {
     // Real Chrome serialises four uniform per-side borders (a "Border all")
     // as the `border:` shorthand on getHTML(). The sanitiser stores that, so

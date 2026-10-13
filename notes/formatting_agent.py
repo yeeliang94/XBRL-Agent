@@ -406,12 +406,18 @@ def _usage_fields(usage: RunUsage) -> dict[str, int]:
     }
 
 
-def _plain_failure(outcome: Optional[dict]) -> str:
+def plain_failure(outcome: Optional[dict]) -> str:
     """One plain sentence for a failed pass, shown before any technical detail."""
     outcome = outcome or {}
     error_type = outcome.get("error_type")
     if error_type == "visual_review_failed":
-        count = len(outcome.get("failed_rows") or outcome.get("row_errors") or {}) or 1
+        failed = {int(row) for row in outcome.get("failed_rows") or outcome.get("row_errors") or {}}
+        limited = {int(row) for row in outcome.get("limited_rows") or []}
+        if failed and failed <= limited:
+            notes = "1 note needs" if len(failed) == 1 else f"{len(failed)} notes need"
+            return (f"Formatting was saved, but {notes} a layout the formatter cannot produce. "
+                    "Check them manually in the Notes tab.")
+        count = len(failed) or 1
         notes = "1 note still looks" if count == 1 else f"{count} notes still look"
         recopied = " after re-copying its tables" if "table_recopy" in outcome else ""
         return f"{notes} different from the source PDF{recopied}. Retry it from the Notes tab."
@@ -440,6 +446,7 @@ async def run_notes_formatter(
     on_phase: Callable[[str], None] | None = None,
     on_event: Callable[[str, dict], None] | None = None,
     deadline: Optional[float] = None,
+    activity: Any = None,
 ) -> dict[str, Any]:
     """Run the formatter pass and attach cross-pass token telemetry.
 
@@ -469,9 +476,11 @@ async def run_notes_formatter(
     usage = RunUsage()
     model_name = model if isinstance(model, str) else getattr(model, "model_name", "")
     sub_agent_id = trace_label or sheet
-    with repo.db_session(db_path) as conn:
-        agent_id = repo.create_run_agent(conn, run_id, "NOTES_FORMATTING", variant=sub_agent_id, model=model_name)
-    activity = FormatterActivity(sub_agent_id=sub_agent_id, sheet=sheet, on_event=on_event)
+    if activity is None:
+        with repo.db_session(db_path) as conn:
+            agent_id = repo.create_run_agent(conn, run_id, "NOTES_FORMATTING", variant=sub_agent_id, model=model_name)
+        activity = FormatterActivity(sub_agent_id=sub_agent_id, sheet=sheet, on_event=on_event,
+                                     db_path=db_path, run_agent_id=agent_id)
     activity.status("started", "Formatting started")
 
     def _phase(message: str) -> None:
@@ -512,39 +521,30 @@ async def run_notes_formatter(
         else:
             status = "cancelled"
         raise
+    except Exception as exc:
+        from pydantic_ai.exceptions import UsageLimitExceeded
+        outcome = {"error_type": "turn_budget" if isinstance(exc, UsageLimitExceeded) else "model_error",
+                   "error": f"{type(exc).__name__}: {exc}"}
+        raise
     finally:
-        if status == "completed":
-            activity.status("completed", "Formatting finished")
-        elif status == "cancelled":
-            activity.status("cancelled", "Formatting stopped")
-        else:
-            # The plain sentence leads; the raw finding stays as technical detail.
-            activity.emit("status", {
-                "phase": "failed", "message": _plain_failure(outcome),
-                "error_type": (outcome or {}).get("error_type"),
-                "detail": (outcome or {}).get("error") or "",
-            })
-        activity.save(db_path, agent_id)
         # One aggregate ledger entry includes formatter and independent checker
         # requests. Task totals are diagnostic, not additional ledger entries.
-        metrics = split_usage(usage)
         try:
-            with repo.db_session(db_path) as conn:
-                repo.finish_run_agent(
-                    conn, agent_id, status=status,
-                    error_type=(outcome or {}).get("error_type"),
-                    error_message=(outcome or {}).get("error"),
-                    total_tokens=metrics.total_tokens, prompt_tokens=metrics.prompt_tokens,
-                    completion_tokens=metrics.completion_tokens,
-                    reasoning_tokens=metrics.thinking_tokens,
-                    cache_read_tokens=usage.cache_read_tokens,
-                    cache_write_tokens=usage.cache_write_tokens,
-                    turn_count=usage.requests, tool_call_count=usage.tool_calls,
-                    total_cost=estimate_cost(metrics.prompt_tokens, metrics.completion_tokens,
-                                             metrics.thinking_tokens, model or model_name),
-                )
-        except Exception:
-            logger.warning("Could not save formatter usage run=%s sheet=%s", run_id, sheet, exc_info=True)
+            metrics = split_usage(usage)
+            usage_fields = dict(
+                total_tokens=metrics.total_tokens, prompt_tokens=metrics.prompt_tokens,
+                completion_tokens=metrics.completion_tokens,
+                reasoning_tokens=metrics.thinking_tokens,
+                cache_read_tokens=usage.cache_read_tokens,
+                cache_write_tokens=usage.cache_write_tokens,
+                turn_count=usage.requests, tool_call_count=usage.tool_calls,
+                total_cost=estimate_cost(metrics.prompt_tokens, metrics.completion_tokens,
+                                         metrics.thinking_tokens, model or model_name),
+            )
+        except Exception:  # noqa: BLE001 — the part still closes without usage
+            logger.warning("Could not measure formatter usage run=%s sheet=%s", run_id, sheet, exc_info=True)
+            usage_fields = {}
+        activity.finish(status, outcome, **usage_fields)
 
 
 
@@ -614,11 +614,16 @@ async def _recopy_and_reformat(outcome: dict, structural: dict, *, run_id: int, 
         result["recopy_warnings"] = warnings
         result["summary"] += " " + " ".join(
             f"Row {row}: {text}" for row, text in sorted(warnings.items()))
-    for key in ("error", "error_type", "failed_rows", "row_errors"):
+    limited = ({int(row) for row in outcome.get("limited_rows") or [] if int(row) not in rebuilt}
+               | {int(row) for row in final.get("limited_rows") or []})
+    limited = {row for row in limited if row in errors and row not in recopy["errors"]}
+    for key in ("error", "error_type", "failed_rows", "row_errors", "limited_rows"):
         result.pop(key, None)
     if errors:
         result.update(error="; ".join(errors.values()), error_type="visual_review_failed",
                       failed_rows=sorted(errors), row_errors=errors)
+    if limited:
+        result["limited_rows"] = sorted(limited)
     return result
 
 
@@ -706,6 +711,8 @@ async def _run_notes_formatter_impl(
     # prior part) on the second request. Attach the known source pages to the
     # initial request to avoid that extra tool-only turn, while keeping the
     # view/zoom tools available for targeted follow-up inspection.
+    if activity is not None:
+        activity.status("working", f"Loading {len(page_set)} source pages for formatting…")
     source_content, preloaded_pages = await _preload_source_pages(
         pdf_path, page_set,
     )
@@ -727,6 +734,8 @@ async def _run_notes_formatter_impl(
     trace_messages: list = []
 
     async def _agent_run(user_prompt: Any):
+        if activity is not None:
+            activity.status("working", "Requesting formatting decisions…")
         result = await agent.run(
             user_prompt, deps=deps, usage=usage, usage_limits=limits,
             message_history=trace_messages,
@@ -747,6 +756,8 @@ async def _run_notes_formatter_impl(
         return result
 
     result = await _agent_run(initial_prompt)
+    if activity is not None:
+        activity.status("working", "Validating formatting against saved content…")
     err, screened, stage = _screen_patch(_output_json(result.output), sheet)
     if err is not None and stage in ("parse", "sheet"):
         # Mechanically rejected output gets one bounded correction attempt.
@@ -791,6 +802,8 @@ async def _run_notes_formatter_impl(
             "patch": patch, "changed_rows": 0,
         }
         repair_attempted = True
+        if activity is not None:
+            activity.status("working", "Repairing rejected formatting decisions…")
         repair_result = await _agent_run(_build_validation_repair_prompt(
             sheet, patch, str(exc), rows_for_patch,
         ))
@@ -810,6 +823,8 @@ async def _run_notes_formatter_impl(
             return failure
         summary = screened.summary
     if row_errors and not repair_attempted:
+        if activity is not None:
+            activity.status("working", "Repairing rejected formatting decisions…")
         original_error = "; ".join(row_errors.values())
         repair_result = await _agent_run(_build_validation_repair_prompt(
             sheet, rejected_patch, original_error,
@@ -857,8 +872,12 @@ async def _run_notes_formatter_impl(
     for row, html in corrected_rows.items():
         applied.rows[row] = html
     row_errors.update(visual_errors)
+    # A note unresolved only by a formatter limit keeps its best-effort
+    # formatting; it is saved but stays failed and never gets a receipt.
+    limited_rows = {row for row in visual_review.get("limitation_rows") or []
+                    if row in applied.rows and row not in missing_page_errors}
     for row in row_errors:
-        if row in applied.rows:
+        if row in applied.rows and row not in limited_rows:
             applied.rows[row] = rows_for_patch[row]
     # Correction patches were checked against the candidate; verify the final
     # proposal against the original too before the existing atomic write path.
@@ -868,6 +887,7 @@ async def _run_notes_formatter_impl(
         if not verified.ok:
             row_errors[row] = verified.reason
             applied.rows[row] = rows_for_patch[row]
+            limited_rows.discard(row)
     changed_count = sum(html != rows_for_patch[row] for row, html in applied.rows.items())
     skipped_rows: list[int] = []
     written_rows: list[int] = []
@@ -905,9 +925,10 @@ async def _run_notes_formatter_impl(
                 or live.source_generation_id != launch.source_generation_id):
                 skipped_rows.append(row)
                 continue
-            if row in row_errors:
+            if row in row_errors and row not in limited_rows:
                 continue
-            verified_rows[row] = identities[row]
+            if row not in limited_rows:
+                verified_rows[row] = identities[row]
             if html == rows_for_patch[row]:
                 continue
             # Statement-atomic compare-and-swap (`WHERE html = ?`): only
@@ -940,6 +961,7 @@ async def _run_notes_formatter_impl(
 
     for row in skipped_rows:
         row_errors[row] = "Note changed during appearance checking; retry its current content."
+        limited_rows.discard(row)
     if row_errors:
         summary_out = (
             f"Formatting saved for {written} row(s); "
@@ -963,6 +985,7 @@ async def _run_notes_formatter_impl(
            if row_errors else {}),
         "changed_rows": written,
         "skipped_rows": skipped_rows,
+        **({"limited_rows": sorted(limited_rows & set(row_errors))} if limited_rows & set(row_errors) else {}),
         **({"person_edited_rows": sorted(person_edited)} if person_edited else {}),
         "patch": patch, "layouts": {str(row): note for row, note in sorted(layouts_by_row.items())},
         "before_text_hash": applied.before_text_hash,

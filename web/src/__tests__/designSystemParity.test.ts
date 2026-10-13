@@ -42,6 +42,9 @@ describe("XBRL design system is the production authority", () => {
     expect(designSystem).toContain("final database failures and cancellations remain authoritative");
     expect(designSystem).toContain("Recorded List of Notes sub-agent identities stay selectable");
     expect(designSystem).toContain("Never invent missing ranges");
+    expect(designSystem).toContain("Formatter progress counts all current parts");
+    expect(designSystem).toContain("Both activity views follow the selected sheet");
+    expect(designSystem).toContain("History keeps polling active formatter retries");
   });
   test("declares the canonical production contract and Direction A", () => {
     expect(designSystem).toContain("CANONICAL PRODUCTION DESIGN SYSTEM");

@@ -32,6 +32,7 @@ STYLE_TO_CSS = {
 BORDER_WIDTHS = {"0.75px", "1px", "2px", "3px"}
 BORDER_STYLES = {"solid", "double", "dashed", "dotted", "hidden"}
 TEXT_ALIGN = {"left", "center", "right", "justify"}
+VERTICAL_ALIGN = {"top", "middle", "bottom"}
 THEME_COLOURS = {
     "black": "#000000",
     "grey900": "#2d2d2d",
@@ -189,6 +190,11 @@ def _apply_operations(html: str, operations: list[dict[str, Any]]) -> str:
         if side_writes:
             _mirror_border_writes(elements, side_writes)
     return str(soup)
+
+
+def cell_paragraphs(cell: Tag) -> list[Tag]:
+    """Existing paragraphs owned by this cell, excluding nested-table content."""
+    return [p for p in cell.find_all("p") if p.find_parent(["td", "th"]) is cell]
 
 
 def _build_grid(
@@ -407,7 +413,16 @@ def _resolve_target(soup: BeautifulSoup, target: dict[str, Any]) -> Iterable[Tag
         cells = rows[r - 1].find_all(["th", "td"], recursive=False)
         if c > len(cells):
             return
-        yield cells[c - 1]
+        selected = cells[c - 1]
+        if "paragraph" in target:
+            paragraph = target["paragraph"]
+            if type(paragraph) is not int or paragraph < 1:
+                raise FormatPatchError("target.paragraph must be a 1-based integer")
+            paragraphs = cell_paragraphs(selected)
+            if paragraph <= len(paragraphs):
+                yield paragraphs[paragraph - 1]
+        else:
+            yield selected
         return
     if "rows" in target:
         rows = target["rows"]
@@ -459,7 +474,7 @@ def _looks_numeric(text: str) -> bool:
 # Table-cell properties a layout owns on PDF tables. Preparation emits no
 # presentation styles and person-styled notes never reach the formatter, so
 # these can only be an earlier formatter decision that a new layout replaces.
-LAYOUT_OWNED_PREFIXES = ("border", "text-align", "background", "padding")
+LAYOUT_OWNED_PREFIXES = ("border", "text-align", "vertical-align", "background", "padding")
 
 
 def _apply_style(el: Tag, style: dict[str, Any]) -> None:
@@ -471,6 +486,13 @@ def _apply_style(el: Tag, style: dict[str, Any]) -> None:
                 raise FormatPatchError("reset_formatting applies only to table cells")
             current = {k: v for k, v in current.items()
                        if not k.startswith(LAYOUT_OWNED_PREFIXES)}
+            for paragraph in cell_paragraphs(el):
+                previous = _parse_style(paragraph.get("style") or "")
+                remaining = {k: v for k, v in previous.items() if k not in {"margin-left", "text-align"}}
+                if remaining:
+                    paragraph["style"] = "; ".join(f"{k}: {v}" for k, v in sorted(remaining.items()))
+                else:
+                    paragraph.attrs.pop("style", None)
         elif key in STYLE_TO_CSS:
             current[STYLE_TO_CSS[key]] = _border_value(value)
         elif key == "clear_border":
@@ -490,6 +512,10 @@ def _apply_style(el: Tag, style: dict[str, Any]) -> None:
             if value not in TEXT_ALIGN:
                 raise FormatPatchError("invalid text_align")
             current["text-align"] = value
+        elif key == "vertical_align":
+            if el.name not in ("td", "th") or value not in VERTICAL_ALIGN:
+                raise FormatPatchError("vertical_align requires a table cell and top, middle or bottom")
+            current["vertical-align"] = value
         elif key == "indent":
             if not isinstance(value, str) or not INDENT_RE.match(value):
                 raise FormatPatchError("invalid indent")
