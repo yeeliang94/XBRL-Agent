@@ -675,7 +675,7 @@ describe("HistoryPage", () => {
     });
   });
 
-  test("polls a running detail until it reaches a terminal status", async () => {
+  test.each([false, true])("polls until the run or its formatter retry finishes (retry: %s)", async (formatterRetry) => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       fetchRuns.mockResolvedValue({ runs: [], total: 0, limit: 50, offset: 0 });
@@ -683,7 +683,7 @@ describe("HistoryPage", () => {
         id: 77,
         created_at: "2026-04-10T00:00:00Z",
         pdf_filename: "LIVE.pdf",
-        status: "running",
+        status: formatterRetry ? "completed" : "running",
         session_id: "sess-77",
         output_dir: "/tmp/out/sess-77",
         merged_workbook_path: null,
@@ -691,7 +691,9 @@ describe("HistoryPage", () => {
         started_at: "2026-04-10T00:00:00Z",
         ended_at: null,
         config: { statements: ["SOFP"] },
-        agents: [],
+        agents: formatterRetry ? [{ id: 21, statement_type: "NOTES_FORMATTING", variant: "Notes-CI",
+          model: "model-a", status: "running", started_at: "2026-04-10T00:01:00Z", ended_at: null,
+          workbook_path: null, total_tokens: 0, total_cost: 0, events: [] }] : [],
         cross_checks: [],
       };
       vi.mocked(api.fetchRunDetail)
@@ -700,6 +702,7 @@ describe("HistoryPage", () => {
           ...running,
           status: "completed",
           ended_at: "2026-04-10T00:01:00Z",
+          agents: running.agents.map((agent) => ({ ...agent, status: "completed", ended_at: "2026-04-10T00:02:00Z" })),
         });
 
       render(<HistoryPage selectedId={77} onSelectRun={() => {}} />);

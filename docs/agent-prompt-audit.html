@@ -1181,7 +1181,7 @@ Paragraphs and headings may be interchanged by source capture. A short paragraph
 that is visibly a page banner or repeated continuation heading may be deleted.
 Long or mixed disclosure paragraphs cannot be deleted, including repeated prose.
 Corporate-information identity headings and incorporation details remain intact.</pre></details></section>
-<section id="notes-visual-review"><h2>Notes visual review</h2><p>Fresh formatter-model context checks prepared output against the source PDF before saving. One style correction and recheck; incomplete evidence stays unresolved.</p><details open><summary><span><code>prompts/notes_visual_review.md</code> (verbatim)</span><span class="meta">101 lines</span></summary><pre>You check formatted financial-note tables against the original source PDF.
+<section id="notes-visual-review"><h2>Notes visual review</h2><p>Fresh formatter-model context checks prepared output against the source PDF before saving. One style correction and recheck; incomplete evidence stays unresolved.</p><details open><summary><span><code>prompts/notes_visual_review.md</code> (verbatim)</span><span class="meta">113 lines</span></summary><pre>You check formatted financial-note tables against the original source PDF.
 You receive each note's current canonical candidate HTML, prepared output HTML,
 canonical table geometry, output profile, preparation tier, a RULE MAP and
 source PDF images. The RULE MAP lists every horizontal line once, named by the
@@ -1229,8 +1229,19 @@ not acted on. If the copied table itself differs from the PDF —
 a total or data row captured as heading cells, a missing, extra or merged row,
 an amount under the wrong column, or a heading over the wrong column — set
 issue_kind to structure, mark it unresolved and describe the difference. That
-table is re-copied from the source; appearance corrections cannot fix it. Use
-issue_kind style for everything else.
+table is re-copied from the source; appearance corrections cannot fix it.
+Use issue_kind unsupported_layout and status unresolved when the difference
+requires a capability the layout cannot express: inset or gapped rules within
+cell edges, formatting an arbitrary text fragment, or indenting only one
+hard-break line inside the same paragraph. Quote the affected row label or
+cell text in observed_text; an unquoted claim is treated as an ordinary
+style correction. The note keeps its other formatting and is flagged for a person.
+Do not request another equivalent layout to repair such a difference.
+Cell overrides support horizontal and top/middle/bottom vertical alignment.
+Paragraph overrides support alignment and indentation of each existing `&lt;p&gt;`
+listed in the cell manifest. Those are supported style corrections. A `&lt;br&gt;`
+does not create another paragraph. Use issue_kind style for other supported
+appearance corrections.
 Wrong source-page identity is issue_kind source_provenance; added or missing
 words or figures are source_content (when a table also has another issue,
 quote the wrong or missing words in content_defect and keep the separate issue
@@ -1269,7 +1280,8 @@ or note placement. This check does not certify native Word or mTool rendering.
 
 For every correction finding, identify the table index, row number, row label
 and the grid columns affected, and say what the layout should be: a column's
-role, a row's bold/indent/shading, or a line's row and column span. Check the row label and both year
+role, a row's bold/indent/shading, a cell's horizontal/vertical alignment,
+an existing paragraph's indent/alignment, or a line's row and column span. Check the row label and both year
 amounts against the same source row before deciding where a rule belongs.
 A standalone year in the description column is a left-aligned row label.
 When a prior finding and your source interpretation disagree, zoom the cited
@@ -1282,7 +1294,7 @@ Prepared tables use collapsed borders. The bottom border of one row and the
 top border of the adjacent row describe ONE physical shared edge; the RULE MAP
 already lists it once. Compare each line's extent and position relative to
 both row labels. When correcting it, preserve the valid underline on the other side.</pre></details></section>
-<section id="notes-formatter"><h2>Notes formatter</h2><details open><summary><span><code>prompts/notes_formatter.md</code> (verbatim)</span><span class="meta">123 lines</span></summary><pre>You are the Notes Formatting Agent for an XBRL extraction system.
+<section id="notes-formatter"><h2>Notes formatter</h2><details open><summary><span><code>prompts/notes_formatter.md</code> (verbatim)</span><span class="meta">143 lines</span></summary><pre>You are the Notes Formatting Agent for an XBRL extraction system.
 
 Your job is to describe the structure of each financial-note table so code can
 format it consistently in the review panel, clipboard paste and mTool. You say
@@ -1347,9 +1359,29 @@ cell over columns 2 and 3. Describe every listed table exactly once.
   Line thickness is not reproduced: a heavier source stroke is still `single`.
   Use `double` only for two separate strokes with a visible gap.
 - `overrides`: rare. Use one only when a single cell must not follow its
-  column's role, with a short `reason`.
+  column's role, with a short `reason`. Address `row` and `cell` by their
+  1-based direct positions. Set `text_align` (left/center/right),
+  `vertical_align` (top/middle/bottom), or both. A vertically merged header
+  can use bottom alignment without changing its horizontal alignment.
+- `paragraphs`: targeted appearance of existing paragraphs inside a cell.
+  Each entry has `row`, `cell`, `paragraph`, and a short `reason`, plus
+  `indent` (0–8 levels of 2em, 0 clears it) and/or `text_align`
+  (left/center/right/justify). Use the exact paragraph number from that
+  cell's manifest. For example, indent paragraph 2 while leaving paragraph 1
+  unchanged. Do not combine a whole-row indent with a paragraph indent unless
+  both offsets are visible in the source. Preserve existing paragraph and
+  hard-break structure; a `&lt;br&gt;` line is not a separate paragraph.
 - `blocks`: optional prose-block appearance (alignment, indent, spacing)
   using {"blocks": "all"}.
+
+CAPABILITY LIMITS:
+Lines follow whole cell edges. Adjacent column ranges touch and cannot express
+inset strokes or visible gaps within those cells. Paragraph operations address
+existing `&lt;p&gt;` elements; they cannot indent one hard-break line within a shared
+paragraph, create paragraphs, or format arbitrary text fragments. State a
+required unsupported distinction in `format_summary`; do not claim to have
+fixed it by returning an equivalent layout. Keep supported layout decisions
+grounded in the source. Do not change content or geometry to imitate a gap.
 
 Each note row's `current_rules` lists the lines its HTML draws now, once each,
 named by the row they sit below. Your layout REPLACES the formatter's earlier

@@ -10,7 +10,7 @@ import { agentStatusDisplay, STATUS_SYMBOLS } from "../lib/runStatus";
 import { errorGuidance } from "../lib/errorGuidance";
 import { StatusIcon } from "./StatusIcon";
 import { ArrowForward } from "./iconGlyphs";
-import type { RunDetailJson, RunAgentJson, CrossCheckResult } from "../lib/types";
+import type { RunDetailJson, RunAgentJson, CrossCheckResult, ErrorData } from "../lib/types";
 import { STATEMENT_LABELS, STATEMENT_TYPES, NOTES_TEMPLATE_TYPES } from "../lib/types";
 import { userMessage } from "../lib/errors";
 import { AgentTelemetryPanel } from "./AgentTelemetryPanel";
@@ -31,7 +31,7 @@ import type { AgentTabStatus } from "../lib/types";
 import { AgentTimeline } from "./AgentTimeline";
 import { NotesSubTabBar } from "./NotesSubTabBar";
 import { FormatterSubAgentActivity } from "./FormatterSubAgentActivity";
-import { deriveFormatterSheets, deriveFormatterSubAgents, formatterProgressSummary, formatterRunningParts } from "../lib/formatterSubAgents";
+import { deriveFormatterSheets, deriveFormatterSubAgents, formatterEventsFromCalls, formatterProgressSummary, formatterRunningParts, formatterSubAgentSheet } from "../lib/formatterSubAgents";
 import { TabPanelFade } from "./TabPanelFade";
 import { NotesReviewerPanel } from "./NotesReviewerPanel";
 import { NotesTablesPanel } from "./NotesTablesPanel";
@@ -344,16 +344,21 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
 
   // Formatter passes saved their own steps (one run_agents row per sheet or
   // table group). Older runs have none and keep the stage-message stream.
-  const formatterEvents = useMemo(() => latestFormattingCalls(formattingCalls)
-    .flatMap((call) => call.events)
-    .sort((left, right) => left.timestamp - right.timestamp), [formattingCalls]);
+  const formatterEvents = useMemo(() => formatterEventsFromCalls(latestFormattingCalls(formattingCalls)), [formattingCalls]);
   const showFormatterSubAgents = agent.statement_type === "NOTES_FORMATTING"
     && deriveFormatterSubAgents(formatterEvents).length > 0;
 
   // A sheet's failure is already explained in the panel; its raw finding
   // repeating here is noise. Any other stage failure stays visible.
-  const formatterFailureReported = showFormatterSubAgents && latestFormattingCalls(formattingCalls)
-    .some((call) => call.status === "failed" && call.error_message === agent.error_message);
+  const stageError = [...agent.events].reverse().find((event) => event.event === "error"
+    && event.data.type === "notes_formatting_incomplete" && event.data.message === agent.error_message);
+  const stageFailures = stageError?.event === "error" && stageError.data.sheets
+    ? Object.entries(stageError.data.sheets).filter(([, outcome]) => !outcome?.ok) : [];
+  const reportedSheets = deriveFormatterSheets(formatterEvents);
+  const formatterFailureReported = showFormatterSubAgents && (
+    latestFormattingCalls(formattingCalls).some((call) => call.status === "failed" && call.error_message === agent.error_message)
+    || (stageFailures.length > 0 && stageFailures.every(([sheet, outcome]) => !outcome?.skipped
+      && reportedSheets.some((item) => item.sheet === sheet && item.status === "failed"))));
   const showErrorDetail = Boolean(agent.error_message) && !formatterFailureReported
     && (agent.statement_type !== "CORRECTION" || agent.error_message !== updates[0]);
   const agentEnded = ["failed", "cancelled", "aborted"].includes(agent.status);
@@ -409,7 +414,8 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
       {showSubTabs && <NotesSubTabBar subAgents={subAgents} activeSubId={notes12SubId} onSelect={setNotes12SubId} />}
       {showFormatterSubAgents ? <FormatterSubAgentActivity events={formatterEvents}
         status={savedAgentStatus(agent.status)} recorded={agent.status !== "running"}
-        technical={<FormattingCallsDetail calls={formattingCalls} />} /> : <ActivityStream events={events} toolTimeline={toolTimeline} reasoningBlocks={[]}
+        technical={(sheet) => <FormattingCallsDetail calls={sheet === null ? formattingCalls
+          : formattingCalls.filter((call) => formatterSubAgentSheet(call.variant ?? "") === sheet)} />} /> : <ActivityStream events={events} toolTimeline={toolTimeline} reasoningBlocks={[]}
         isRunning={agent.status === "running"} status={savedAgentStatus(agent.status)}
         recorded={agent.status !== "running"} streamKey={`${agent.id}:${notes12SubId ?? "all"}`}
         onTechnicalChange={setTechnicalOpen}
@@ -530,6 +536,8 @@ function observedStageAgents(detail: RunDetailJson): RunAgentJson[] {
     } else if (event.event === "error" && typeof event.data.message === "string") {
       events.push({ event: "error", timestamp: event.timestamp, data: {
         message: event.data.message, type: typeof event.data.type === "string" ? event.data.type : undefined,
+        sheets: typeof event.data.sheets === "object" && event.data.sheets !== null
+          ? event.data.sheets as ErrorData["sheets"] : undefined,
       } });
     }
   }
@@ -562,8 +570,10 @@ function FormattingCallsDetail({ calls }: { calls: RunAgentJson[] }) {
     <ul aria-label="Formatting calls" style={styles.formattingCalls}>
       {calls.map((call, index) => <li key={call.id}>
         <span style={styles.formattingCallName}>{call.variant ?? `Call ${index + 1}`}</span>
-        {` · ${agentStatusDisplay(call.status).label}`}
-        {call.total_tokens != null ? ` · ${call.total_tokens.toLocaleString()} tokens` : ""}
+        {` · ${call.status === "running" && deriveFormatterSubAgents(formatterEventsFromCalls([call]))[0]?.status === "pending"
+          ? "Waiting" : agentStatusDisplay(call.status).label}`}
+        {call.status === "running" ? " · Usage available when this part finishes"
+          : call.total_tokens != null ? ` · ${call.total_tokens.toLocaleString()} tokens` : ""}
         {call.error_message && <div style={styles.formattingCallError}>{call.error_message}</div>}
       </li>)}
     </ul>
@@ -653,8 +663,7 @@ function SavedAgentWorkspace({ detail, filingStandard, onRetry, retryPending }: 
       // Formatting shows its sheet and part progress, not whichever sheet
       // reported last.
       const formatterEvents = agent.statement_type === "NOTES_FORMATTING"
-        ? latestFormattingCalls(detail.agents.filter((call) => call.statement_type === "NOTES_FORMATTING"))
-          .flatMap((call) => call.events)
+        ? formatterEventsFromCalls(latestFormattingCalls(detail.agents.filter((call) => call.statement_type === "NOTES_FORMATTING")))
         : [];
       const formatterProgress = formatterProgressSummary(deriveFormatterSheets(formatterEvents));
       const formatterRunning = formatterRunningParts(formatterEvents);
