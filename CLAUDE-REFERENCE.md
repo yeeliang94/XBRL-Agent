@@ -1903,7 +1903,10 @@ once. Saved progress uses all current call rows, including parts without
 events. Both activity views follow the selected sheet; Technical detail groups
 tools and phases by part and retains earlier attempts under Formatting calls.
 History keeps polling a terminal run while a formatter retry is active, then
-stops when that child finishes. Waiting, working and terminal states remain distinct. Pinned by
+stops when that child finishes. A formatter launch from Notes restarts stopped
+detail polling without remounting the workspace. Its durable task keeps polling
+active before the worker creates its audit row; completion triggers a final detail
+refresh. Waiting, working and terminal states remain distinct. Pinned by
 `tests/test_notes_auto_format.py`, `tests/test_notes_format_patch.py`, and
 `web/src/__tests__/RunDetailView.test.tsx` and `web/src/__tests__/HistoryPage.test.tsx`.
 

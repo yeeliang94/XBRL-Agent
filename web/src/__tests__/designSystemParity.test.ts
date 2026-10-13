@@ -45,6 +45,7 @@ describe("XBRL design system is the production authority", () => {
     expect(designSystem).toContain("Formatter progress counts all current parts");
     expect(designSystem).toContain("Both activity views follow the selected sheet");
     expect(designSystem).toContain("History keeps polling active formatter retries");
+    expect(designSystem).toContain("Starting formatting from Notes refreshes saved activity without resetting the open workspace");
   });
   test("declares the canonical production contract and Direction A", () => {
     expect(designSystem).toContain("CANONICAL PRODUCTION DESIGN SYSTEM");

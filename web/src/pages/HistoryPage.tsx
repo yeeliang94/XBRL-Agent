@@ -11,6 +11,7 @@ import { fetchRuns, fetchRunDetail, deleteRun, forceAbortRun, restartRun } from 
 import type { RunDetailJson, RunSummaryJson, RunsFilterParams, RunConfigPayload, StatementType, NotesTemplateType } from "../lib/types";
 import { createMultiAgentSSE } from "../lib/sse";
 import { TERMS } from "../lib/vocabulary";
+import { fetchNotesFormatStatus } from "../lib/notesCells";
 
 // ---------------------------------------------------------------------------
 // HistoryPage — top-level view for browsing past extraction runs.
@@ -101,6 +102,10 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
   const [detail, setDetail] = useState<RunDetailJson | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
+  const refreshDetailRef = useRef<((runId: number, sheet: string) => void) | null>(null);
+  const handleFormattingStarted = useCallback((runId: number, sheet: string) => {
+    refreshDetailRef.current?.(runId, sheet);
+  }, []);
   const retryController = useRef<AbortController | null>(null);
   useEffect(() => () => retryController.current?.abort(), []);
 
@@ -273,6 +278,9 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
     let cancelled = false;
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
     let consecutiveFailures = 0;
+    let inFlight = false;
+    let refreshRequested = false;
+    const formattingSheets = new Set<string>();
     setIsDetailLoading(true);
     setDetailError(null);
 
@@ -285,13 +293,24 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
     };
 
     const loadDetail = async (initial: boolean) => {
+      inFlight = true;
       try {
-        const next = await fetchRunDetail(selectedId);
+        // A launch is durable before its worker has created an audit row.
+        // Follow its task too so that startup gap cannot stop polling.
+        const sheets = [...formattingSheets];
+        const [next, formatting] = await Promise.all([
+          fetchRunDetail(selectedId),
+          Promise.all(sheets.map((sheet) => fetchNotesFormatStatus(selectedId, sheet))),
+        ]);
         if (cancelled) return;
+        formatting.forEach((task, index) => {
+          if (task.status !== "running") formattingSheets.delete(sheets[index]);
+        });
         consecutiveFailures = 0;
         setDetail(next);
         setDetailError(null);
-        if (next.status === "running" || next.agents.some((agent) =>
+        if (formatting.some((task) => task.status !== "running")) schedulePoll(0);
+        else if (formattingSheets.size || next.status === "running" || next.agents.some((agent) =>
           agent.statement_type === "NOTES_FORMATTING" && agent.status === "running")) schedulePoll();
       } catch (err: unknown) {
         if (cancelled) return;
@@ -306,13 +325,25 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
           schedulePoll(retryDelay);
         }
       } finally {
+        inFlight = false;
+        if (!cancelled && refreshRequested) {
+          refreshRequested = false;
+          schedulePoll(0);
+        }
         if (!cancelled && initial) setIsDetailLoading(false);
       }
     };
 
+    refreshDetailRef.current = (runId, sheet) => {
+      if (runId !== selectedId) return;
+      formattingSheets.add(sheet);
+      if (inFlight) refreshRequested = true;
+      else schedulePoll(0);
+    };
     void loadDetail(true);
     return () => {
       cancelled = true;
+      refreshDetailRef.current = null;
       if (pollTimer !== null) clearTimeout(pollTimer);
     };
   }, [selectedId]);
@@ -416,6 +447,7 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
           onForceAbort={handleForceAbort}
           onRestart={handleRestart}
           onRetryAgent={handleRetryAgent}
+          onFormattingStarted={handleFormattingStarted}
         />
       </div>
     );
