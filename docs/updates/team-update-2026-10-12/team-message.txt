@@ -1,0 +1,29 @@
+XBRL Agent development update: 12 August to 12 October 2026
+
+We've made it easier to follow a document through the application and check what it produces.
+
+See what needs doing
+We now have a work queue for documents. You can see which ones are waiting for setup, which are being processed and which need review.
+Upload several documents, switch between saved work and return to the ones edited most recently. Preparation now finishes before setup opens. Confirm the filing details, then continue to extraction and review.
+
+Check a figure against the page it came from
+The figures worksheet keeps the original PDF alongside the extracted values. Select a figure to open its source page, then review the current and prior years together.
+Cross-checks show whether related statements agree. We've improved cash-flow signs, year mapping and share-class coverage. Interrupted runs keep their saved figures, with incomplete checks left visible.
+
+Review the note with its source beside it
+Notes now have a numbered source list. You can open a note or subsection, see where it has been placed and compare the copied content with the PDF.
+Table formatting now handles headings, totals, borders and emphasis more consistently. The same appearance settings apply to review, Copy and mTool output. Formatting protects notes you've taken over.
+
+Compare the result with a file prepared by a person
+If someone has already filled an mTool file for the same document, you can compare it with the AI result. The worksheet puts both sets of figures in aligned columns and marks differences or missed inputs.
+Choose the file and confirm its units. Scores use the relevant input figures and exclude calculated totals. Agreement with the human file still needs checking against the PDF.
+
+Prepare the mTool file with outstanding issues in view
+The application fills your mTool template using the filing fields and their destinations. If the run still needs review, the preparation dialog says that the output is a draft.
+Choose the worksheets to fill and resolve unclear destinations. Preparation checks the years, entity, categories and protected formula cells. Outstanding issues stay visible in the preparation report. A run that needs review produces a draft warning.
+
+Keep team instructions and progress available
+Administrators can save common instructions for figures and notes. Each run keeps the guidance it used, so later changes do not rewrite the instructions recorded for earlier work.
+ Activity shows progress, queued work and failures by worksheet or part. Saved activity and a run-specific diagnostics package help investigate problems.
+
+The changes are merged. Human review and final mTool validation are still required. Rollout on team machines and final SSM acceptance have not been confirmed. No overall accuracy or time-saving figure has been measured for this update.

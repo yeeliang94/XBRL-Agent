@@ -748,8 +748,8 @@ export function ConceptsPage({
   );
 
   // Search overrides the template filter (matches happen across all
-  // templates so a user can hop between statements via the result
-  // list).  Empty query falls back to the active-template view.
+  // templates in the middle-panel table). Empty query falls back to
+  // the active-template view.
   const notesActive = activeTemplate === NOTES_KEY;
   // Both comparison views keep their worksheet navigation visible. The user
   // may fold Figures' rail; narrow layouts place it above the table.
@@ -1156,26 +1156,6 @@ export function ConceptsPage({
                 })}
               </select>
             </div>
-            <div style={styles.searchGroup}>
-              <label htmlFor="concept-search" style={styles.visuallyHidden}>
-                Search
-              </label>
-              <input
-                id="concept-search"
-                data-testid="concept-search"
-                type="search"
-                placeholder="Search all sheets"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                style={{ ...ui.input, width: "100%" }}
-              />
-            </div>
-        {searchQuery.trim() && <nav aria-label="Matching figure fields" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {concepts.filter((row) => `${row.canonical_label} ${row.display_label ?? ""}`.toLowerCase().includes(searchQuery.trim().toLowerCase())).map((row) => (
-            <button type="button" key={`${row.concept_uuid}:${row.render_sheet}:${row.render_row}`} style={{ ...ui.buttonGhost, textAlign: "left", whiteSpace: "normal" }}
-              onClick={() => handleSelectConcept(row.concept_uuid)}>{row.display_label || row.canonical_label} · {figureSheetDisplayName(row.render_sheet)}</button>
-          ))}
-        </nav>}
         <nav aria-label="Figure worksheets" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {templates.flatMap((templateId) => (sheetsByTemplate[templateId] ?? []).map((sheet) => (
             <button type="button" key={`${templateId}:${sheet}`} aria-current={activeTemplate === templateId && (activeSheet === sheet || activeSheet == null) ? "true" : undefined}
@@ -1319,6 +1299,23 @@ export function ConceptsPage({
               </div>
             )}
           </section>
+        )}
+
+        {!notesActive && (
+            <div style={styles.searchGroup}>
+              <label htmlFor="concept-search" style={styles.visuallyHidden}>
+                Search
+              </label>
+              <input
+                id="concept-search"
+                data-testid="concept-search"
+                type="search"
+                placeholder="Search all sheets"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{ ...ui.input, width: "100%" }}
+              />
+            </div>
         )}
 
         {activeNotCompared && (
@@ -2823,6 +2820,7 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.sm,
+    marginBottom: pwc.space.lg,
   } as React.CSSProperties,
   worksheetItem: {
     ...ui.buttonQuiet,
