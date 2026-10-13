@@ -82,6 +82,7 @@ export interface RunDetailViewProps {
   /** Clone this run into a new draft while retaining reusable source work. */
   onRestart?: (runId: number) => void | Promise<void>;
   onRetryAgent?: (statementType: string) => Promise<void>;
+  onFormattingStarted?: (runId: number, sheet: string) => void;
   /** Gate the review link on canonical mode so legacy runs (which
    *  have no concept tree) don't link to an empty page — matches the TopNav
    *  / Results gating (peer-review F6). Defaults to false: hidden unless the
@@ -695,7 +696,7 @@ function SavedAgentWorkspace({ detail, filingStandard, onRetry, retryPending }: 
 // Tab identity for the run-detail surface. Review + Values are gated on
 // canonical mode (the reviewer diff + concept tree only exist there).
 export function RunDetailView({
-  detail, onDelete, onResumeDraft, onForceAbort, onRestart, onRetryAgent,
+  detail, onDelete, onResumeDraft, onForceAbort, onRestart, onRetryAgent, onFormattingStarted,
   canonicalEnabled = false, initialTab = "overview",
 }: RunDetailViewProps) {
   const [retryAgent, setRetryAgent] = useState<string | null>(null);
@@ -1527,6 +1528,7 @@ export function RunDetailView({
             initialView="notes"
             initialCrossChecks={crossChecksForValidator(crossChecks)}
             onPreparationBlocked={setNotesPreparationBlocked}
+            onFormattingStarted={onFormattingStarted}
             humanFile={humanFile}
             onReplaceHumanFile={() => setHumanDialogOpen(true)}
             onHumanFileRemoved={() => setHumanFile(null)}

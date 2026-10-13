@@ -112,6 +112,7 @@ export interface NotesReviewTabProps {
    *  renders identically without it. */
   onActiveCellPages?: (pages: number[]) => void;
   onPreparationBlocked?: (blocked: boolean) => void;
+  onFormattingStarted?: (runId: number, sheet: string) => void;
   /** Human-file notes by field (concept uuid). When set, each prose row gains
    *  a read-only Human column on the same line. */
   human?: HumanNotesView | null;
@@ -390,6 +391,7 @@ export function NotesReviewTab({
   focusCell,
   onActiveCellPages,
   onPreparationBlocked,
+  onFormattingStarted,
   human = null,
   humanFigures = null,
   onComparisonChange,
@@ -1025,6 +1027,7 @@ export function NotesReviewTab({
                   focusKey={active.key}
                   focusRow={focusRow}
                   onFormatted={reloadNotes}
+                  onFormattingStarted={onFormattingStarted}
                   onCategoryResolved={reloadCategoryNotes}
                   onCellRemoved={handleCellRemoved}
                   onCellSaved={handleCellSaved}
@@ -1067,6 +1070,7 @@ function SheetSection({
   theme,
   formatterDefaultModel,
   onFormatted,
+  onFormattingStarted,
   onCategoryResolved,
   onCellRemoved,
   onCellSaved,
@@ -1097,6 +1101,7 @@ function SheetSection({
   theme: ClipboardFormatOptions;
   formatterDefaultModel: string;
   onFormatted: () => Promise<void>;
+  onFormattingStarted?: (runId: number, sheet: string) => void;
   onCategoryResolved: (categorySaved?: boolean) => Promise<void>;
   onCellRemoved: (sheet: string, row: number) => void;
   onCellSaved: (sheet: string, cell: NotesCell) => void;
@@ -1216,12 +1221,13 @@ function SheetSection({
         runId, sheet.sheet, formatterDefaultModel || undefined,
       );
       setFormatStatus(state);
+      onFormattingStarted?.(runId, sheet.sheet);
     } catch (err) {
       setFormatError(userMessage(err));
     } finally {
       setFormatRequestPending(false);
     }
-  }, [formatterDefaultModel, runId, sheet.sheet]);
+  }, [formatterDefaultModel, runId, sheet.sheet, onFormattingStarted]);
 
   const handleRowSaveStatus = useCallback((row: number, status: SaveStatus, category?: string) => {
     const key = category ? `${row}:${category}` : String(row);

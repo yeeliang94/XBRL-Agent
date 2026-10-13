@@ -33,6 +33,7 @@ export interface RunDetailPageProps {
   /** Clone a finished run into a fresh editable draft. */
   onRestart?: (runId: number) => void | Promise<void>;
   onRetryAgent?: RunDetailViewProps["onRetryAgent"];
+  onFormattingStarted?: RunDetailViewProps["onFormattingStarted"];
   /** Forwarded to RunDetailView to gate the "View Concepts" link on
    *  canonical mode (peer-review F6). */
   canonicalEnabled?: boolean;
@@ -53,6 +54,7 @@ export function RunDetailPage({
   onForceAbort,
   onRestart,
   onRetryAgent,
+  onFormattingStarted,
   canonicalEnabled = false,
   initialTab,
 }: RunDetailPageProps) {
@@ -89,6 +91,7 @@ export function RunDetailPage({
           onForceAbort={onForceAbort}
           onRestart={onRestart}
           onRetryAgent={onRetryAgent}
+          onFormattingStarted={onFormattingStarted}
           canonicalEnabled={canonicalEnabled}
           initialTab={initialTab}
         />
