@@ -67,10 +67,11 @@ def guidance_for_run(db_path, run_id, role: str) -> str:
 
 
 def render_guidance(snapshot: dict, role: str) -> str:
-    if role not in {"figures_extraction", "figures_review", "notes_extraction", "notes_review"}:
+    if role not in {"figures_extraction", "figures_review", "notes_extraction", "notes_review", "reports_extraction"}:
         raise ValueError("Unknown content role")
     texts = snapshot["texts"]
-    blocks = [f"{SCOPES[key]}:\n{texts[key]}" for key in ("all", role.split("_")[0], role) if texts.get(key, "").strip()]
+    keys = ("all",) if role == "reports_extraction" else ("all", role.split("_")[0], role)
+    blocks = [f"{SCOPES[key]}:\n{texts[key]}" for key in keys if texts.get(key, "").strip()]
     if not blocks:
         return ""
     return (
@@ -90,6 +91,7 @@ def instruction_sources() -> list[dict]:
     groups = {
         "Figures extraction": ["_base.md", "sofp.md", "sofp_orderofliquidity.md", "sopl.md", "soci.md", "socf.md", "socie.md", "socie_mpers.md", "socie_sore.md", "_group_overlay.md", "_group_socie_overlay.md", "_detail_extraction.md"],
         "Figures review": ["reviewer.md", "spot_check.md", "scoped_investigation.md"],
+        "Reports extraction": ["reports.md"],
         "Notes extraction": ["_notes_prepared.md", "_notes_base.md", "notes_corporate_info.md", "notes_accounting_policies.md", "notes_issued_capital.md", "notes_related_party.md", "notes_listofnotes.md"],
         "Notes review": ["notes_reviewer.md"],
     }

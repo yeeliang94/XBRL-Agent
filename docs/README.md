@@ -6,6 +6,7 @@
 | --- | --- |
 | [Application overview](APP-OVERVIEW.html) | Product capabilities |
 | [MPERS](MPERS.md) | Filing-standard reference |
+| [Directors' and auditors' reports](REPORTS.md) | Report extraction, review and mTool preparation |
 | [Field descriptions](xbrl-field-descriptions.md) | Taxonomy field reference |
 | [Statement workflows](workflows/) | Statement-specific extraction guidance |
 | [mTool operator guide](../mtool/README.md) | Offline filling and validation |

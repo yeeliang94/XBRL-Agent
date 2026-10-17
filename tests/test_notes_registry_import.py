@@ -23,6 +23,7 @@ from concept_model.bootstrap import import_all_notes_templates
 # 3 prose + 2 numeric note types, each across 2 standards × 2 levels.
 _PROSE_TEMPLATES = 3 * 2 * 2   # → notes_nodes
 _NUMERIC_TEMPLATES = 2 * 2 * 2  # → concept_nodes
+_REPORT_TEMPLATES = 2 * 2 * 2  # report narratives share notes_nodes
 
 
 @pytest.fixture()
@@ -51,7 +52,7 @@ def test_prose_lands_in_notes_nodes_only(imported_db):
         prose_templates = conn.execute(
             "SELECT COUNT(DISTINCT template_id) FROM notes_nodes"
         ).fetchone()[0]
-        assert prose_templates == _PROSE_TEMPLATES
+        assert prose_templates == _PROSE_TEMPLATES + _REPORT_TEMPLATES
 
         # Prose template_ids must NOT appear in concept_nodes (kept separate).
         leaked = conn.execute(
@@ -180,7 +181,7 @@ def test_prose_registry_persists_taxonomy_and_slot_semantics(imported_db):
         assert conn.execute("SELECT COUNT(*) FROM taxonomy_concepts").fetchone()[0] > 0
         assert conn.execute(
             "SELECT COUNT(DISTINCT template_id) FROM template_slots"
-        ).fetchone()[0] == _PROSE_TEMPLATES + _NUMERIC_TEMPLATES
+        ).fetchone()[0] == _PROSE_TEMPLATES + _NUMERIC_TEMPLATES + _REPORT_TEMPLATES
     finally:
         conn.close()
 

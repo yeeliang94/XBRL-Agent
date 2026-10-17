@@ -258,13 +258,24 @@ function sourceNotePages(note: { page_lo?: number | null; page_hi?: number | nul
   return Array.from({ length: hi - note.page_lo + 1 }, (_, index) => note.page_lo! + index);
 }
 
+function sourceNoteDestinations(note: SourceNoteInventoryRow): SourceNotePlacement[] {
+  if (note.placements.length > 0) return note.placements;
+  const destinations = new Map<string, SourceNotePlacement>();
+  for (const subnote of note.subnotes ?? []) {
+    for (const placement of subnote.placements ?? []) {
+      destinations.set(`${placement.sheet}:${placement.row}`, placement);
+    }
+  }
+  return [...destinations.values()];
+}
+
 function sourceNoteForCell(
   notes: SourceNoteInventoryRow[],
   cellKey: string,
   current: number | null,
 ): number | null {
   const matches = notes.filter((note) =>
-    note.placements.some(
+    sourceNoteDestinations(note).some(
       (placement) => `${placement.sheet}:${placement.row}` === cellKey,
     ),
   );
@@ -312,7 +323,7 @@ export { isBlankHtml } from "../lib/notesCells";
  *  affordances aligned with what the backend will accept. If we want to
  *  support these formats in the future, we extend ALLOWED_TAGS and re-enable
  *  here — both sides in one review. */
-const TIPTAP_EXTENSIONS = [
+export const TIPTAP_EXTENSIONS = [
   StarterKit.configure({
     code: false,
     codeBlock: false,
@@ -733,8 +744,9 @@ export function NotesReviewTab({
 
   const selectSourceNote = useCallback((note: SourceNoteInventoryRow) => {
     setSelectedSubnoteRef(null);
-    if (note.placements.length >= 1) {
-      selectSourcePlacement(note, note.placements[0]);
+    const destinations = sourceNoteDestinations(note);
+    if (destinations.length >= 1) {
+      selectSourcePlacement(note, destinations[0]);
       return;
     }
     if (saveBlocked || moveBusy) return;
@@ -781,6 +793,10 @@ export function NotesReviewTab({
     onPreparationBlocked?.(saveBlocked || moveBusy || themeBusy);
   }, [onPreparationBlocked, saveBlocked, moveBusy, themeBusy]);
   useEffect(() => () => onPreparationBlocked?.(false), [onPreparationBlocked]);
+
+  const selectedNote = sourceNotes?.find((note) => note.note_num === selectedSourceNote);
+  const selectedSubnote = selectedNote?.subnotes?.find((sub) => sub.subnote_ref === selectedSubnoteRef);
+  const visibleDestinations = selectedSubnote ? selectedSubnote.placements ?? [] : selectedNote ? sourceNoteDestinations(selectedNote) : [];
 
   return (
       <div
@@ -881,7 +897,6 @@ export function NotesReviewTab({
                   (sub) => sub.subnote_ref === selectedSubnoteRef,
                 );
                 const childDestinations = selectedSubnote?.placements ?? [];
-                const visibleDestinations = selectedSubnote ? childDestinations : note.placements;
                 return (
                   <div key={note.note_num} style={styles.noteRailItemGroup}>
                     <button
@@ -949,30 +964,7 @@ export function NotesReviewTab({
                           </span>
                         )}
                     </div>}
-                    {selected && visibleDestinations.length > 1 && (
-                      <div
-                        style={styles.noteRailPlacements}
-                        aria-label={`Destinations for note ${note.note_num}`}
-                      >
-                        {visibleDestinations.map((placement) => (
-                          <button
-                            key={`${placement.sheet}:${placement.row}`}
-                            type="button"
-                            aria-current={activeCellKey === `${placement.sheet}:${placement.row}` ? "true" : undefined}
-                            style={{ ...styles.noteRailPlacementButton, ...(activeCellKey === `${placement.sheet}:${placement.row}` ? ui.reviewSelection : {}) }}
-                            disabled={saveBlocked || moveBusy}
-                            onClick={() => {
-                              const childPages = selectedSubnote ? sourceNotePages(selectedSubnote) : [];
-                              selectSourcePlacement(note, placement, selectedSubnoteRef,
-                                childPages.length > 0 ? childPages : sourceNotePages(note));
-                            }}
-                            title={`${placement.row_label || "Open placed field"} · ${notesSheetDisplayName(placement.sheet)}`}
-                          >
-                            <span style={{ minWidth: 0 }}>{placement.row_label || "Open placed field"}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
+
                   </div>
                 );
               })}
@@ -1004,6 +996,31 @@ export function NotesReviewTab({
                 </label>}
               </div>
             </div>
+            {selectedNote && visibleDestinations.length > 1 && (
+              <nav
+                style={styles.fieldDestinations}
+                aria-label={`Destinations for note ${selectedNote.note_num}`}
+              >
+                <span style={{ fontSize: 13, color: pwc.grey700 }}>Fields for source note {selectedSubnote?.subnote_ref ?? selectedNote.note_num}</span>
+                {visibleDestinations.map((placement) => (
+                  <button
+                    key={`${placement.sheet}:${placement.row}`}
+                    type="button"
+                    aria-current={activeCellKey === `${placement.sheet}:${placement.row}` ? "true" : undefined}
+                    style={{ ...styles.fieldDestinationButton, ...(activeCellKey === `${placement.sheet}:${placement.row}` ? ui.reviewSelection : {}) }}
+                    disabled={saveBlocked || moveBusy}
+                    onClick={() => {
+                      const childPages = selectedSubnote ? sourceNotePages(selectedSubnote) : [];
+                      selectSourcePlacement(selectedNote, placement, selectedSubnoteRef,
+                        childPages.length > 0 ? childPages : sourceNotePages(selectedNote));
+                    }}
+                    title={`${placement.row_label || "Open placed field"} · ${notesSheetDisplayName(placement.sheet)}`}
+                  >
+                    <span style={{ minWidth: 0 }}>{placement.row_label || "Open placed field"}</span>
+                  </button>
+                ))}
+              </nav>
+            )}
             <input type="search" aria-label="Search note field names" placeholder="Search fields" value={noteSearch}
               onChange={(event) => setNoteSearch(event.target.value)} style={styles.fieldSearch} />
             {loadError ? (
@@ -1016,6 +1033,10 @@ export function NotesReviewTab({
               <p style={styles.dim}>Loading XBRL fields…</p>
             ) : noteEntries.length === 0 ? (
               <p style={styles.dim}>No notes were extracted for this run.</p>
+            ) : selectedNote && selectedCellKey == null ? (
+              <p role="status" aria-label="Source note destination" style={styles.dim}>
+                No filing field is recorded for source note {selectedSubnoteRef ?? selectedNote.note_num}.
+              </p>
             ) : activeSheet ? (
               <div style={styles.activeSheetPanel}>
                 <SheetSection
@@ -1150,20 +1171,33 @@ function SheetSection({
   // Plain sheet navigation does not scroll the page: swapping the mounted
   // section already places the new sheet at the top of this panel.
   useEffect(() => {
-    if (focusRow == null) return;
-    const raf =
-      typeof requestAnimationFrame === "function"
-        ? requestAnimationFrame
-        : (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0);
-    raf(() => {
-      const el = sectionRef.current?.querySelector<HTMLElement>(
-        `[data-cell-row="${focusRow}"]`,
-      );
-      (el ?? sectionRef.current)?.scrollIntoView?.({
-        block: "center",
-        behavior: "smooth",
-      });
+    const section = sectionRef.current;
+    if (focusRow == null || !section) return;
+    const scrollToField = (behavior: ScrollBehavior) => {
+      const field = section.querySelector<HTMLElement>(`[data-cell-row="${focusRow}"]`);
+      field?.scrollIntoView?.({ block: "start", behavior });
+    };
+    const frame = requestAnimationFrame(() => scrollToField("smooth"));
+    // Prepared previews can change preceding fields' height after the first jump.
+    const observer = new MutationObserver(() => {
+      if (section.querySelector('[data-output-pending="true"]')) return;
+      observer.disconnect();
+      scrollToField("auto");
     });
+    if (section.querySelector('[data-output-pending="true"]')) {
+      observer.observe(section, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-output-pending"] });
+    }
+    // Manual navigation takes precedence over a late preview response.
+    const stopFollowing = () => { observer.disconnect(); cancelAnimationFrame(frame); };
+    window.addEventListener("wheel", stopFollowing, { passive: true, once: true });
+    window.addEventListener("pointerdown", stopFollowing, { once: true });
+    window.addEventListener("keydown", stopFollowing, { once: true });
+    return () => {
+      stopFollowing();
+      window.removeEventListener("wheel", stopFollowing);
+      window.removeEventListener("pointerdown", stopFollowing);
+      window.removeEventListener("keydown", stopFollowing);
+    };
   }, [focusKey, focusRow]);
 
   // Hydrate format state on mount so a pass launched in another tab/session
@@ -1425,7 +1459,7 @@ function SheetSection({
             // the height of the longer text and never drifts out of line.
             return (
               <section key={`${runId}:${sheet.sheet}:${cell.row}:pair`} aria-label={cell.label}
-                style={{ borderBottom: index < visibleRows.length - 1 ? `1px solid ${pwc.grey100}` : undefined,
+                style={{ scrollMarginTop: 176, borderBottom: index < visibleRows.length - 1 ? `1px solid ${pwc.grey100}` : undefined,
                   ...(highlighted ? humanStatus === "missed" ? ui.comparisonAttention : ui.comparisonQuiet : null) }}
                 data-comparison-highlight={highlighted || undefined}
                 data-cell-row={cell.row} data-testid="notes-review-row">
@@ -1516,7 +1550,7 @@ function NotePreview({
   const prepared = useNoteOutput(runId, sheet, row, html, JSON.stringify(theme));
   const body = (content: string, emptyText: string, human = false) => isBlankHtml(content)
     ? <p style={{ ...styles.dim, margin: 0, padding: "8px 12px" }}>{emptyText}</p>
-    : <div data-testid="notes-readonly-content" style={styles.editorViewportReadonly}>
+    : <div data-testid="notes-readonly-content" data-output-pending={!human && !prepared.output && !prepared.error ? "true" : undefined} style={styles.editorViewportReadonly}>
         {/* Sanitised server-side with the notes whitelist (gotcha #16). */}
         {!human && prepared.output ? <PreparedNotesHtml output={prepared.output} /> : <>
           {!human && <p role="status" style={styles.dim}>{prepared.error ? "Output preview unavailable. Showing saved content." : "Preparing output preview…"}</p>}
@@ -2086,6 +2120,7 @@ function CellRow({
   return (
     <div
       data-cell-row={cell.row}
+      data-output-pending={!editable && !isBlankHtml(cell.html) && !prepared.output && !prepared.error ? "true" : undefined}
       className="notes-review-row"
       style={{ ...styles.workspaceCellRow, ...(comparison ? styles.comparisonRows : {}) }}
       // Focusing (click or keyboard-tab) any part of this row tells the
@@ -2756,13 +2791,13 @@ const styles = {
     fontSize: 13,
     lineHeight: 1.35,
   } as React.CSSProperties,
-  noteRailPlacements: {
+  fieldDestinations: {
     display: "flex",
     flexDirection: "column" as const,
     gap: 2,
-    padding: `0 ${pwc.space.sm}px ${pwc.space.xs}px 35px`,
+    marginBottom: pwc.space.md,
   } as React.CSSProperties,
-  noteRailPlacementButton: {
+  fieldDestinationButton: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
@@ -3041,7 +3076,7 @@ const styles = {
     gap: pwc.space.lg,
     padding: 0,
     background: pwc.white,
-    scrollMarginTop: 64,
+    scrollMarginTop: 176,
   } as React.CSSProperties,
   disclosureHeader: {
     display: "grid",

@@ -276,7 +276,7 @@ describe("Direction A shell and responsive composition", () => {
     expect(designSystem).toContain("Opening Activity never scrolls the page");
     expect(designSystem).toContain("Stack concise updates newest first, with the latest update at the top");
     expect(designSystem).toContain("switching workstream or sub-agent opens its stream at the latest update");
-    expect(designSystem).toContain("The navigator lists the latest stage first: Run checks (newest check first) once they start, then Financial statements, then Notes, with Document preparation at the bottom");
+    expect(designSystem).toContain("The navigator lists the latest stage first: Run checks (newest check first) once they start, then Financial statements, then Notes, then Reports, with Document preparation at the bottom");
     expect(designSystem).toContain("Decision cards name the affected figure even when its value is unchanged");
     expect(designSystem).toContain("Keep tool operations, provider reasoning, tokens and request metadata in closed technical diagnostics");
     expect(designSystem).toContain("Live Technical detail retains the full failed checker finding");
@@ -308,6 +308,11 @@ describe("Simplified template-oriented review", () => {
       "Do not show evidence prose, appearance provenance, internal row numbers",
       "Appearance defaults belong in Settings",
       "meaningful destination subheadings, never technical sheet names",
+      "never insert XBRL field titles into that list",
+      "manual navigation cancels any late scroll correction",
+      "keep detailed formatter summaries and findings in Activity",
+      "A parent note without its own destination uses recorded child destinations",
+      "show that state in Note content instead of unrelated worksheet content",
       "immediately returns the PDF to the source note's cited page",
       "description columns receive priority and wrap",
       "Filled note previews and editors expand to their full content height without nested vertical scrolling",

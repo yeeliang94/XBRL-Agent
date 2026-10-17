@@ -28,6 +28,20 @@ def test_cli_rejects_no_scout_without_denomination(capsys):
     assert "--denomination is required with --no-scout" in capsys.readouterr().err
 
 
+def test_cli_accepts_report_only_without_changing_default_statements():
+    args = run.parse_cli_args(["source.pdf", "--statements", "--reports", "AUDITORS_REPORT"])
+    assert args.statements == []
+    assert args.reports == ["AUDITORS_REPORT"]
+    assert run.parse_cli_args([]).statements == [s.value for s in StatementType]
+
+
+def test_cli_rejects_an_empty_work_selection(capsys):
+    with pytest.raises(SystemExit) as exc:
+        run.parse_cli_args(["source.pdf", "--statements"])
+    assert exc.value.code == 2
+    assert "Select at least one statement, notes template or report" in capsys.readouterr().err
+
+
 def test_run_agent_delegates_scout_to_canonical_pipeline(tmp_path, monkeypatch):
     """CLI and web both ask the canonical pipeline to run the scout.
 

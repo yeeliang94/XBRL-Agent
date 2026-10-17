@@ -242,13 +242,30 @@ from pathlib import Path
 # structural visual-review finding. The block is corrected in place; this
 # table retains the earlier capture, the finding and the verifier's receipt.
 # v53 tracks saved document activity for History and Recent.
-CURRENT_SCHEMA_VERSION = 53
+CURRENT_SCHEMA_VERSION = 54
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
 # repeatedly. Foreign keys use ON DELETE CASCADE so deleting a run sweeps
 # up all dependent rows.
 _CREATE_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS report_fields (
+        run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        report_type TEXT NOT NULL,
+        concept_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        value_kind TEXT NOT NULL,
+        value TEXT,
+        value_status TEXT NOT NULL,
+        evidence TEXT NOT NULL DEFAULT '',
+        source_pages TEXT NOT NULL DEFAULT '[]',
+        revision INTEGER NOT NULL DEFAULT 1,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(run_id, report_type, concept_id)
+    )
+    """,
+
     """CREATE TABLE IF NOT EXISTS agent_instructions (
         id INTEGER PRIMARY KEY CHECK(id=1),
         texts_json TEXT NOT NULL,
@@ -2114,7 +2131,7 @@ _V33_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 # Document activity is persisted at the database boundary so every writer,
 # including direct SQL edits and deletion of saved content, uses the same clock.
 _RUN_ACTIVITY_TABLES = (
-    "run_agents", "run_events", "run_incidents", "model_usage_calls",
+    "report_fields", "run_agents", "run_events", "run_incidents", "model_usage_calls",
     "cross_checks", "run_concept_facts", "concept_fact_events",
     "run_concept_conflicts", "notes_cells", "notes_cell_tombstones",
     "reviewer_flags", "run_review_tasks", "run_notes_review_state",
@@ -3811,6 +3828,18 @@ def init_db(path: str | Path) -> None:
                     _backfill_run_activity(conn)
                     _install_run_activity_tracking(conn)
                     conn.execute("UPDATE schema_version SET version = 53")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v53 -> v54: canonical typed report values, created above.
+        if current_version is not None and current_version < 54:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                latest = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+                if latest < 54:
+                    conn.execute("UPDATE schema_version SET version = 54")
                 conn.commit()
             except Exception:
                 conn.rollback()

@@ -72,6 +72,15 @@ def resolve_sheet_name(source_sheet: str, cells_by_sheet: dict) -> str | None:
                    for i in _TAXONOMY_ID.findall(raw or '')}
             if marker in ids:
                 candidates.append(sheet)
+    report_concepts = {
+        "Report-Directors": "ssmt_DisclosureOfDirectorsReportExplanatory",
+        "Report-Auditors": "ssmt_DisclosureOfAuditorsReportToMembersExplanatory",
+    }
+    if not candidates and source_sheet in report_concepts:
+        concept = report_concepts[source_sheet]
+        candidates = [sheet for sheet, rows in cells_by_sheet.items()
+                      if any(concept in _TAXONOMY_ID.findall(raw or "")
+                             for cols in rows.values() for _, raw in cols.values())]
     return candidates[0] if len(candidates) == 1 else None
 
 def normalize_label(text: str) -> str:
@@ -1054,9 +1063,12 @@ def _collect_note_sheet_cells(data: dict, sheet_paths: dict, sst: list,
     for sheet, entry in sheet_paths.items():
         if sheet == footnote_sheet:
             continue
-        if not (sheet.lower().startswith("notes") or sheet in fn_sheets):
-            continue
         cells = read_sheet_cells(data[entry], sst)
+        report_markers = {"ssmt_DisclosureOfDirectorsReportExplanatory", "ssmt_DisclosureOfAuditorsReportToMembersExplanatory"}
+        has_report = any(report_markers.intersection(_TAXONOMY_ID.findall(raw or ""))
+                         for cols in cells.values() for _, raw in cols.values())
+        if not (sheet.lower().startswith("notes") or sheet in fn_sheets or has_report):
+            continue
         cols_hist = trig_cols.get(sheet)
         trigger_col = (max(cols_hist, key=lambda c: (cols_hist[c], -col_to_idx(c)))
                        if cols_hist else None)
@@ -2161,6 +2173,58 @@ def fill_workbook(
                     "ambiguous", "mismatches", "errors"))
     report["status"] = "degraded" if degraded else "ok"
     return report
+
+
+def fill_report_fields(workbook_path: str, doc: dict, output_path: str) -> dict:
+    """Patch resolved scalar report inputs with typed read-back, using the same ZIP writer.
+
+    Report resolution must supply exact cells and confirmed date/choice encodings.
+    This path never relaxes the numeric input contract or workbook protection.
+    """
+    _, data, _ = load_workbook_entries(workbook_path)
+    paths = get_sheet_paths(data)
+    protection = protected_input_cells(data, paths)
+    replacements = {}
+    written, unresolved, mismatches = [], list(doc.get("unresolved", [])), []
+    targets = set()
+    for write in doc.get("writes", []):
+        sheet, addr, value = write["sheet"], write["cell"], write["value"]
+        if (sheet, addr) in targets:
+            raise ValueError("Duplicate report destination")
+        targets.add((sheet, addr))
+        if sheet not in paths or is_locked_input(protection, sheet, addr):
+            unresolved.append({**write, "reason": "protected_or_missing_cell"})
+            continue
+        entry = paths[sheet]
+        xml = replacements.get(entry, data[entry]).decode("utf-8")
+        if write["kind"] == "date_serial":
+            candidate, action = patch_cell_in_sheet(xml, addr, format_value(value))
+        else:
+            if not isinstance(value, str) or len(value) > EXCEL_CELL_CHAR_LIMIT:
+                raise ValueError("Report scalar must be a bounded string")
+            candidate, action = patch_cell_in_sheet(xml, addr, "0")
+            pattern = re.compile(r'(<c\b[^>]*\br="' + re.escape(addr) + r'"[^>]*>).*?</c>', re.DOTALL)
+            def text_cell(match):
+                start = re.sub(r'\s+t="[^"]*"', '', match.group(1))
+                return start[:-1] + ' t="inlineStr"><is><t xml:space="preserve">' + _xml_escape(value) + '</t></is></c>'
+            candidate = pattern.sub(text_cell, candidate, count=1)
+        if action == "formula_skipped":
+            unresolved.append({**write, "reason": "formula_cell"})
+            continue
+        replacements[entry] = candidate.encode("utf-8")
+        written.append(write)
+    write_patched_zip(workbook_path, output_path, replacements)
+    _, after, _ = load_workbook_entries(output_path)
+    shared = get_shared_strings(after)
+    cells = {s: read_sheet_cells(after[p], shared) for s, p in get_sheet_paths(after).items()}
+    for write in written:
+        col, row = split_ref(write["cell"])
+        kind, found = cells[write["sheet"]].get(row, {}).get(col, (None, None))
+        expected = str(write["value"])
+        if (write["kind"] == "date_serial" and (kind != "N" or Decimal(found or 'NaN') != Decimal(expected))) or (write["kind"] != "date_serial" and (kind != "S" or found != expected)):
+            mismatches.append({**write, "found": found})
+    return {"status": "degraded" if unresolved or mismatches else "ok", "written": written,
+            "unresolved": unresolved, "mismatches": mismatches, "snapshot": doc.get("snapshot")}
 
 
 def _print_summary(report: dict):
