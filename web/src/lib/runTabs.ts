@@ -3,6 +3,7 @@ import { pushNavigationHistory } from "./navigationHistory";
 export type RunTabKey =
   | "overview"
   | "agents"
+  | "reports"
   | "notes"
   | "checks"
   | "telemetry"
@@ -12,6 +13,7 @@ export type RunTabKey =
 export const RUN_TAB_KEYS: readonly RunTabKey[] = [
   "overview",
   "agents",
+  "reports",
   "notes",
   "checks",
   "telemetry",

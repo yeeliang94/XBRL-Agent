@@ -100,6 +100,7 @@ def run_agent(
     variants: Optional[Dict[str, str]] = None,
     use_scout: bool = True,
     first_financial_statements: bool = False,
+    reports: Optional[Set[str]] = None,
 ) -> AgentResult:
     """Run a CLI extraction through the SAME canonical pipeline as the web server.
 
@@ -176,6 +177,7 @@ def run_agent(
     run_config = RunConfigRequest(
         statements=[s.value for s in statements],
         notes_to_run=sorted(n.value for n in notes),
+        reports_to_run=sorted(reports or set()),
         filing_level=filing_level,
         filing_standard=filing_standard,
         denomination=denomination,
@@ -305,9 +307,9 @@ def build_parser():
     parser.add_argument("--model", default=None,
                         help="Model to use (e.g. openai.global.gpt-5.6-luna, gemini-3-flash-preview, claude-sonnet-4-6). "
                              "Defaults to the resolved TEST_MODEL runtime setting")
-    parser.add_argument("--statements", nargs="+", default=all_stmt_names,
+    parser.add_argument("--statements", nargs="*", default=all_stmt_names,
                         choices=all_stmt_names,
-                        help="Statements to extract (default: all 5)")
+                        help="Statements to extract (default: all 5; pass without values for notes/report-only runs)")
     parser.add_argument("--notes", nargs="*", default=[],
                         choices=sorted(_NOTES_CLI_MAP.keys()),
                         help="Notes templates to fill (default: none). "
@@ -334,6 +336,7 @@ def build_parser():
                              "advisory only.")
     parser.add_argument("--first-financial-statements", action="store_true",
                         help="First statements after incorporation; extract only the current period.")
+    parser.add_argument("--reports", nargs="*", choices=["DIRECTORS_REPORT", "AUDITORS_REPORT"], default=[])
     return parser
 
 
@@ -343,6 +346,8 @@ def parse_cli_args(argv: list[str] | None = None):
     args = parser.parse_args(argv)
     if not args.use_scout and args.denomination is None:
         parser.error("--denomination is required with --no-scout")
+    if not args.statements and not args.notes and not args.reports:
+        parser.error("Select at least one statement, notes template or report")
     return args
 
 
@@ -369,6 +374,7 @@ if __name__ == "__main__":
         model=model,
         statements=stmts,
         notes=notes_set,
+        reports=set(args.reports),
         filing_level=args.level,
         filing_standard=args.standard,
         denomination=args.denomination,

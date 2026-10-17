@@ -28,12 +28,12 @@ def test_shared_date_instruction_matches_company_and_group_templates():
     company_paths = [
         p for standard in ("MFRS", "MPERS")
         for p in (REPO / f"XBRL-template-{standard}" / "Company").glob("*.xlsx")
-        if "SOCIE" not in p.name
+        if "SOCIE" not in p.name and not p.name.startswith("Report-")
     ]
     group_paths = [
         p for standard in ("MFRS", "MPERS")
         for p in (REPO / f"XBRL-template-{standard}" / "Group").glob("*.xlsx")
-        if "SOCIE" not in p.name
+        if "SOCIE" not in p.name and not p.name.startswith("Report-")
     ]
     assert company_paths and group_paths
     assert all(_date_rows(p) == {1} for p in company_paths)

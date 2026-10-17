@@ -61,6 +61,31 @@ def test_prose_gets_arial_and_paragraph_spacing():
     assert re.search(r'<p[^>]*style="[^"]*margin: 0 0 8px 0', out)
     # Wrapping container carries the face so bare <strong>/loose text inherits.
     assert re.match(r'<div[^>]*style="[^"]*font-family: Arial', out)
+    assert "text-align: justify" in BeautifulSoup(out, "html.parser").div["style"]
+
+
+@pytest.mark.parametrize("mode", [{}, {"compact": True}, {"lite": True}])
+def test_justified_prose_preserves_explicit_alignment_and_table_alignment(mode):
+    html = ('<h3>Accounting policies</h3><p>Policy prose.</p>'
+            '<ul><li>Policy item.</li></ul>'
+            '<p style="text-align: left">Manual left.</p>'
+            '<h3 style="text-align: center">Manual heading</h3>'
+            '<div style="text-align: right"><p>Manual section.</p></div>'
+            '<table><tr><td><p>Description</p></td><td><p>1,000</p></td></tr>'
+            '<tr><td>Heading amount</td><td><h3>2,000</h3></td></tr></table>')
+    soup = BeautifulSoup(decorate_notes_html(html, **mode), "html.parser")
+    assert "text-align: justify" in soup.div["style"]
+    assert "text-align: left" in soup.h3["style"]
+    assert soup.find("p", string="Manual left.")["style"].count("text-align") == 1
+    assert "text-align: left" in soup.find("p", string="Manual left.")["style"]
+    assert "text-align: center" in soup.find("h3", string="Manual heading")["style"]
+    assert "text-align: right" in soup.find("p", string="Manual section.").parent["style"]
+    assert "text-align: left" in soup.table["style"]
+    assert "text-align: right" in soup.find_all("td")[1]["style"]
+    assert all("text-align" not in p["style"] for p in soup.table.find_all("p"))
+    assert "text-align" not in soup.table.h3["style"]
+    assert "text-align: right" in soup.table.h3.parent["style"]
+    assert list(soup.stripped_strings) == list(BeautifulSoup(html, "html.parser").stripped_strings)
 
 
 def test_house_spacing_separates_paragraphs_and_adjacent_tables():

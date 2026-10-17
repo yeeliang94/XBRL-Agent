@@ -86,6 +86,55 @@ def test_snapshot_then_revert_restores_exact_original(db_path: Path) -> None:
     assert _live_rows(db_path, run_id) == {10: "<p>orig 10</p>", 11: "<p>orig 11</p>"}
 
 
+@pytest.mark.parametrize("take_snapshot", [ensure_notes_snapshot, snapshot_notes_cells])
+@pytest.mark.parametrize("legacy_report_snapshot", [False, True])
+def test_notes_revert_preserves_reports_and_their_revisions(
+    db_path, take_snapshot, legacy_report_snapshot,
+):
+    from reports.registry import fields, import_templates, REPORTS
+    from reports.repository import save_field, snapshot
+
+    import_templates(db_path)
+    run_id = _seed_run(db_path)
+    narratives = {report: next(f for f in fields(report) if f.kind == "html") for report in REPORTS}
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=10,
+                               label="Note", html="<p>Original note.</p>")
+        save_field(conn, run_id, "AUDITORS_REPORT", narratives["AUDITORS_REPORT"].concept,
+                   "<p>Original opinion.</p>", "observed", "Opinion", [1])
+    take_snapshot(db_path, run_id)
+    with repo.db_session(db_path) as conn:
+        if legacy_report_snapshot:
+            # Earlier snapshots included report prose. Revert must ignore it.
+            conn.execute("""INSERT OR REPLACE INTO run_notes_cell_snapshots
+                (run_id,sheet,row,label,html,evidence,source_pages,concept_uuid,style_source,snapshot_at)
+                SELECT run_id,sheet,row,label,html,evidence,source_pages,concept_uuid,style_source,updated_at
+                FROM notes_cells WHERE run_id=? AND sheet='Report-Auditors'""", (run_id,))
+        save_field(conn, run_id, "AUDITORS_REPORT", narratives["AUDITORS_REPORT"].concept,
+                   "<p>Corrected opinion.</p>", "user_override", "Correction", [1], expected_revision=1)
+        # A report first captured after the notes snapshot must also survive.
+        save_field(conn, run_id, "DIRECTORS_REPORT", narratives["DIRECTORS_REPORT"].concept,
+                   "<p>Directors report.</p>", "observed", "Report", [2])
+        repo.add_notes_tombstone(conn, run_id=run_id, sheet="Report-Directors", row=999)
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=10,
+                               label="Note", html="<p>Revised note.</p>")
+        before = snapshot(conn, run_id)
+        report_rows = conn.execute(
+            "SELECT * FROM notes_cells WHERE run_id=? AND sheet LIKE 'Report-%' ORDER BY sheet", (run_id,)
+        ).fetchall()
+
+    assert [d["sheet"] for d in compute_notes_review_diff(db_path, run_id)] == [_SHEET]
+    assert revert_notes_to_original(db_path, run_id) == {"reverted": True, "cells_restored": 1}
+    assert _live_rows(db_path, run_id) == {10: "<p>Original note.</p>"}
+    with repo.db_session(db_path) as conn:
+        assert snapshot(conn, run_id) == before
+        assert conn.execute(
+            "SELECT * FROM notes_cells WHERE run_id=? AND sheet LIKE 'Report-%' ORDER BY sheet", (run_id,)
+        ).fetchall() == report_rows
+        assert ("Report-Directors", 999) in repo.fetch_notes_tombstones(conn, run_id)
+    assert compute_notes_review_diff(db_path, run_id) == []
+
+
 def test_revert_restores_original_style_source(db_path: Path) -> None:
     """Snapshot/revert must round-trip the v29 style_source tag, so reverting a
     formatter (or reviewer) pass brings back the original chip, not NULL."""

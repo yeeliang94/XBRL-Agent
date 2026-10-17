@@ -357,7 +357,9 @@ def _reexport_and_remerge_from_facts(run_id: int) -> Optional[Path]:
                     status="succeeded", statement_type=stmt, variant=a.variant
                 )
             )
-        if not agent_results:
+        from reports.repository import diagnostic_workbooks
+        report_paths = diagnostic_workbooks(AUDIT_DB_PATH, run_id, session_dir)
+        if not agent_results and not report_paths:
             return None
 
         # Seed face-statement inputs from whatever is on disk, then let the
@@ -394,6 +396,7 @@ def _reexport_and_remerge_from_facts(run_id: int) -> Optional[Path]:
             all_workbook_paths,
             str(tmp_path),
             notes_workbook_paths=all_notes_workbook_paths,
+            report_workbook_paths=report_paths,
             skip_recalc=True,
         )
         if not getattr(result, "success", False):
@@ -3395,6 +3398,8 @@ class RunConfigRequest(BaseModel):
     # Unspecified templates fall back to the run's default model. Mirrors
     # ``models`` for face statements.
     notes_models: Dict[str, str] = {}
+    reports_to_run: List[Literal["DIRECTORS_REPORT", "AUDITORS_REPORT"]] = []
+    reports_models: Dict[str, str] = {}
     # v10 audit column (kept for schema compatibility). The monolith
     # experiment that this flag once selected has been removed; only
     # `split` (the 5-specialist coordinator) is a live path now.
@@ -3448,6 +3453,8 @@ class RunConfigPatchRequest(BaseModel):
     denomination_user_selected: Optional[bool] = None
     notes_to_run: Optional[List[str]] = None
     notes_models: Optional[Dict[str, str]] = None
+    reports_to_run: Optional[List[Literal["DIRECTORS_REPORT", "AUDITORS_REPORT"]]] = None
+    reports_models: Optional[Dict[str, str]] = None
     # Only `split` exists (monolith removed). Unset (None) stays None so a
     # partial PATCH that doesn't touch orchestration won't clobber it; any
     # supplied value is coerced to "split". (PR-2.)
@@ -4141,7 +4148,9 @@ def _attempt_partial_merge(
 
         # Nothing on disk → nothing to merge. Not an error, not a
         # partial_merge event.
-        if not face_paths and not notes_paths:
+        from reports.repository import diagnostic_workbooks
+        report_paths = diagnostic_workbooks(AUDIT_DB_PATH, run_id, session_dir) if run_id is not None else {}
+        if not face_paths and not notes_paths and not report_paths:
             return out
 
         try:
@@ -4149,6 +4158,7 @@ def _attempt_partial_merge(
                 face_paths,
                 merged_path,
                 notes_workbook_paths=notes_paths,
+                report_workbook_paths=report_paths,
                 # Same skip_recalc reasoning as the success path — no
                 # post-merge corrector runs after a Stop-All, so the
                 # recalc that normally happens after correction won't
@@ -4751,7 +4761,11 @@ def _validate_and_build_run(
     # Wrap in try/except so a broken override key also produces a clean
     # failed-row rather than bubbling out of the generator.
     notes_models: Dict[NotesTemplateType, Any] = {}
+    reports_models: Dict[str, Any] = {}
     try:
+        for report in run_config.reports_to_run:
+            if run_config.reports_models.get(report, "").strip():
+                reports_models[report] = _create_proxy_model(run_config.reports_models[report], proxy_url, api_key)
         for stmt in statements_to_run:
             if stmt.value in run_config.models:
                 override_name = run_config.models[stmt.value]
@@ -4907,6 +4921,8 @@ def _validate_and_build_run(
         db_path=str(AUDIT_DB_PATH),
         # Item 28 — matched prior-year advisory (or None).
         prior_year_advisory=prior_year_advisory,
+        reports_to_run=set(run_config.reports_to_run),
+        reports_models=reports_models,
     )
 
     return _ValidatedRun(
@@ -5464,6 +5480,7 @@ async def run_multi_agent_stream(
         # Same idea for notes — keyed by NotesTemplateType so the post-run
         # loop can find the row to finalize.
         run_agent_ids_by_notes: Dict[NotesTemplateType, int] = {}
+        run_agent_ids_by_report: Dict[str, int] = {}
         scout_run_agent_id: Optional[int] = None
         scout_model_name = (
             _configured_default_models().get("scout")
@@ -5507,6 +5524,11 @@ async def run_multi_agent_stream(
                     )
                     run_agent_ids_by_agent_id[f"notes:{nt.value}".lower()] = rai
                     run_agent_ids_by_notes[nt] = rai
+                for report in sorted(config.reports_to_run):
+                    rai = repo.create_run_agent(db_conn, run_id, statement_type=report,
+                                                model=_model_id(config.reports_models.get(report, config.model)))
+                    run_agent_ids_by_report[report] = rai
+                    run_agent_ids_by_agent_id[f"report:{report}".lower()] = rai
                 db_conn.commit()
             except Exception:
                 logger.warning("Failed to pre-create run_agents rows for %s",
@@ -6224,11 +6246,16 @@ async def run_multi_agent_stream(
             )
         )
 
-        # Fan-in sentinel: push None onto the queue only after BOTH coords
+        from reports.agent import run_reports
+        reports_task = asyncio.create_task(run_reports(
+            config, config.reports_to_run, config.reports_models, run_agent_ids_by_report,
+            event_queue, session_id))
+
+        # Fan-in sentinel: push None onto the queue only after all workstreams
         # have finished so the drain loop doesn't exit prematurely.
         async def _push_sentinel_when_done() -> None:
             try:
-                await asyncio.gather(coordinator_task, notes_task, return_exceptions=True)
+                await asyncio.gather(coordinator_task, notes_task, reports_task, return_exceptions=True)
             finally:
                 await event_queue.put(None)
 
@@ -6278,6 +6305,8 @@ async def run_multi_agent_stream(
             logger.exception("Event queue drain failed", extra={"session_id": session_id})
             coordinator_task.cancel()
             notes_task.cancel()
+            reports_task.cancel()
+            await asyncio.gather(coordinator_task, notes_task, reports_task, return_exceptions=True)
             if _safe_mark_finished(db_conn, run_id, "failed"):
                 terminal_status = "failed"
             if client_connected:
@@ -6287,6 +6316,8 @@ async def run_multi_agent_stream(
                     "bucket": ERROR_BUCKET_FATAL,
                 }}
             return
+
+        report_results = await reports_task
 
         # Await the coordinator task to get CoordinatorResult for post-processing
         try:
@@ -6506,6 +6537,7 @@ async def run_multi_agent_stream(
             all_workbook_paths,
             merged_path,
             notes_workbook_paths=all_notes_workbook_paths,
+            report_workbook_paths={r.report: r.workbook_path for r in report_results if r.workbook_path},
             skip_recalc=True,
         )
 
@@ -7456,6 +7488,7 @@ async def run_multi_agent_stream(
                         remerge = merge_workbooks(
                             all_workbook_paths, merged_path,
                             notes_workbook_paths=all_notes_workbook_paths,
+                            report_workbook_paths={r.report: r.workbook_path for r in report_results if r.workbook_path},
                             skip_recalc=True,
                         )
                         if remerge.success:
@@ -8079,7 +8112,8 @@ async def run_multi_agent_stream(
         # cross-check results — and stamp it on the runs row.
         any_check_failed = any(cr.status == "failed" for cr in cross_check_results)
         notes_all_succeeded = notes_result is None or notes_result.all_succeeded
-        all_agents_ok = coordinator_result.all_succeeded and notes_all_succeeded
+        all_agents_ok = (coordinator_result.all_succeeded and notes_all_succeeded
+                         and all(r.status == "succeeded" for r in report_results))
         # RUN-REVIEW P0-1: a CORRECTION pass that hit its turn budget
         # without converging is a distinct outcome — agents/merge ran
         # fine and checks may even all be green now, but the corrector
@@ -8866,6 +8900,7 @@ from api.run_control import router as _run_control_router
 from api.reviewer import router as _reviewer_router
 from api.notes_reviewer import router as _notes_reviewer_router
 from api.runs import router as _runs_router
+from api.reports import router as _reports_router
 from api.notes import router as _notes_router
 from api.notes_formatter import router as _notes_formatter_router
 from api.files import router as _files_router
@@ -8882,6 +8917,7 @@ app.include_router(_reviewer_router)
 app.include_router(_notes_reviewer_router)
 app.include_router(_runs_router)
 app.include_router(_notes_router)
+app.include_router(_reports_router)
 app.include_router(_notes_formatter_router)
 app.include_router(_files_router)
 app.include_router(_mtool_router)

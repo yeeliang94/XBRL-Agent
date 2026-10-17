@@ -74,6 +74,8 @@ const WORKSTREAM_LABELS: Record<string, string> = {
   SCOUT: "Document preparation",
   SOURCE_PREPARATION: "Source preparation",
   VALIDATOR: "Cross-checks",
+  DIRECTORS_REPORT: "Directors’ report",
+  AUDITORS_REPORT: "Auditors’ report",
   NOTES_FORMATTING: "Notes formatting",
   NOTES_INTEGRITY: "Notes completeness",
   "notes-integrity": "Notes completeness",
@@ -184,6 +186,7 @@ function AgentTabsImpl({
   const visiblePreparation: string[] = [];
   const visibleStatementActive: string[] = [];
   const visibleNotesActive: string[] = [];
+  const visibleReports: string[] = [];
   const visibleChecks: string[] = [];
   for (const id of tabOrder) {
     const agent = agents[id];
@@ -195,6 +198,8 @@ function AgentTabsImpl({
       visibleChecks.push(id);
     } else if (id.startsWith(NOTES_TAB_PREFIX) || agent.role.startsWith("NOTES_")) {
       if (notesInRun === undefined || notesInRun.includes(agent.role)) visibleNotesActive.push(id);
+    } else if (agent.role === "DIRECTORS_REPORT" || agent.role === "AUDITORS_REPORT") {
+      visibleReports.push(id);
     } else if (statementsInRun === undefined || statementsInRun.includes(agent.role)) {
       visibleStatementActive.push(id);
     }
@@ -203,7 +208,7 @@ function AgentTabsImpl({
   // the extraction workstreams, with document preparation at the bottom.
   const checksOrder = ["notes-formatting", "notes-integrity", "notes-cleanup", "validator", "CORRECTION", "NOTES_VALIDATOR"];
   visibleChecks.sort((a, b) => checksOrder.indexOf(workstreamKind(agents[a])) - checksOrder.indexOf(workstreamKind(agents[b])));
-  const navigationOrder = [...visibleChecks, ...visibleStatementActive, ...visibleNotesActive, ...visiblePreparation];
+  const navigationOrder = [...visibleChecks, ...visibleStatementActive, ...visibleNotesActive, ...visibleReports, ...visiblePreparation];
   const navigationKey = navigationOrder.join("\u0000");
   const focusableTab = navigationOrder.includes(activeTab) ? activeTab : navigationOrder[0];
 
@@ -310,6 +315,13 @@ function AgentTabsImpl({
             {notesSkeletons?.map((label) => (
               <SkeletonTab key={`notes-skeleton-${label}`} keyPrefix="notes-skeleton" label={label} />
             ))}
+          </div>
+        )}
+
+        {visibleReports.length > 0 && (
+          <div role="presentation" data-bucket="reports" style={styles.tabGroup}>
+            <div role="presentation" style={styles.groupLabel}>Reports</div>
+            {visibleReports.map(renderTab)}
           </div>
         )}
 

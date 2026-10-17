@@ -16,6 +16,8 @@ def select_sheets(raw: str | None, doc: dict, note_sheets: set[str]) -> tuple[di
         raise ValueError("selected_sheets must be a non-empty list of this run's sheet names")
     selected = sorted(set(selected))
     scoped = deepcopy(doc)
+    if "reports" in scoped:
+        scoped["reports"]["reports"] = [r for r in scoped["reports"]["reports"] if r["sheet"] in selected]
     scoped["writes"] = [w for w in doc.get("writes", []) if w["sheet"] in selected]
     scoped["checks"] = [w for w in doc.get("checks", []) if w["sheet"] in selected]
     scoped["sheets"] = {s: cfg for s, cfg in doc.get("sheets", {}).items() if s in selected}

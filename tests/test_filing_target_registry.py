@@ -80,10 +80,11 @@ def test_financial_reporting_status_is_context_not_a_writable_note_target():
 def test_all_active_variants_have_complete_writable_semantics():
     audit = audit_active_templates(ROOT)
 
-    assert audit["templates"] == 58
-    assert audit["worksheets"] == 74
+    assert audit["templates"] == 66
+    assert audit["worksheets"] == 82
     assert audit["numeric_slots"] == 9314
     assert audit["prose_slots"] == 688
+    assert audit["report_slots"] == 176
     assert audit["unclassified_slots"] == 0
     assert audit["missing_required_mappings"] == []
     assert audit["structural_writable_slots"] == []
