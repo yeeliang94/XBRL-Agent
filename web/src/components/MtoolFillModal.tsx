@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { REPORT_SHEET_LABELS, reportFieldLabel } from "../lib/reportLabels";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { StatusIcon } from "./StatusIcon";
 import { ApiError, userMessage } from "../lib/errors";
@@ -150,6 +151,7 @@ interface ReportSummary {
   fuzzy_matched?: { sheet: string; label: string | null; matched_label?: string }[];
   errors?: { detail?: string; error?: string }[];
   notes?: NotesReport;
+  reports?: { status: string; written: unknown[]; unresolved: ReportUnresolved[]; mismatches: unknown[] };
   // The template's own declared unit vs the run's denomination. A mismatch is
   // the 1000×-inflation risk — reported, never silently acted on.
   unit_scale_warnings?: {
@@ -453,6 +455,25 @@ function RowDetail({ title, rows, defaultOpen = false }: { title: string; rows: 
       </ul>
     </details>
   );
+}
+
+interface ReportUnresolved { label?: string; concept?: string; sheet?: string; source_sheet?: string; reason: string }
+
+function reportFieldName(f: ReportUnresolved): string {
+  const sheet = f.source_sheet ?? f.sheet ?? "";
+  const report = REPORT_SHEET_LABELS[sheet];
+  const name = f.concept ? reportFieldLabel(f.concept, f.label ?? "Field") : "Report text";
+  return report ? `${report} · ${name}` : name;
+}
+
+function reportReasonText(reason: string): string {
+  switch (reason) {
+    case "assessment_incomplete": return "Needs review in Reports.";
+    case "report_narrative_missing": return "Report text is empty. Review it in Reports.";
+    case "native_date_encoding_unverified": return "Date format not confirmed. Enter it in mTool.";
+    case "native_selection_encoding_unverified": return "Dropdown value not confirmed. Choose it in mTool.";
+    default: return "No matching cell. Enter it in mTool.";
+  }
 }
 
 /** Plain-language explanation of why a note wasn't placed automatically. */
@@ -1575,6 +1596,10 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
                 (s) => `${s.sheet}${s.cell ? `!${s.cell}` : ""} · ${s.label ?? ""}`,
               )}
             />
+            {report.reports && <RowDetail title="Report fields to complete in mTool" defaultOpen
+              rows={report.reports.unresolved.filter(f => f.reason !== "not_disclosed").map(f => `${reportFieldName(f)}: ${reportReasonText(f.reason)}`)} />}
+            {report.reports && <RowDetail title="Report fields left blank"
+              rows={report.reports.unresolved.filter(f => f.reason === "not_disclosed").map(reportFieldName)} />}
             <RowDetail
               title="Values that differ from the reviewed figures"
               defaultOpen

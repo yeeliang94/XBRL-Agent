@@ -58,7 +58,7 @@ def test_review_output_is_export_payload_without_mutating_source(notes_db, monke
     from db import repository as repo
     db, run_id = notes_db
     monkeypatch.setattr(server, 'AUDIT_DB_PATH', db)
-    html = '<table><tr><td>Description</td><td>2025 RM</td></tr><tr><td>Total</td><td style="border-bottom:3px double black">24,000</td></tr></table>'
+    html = '<p>Property is measured at cost.</p><table><tr><td>Description</td><td>2025 RM</td></tr><tr><td>Total</td><td style="border-bottom:3px double black">24,000</td></tr></table>'
     _add_note(db, run_id, 'Notes-Listofnotes', 17, 'PPE', html)
     client = TestClient(server.app)
     response = client.get(f'/api/runs/{run_id}/notes-output', params={'sheet': 'Notes-Listofnotes', 'row': 17})
@@ -68,6 +68,7 @@ def test_review_output_is_export_payload_without_mutating_source(notes_db, monke
     output = response.json()
     doc = build_notes_fill_doc(db, run_id, style=_resolve_notes_style(run))
     assert output['html'] == doc['footnotes'][0]['html']
+    assert 'text-align: justify' in BeautifulSoup(output['html'], 'html.parser').div['style']
     assert output['source_html'] == html
     assert 'double' not in output['html']
     assert '0.75px solid' in output['html']

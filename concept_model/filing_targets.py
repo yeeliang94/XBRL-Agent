@@ -35,6 +35,7 @@ SLOT_ROLES = frozenset({
 })
 
 _PROSE_FILENAMES = frozenset({
+    "Report-Directors.xlsx", "Report-Auditors.xlsx",
     "10-Notes-CorporateInfo.xlsx",
     "11-Notes-CorporateInfo.xlsx",
     "11-Notes-AccountingPolicies.xlsx",
@@ -239,6 +240,7 @@ def _numeric_targets(path: Path) -> tuple[str, list[FilingTarget]]:
 
 
 def _prose_targets(path: Path) -> tuple[str, list[FilingTarget]]:
+    from reports.registry import value_kind as report_value_kind
     wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
     try:
         sheet = wb.sheetnames[0]
@@ -261,7 +263,9 @@ def _prose_targets(path: Path) -> tuple[str, list[FilingTarget]]:
             canonical_target_id=node.node_uuid,
             label=node.label,
             slot_role=node.slot_role,
-            value_kind="html",
+            value_kind=(report_value_kind(
+                node.taxonomy_element_id, template_id.split("-", 1)[0])
+                if path.name.startswith("Report-") and concept and concept.reportable else "html"),
             taxonomy_element_id=node.taxonomy_element_id,
             namespace_uri=concept.namespace_uri if concept else None,
             local_name=concept.local_name if concept else None,
@@ -671,8 +675,12 @@ def semantic_coverage_for_run(
                 FROM notes_cells c
                 JOIN notes_nodes nn ON nn.node_uuid = c.concept_uuid
                 WHERE c.run_id = ? AND nn.template_id LIKE ?
+                UNION
+                SELECT DISTINCT ts.template_id FROM report_fields rf
+                JOIN template_slots ts ON ts.canonical_target_id=rf.target_id
+                WHERE rf.run_id=? AND ts.template_id LIKE ?
                 """,
-                (run_id, family_prefix + "%", run_id, family_prefix + "%"),
+                (run_id, family_prefix + "%", run_id, family_prefix + "%", run_id, family_prefix + "%"),
             ).fetchall()
         }
         slot_rows = conn.execute(
@@ -858,6 +866,7 @@ def audit_active_templates(repository_root: str | Path) -> dict[str, Any]:
     reviewed: list[dict[str, Any]] = []
     numeric_slots = 0
     prose_slots = 0
+    report_slots = 0
     worksheets = 0
     unclassified = 0
 
@@ -872,7 +881,9 @@ def audit_active_templates(repository_root: str | Path) -> dict[str, Any]:
         worksheets += sheet_count
         template_id, targets = targets_for_template(path)
         is_prose = path.name in _PROSE_FILENAMES
-        if is_prose:
+        if path.name.startswith("Report-"):
+            report_slots += len(targets)
+        elif is_prose:
             prose_slots += len(targets)
         else:
             numeric_slots += len(targets)
@@ -919,6 +930,7 @@ def audit_active_templates(repository_root: str | Path) -> dict[str, Any]:
         "worksheets": worksheets,
         "numeric_slots": numeric_slots,
         "prose_slots": prose_slots,
+        "report_slots": report_slots,
         "unclassified_slots": unclassified,
         "missing_required_mappings": missing_required,
         "structural_writable_slots": structural_writable,

@@ -81,14 +81,14 @@ def build_input(
 
     live_cells = frozenset(
         (r["sheet"], r["row"]) for r in conn.execute(
-            "SELECT sheet, row FROM notes_cells WHERE run_id = ?", (run_id,)
+            "SELECT sheet, row FROM notes_cells WHERE run_id = ? AND sheet NOT IN ('Report-Directors','Report-Auditors')", (run_id,)
         ).fetchall()
     )
 
     cells = []
     for r in conn.execute(
         "SELECT sheet, row, html, source_rendered_sha256, source_render_version, current_html_sha256, "
-        "content_origin FROM notes_cells WHERE run_id = ? ORDER BY sheet, row",
+        "content_origin FROM notes_cells WHERE run_id = ? AND sheet NOT IN ('Report-Directors','Report-Auditors') ORDER BY sheet, row",
         (run_id,),
     ).fetchall():
         key = (r["sheet"], r["row"])

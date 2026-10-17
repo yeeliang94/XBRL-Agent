@@ -626,7 +626,8 @@ export default function App() {
     // Auto-detect button, validator is a pipeline phase, not an agent. The
     // UI hides the rerun button for those tabs; this guard is a belt-and-
     // braces check so a stray call can't POST a malformed payload.
-    if (!isFaceStatement && !isNotes) return;
+    const isReport = role === "DIRECTORS_REPORT" || role === "AUDITORS_REPORT";
+    if (!isFaceStatement && !isNotes && !isReport) return;
 
     dispatch({ type: "RERUN_STARTED", payload: { agentId } });
 
@@ -642,6 +643,8 @@ export default function App() {
         filing_standard: prev?.filing_standard || "mfrs",
         denomination: prev?.denomination || "thousands",
       };
+    } else if (isReport) {
+      config = { ...prev!, statements: [], variants: {}, notes_to_run: [], reports_to_run: [role], use_scout: false };
     } else {
       const nt = role as NotesTemplateType;
       const prevNotesModel = prev?.notes_models?.[nt];

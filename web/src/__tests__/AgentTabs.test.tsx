@@ -697,6 +697,21 @@ describe("AgentTabs", () => {
       expect(tablist?.getAttribute("aria-label")).toBe("Run workstreams");
     });
 
+    test("directors' and auditors' reports sit in their own Reports group", () => {
+      const agents = {
+        sofp: { agentId: "sofp", label: "SOFP", role: "SOFP", status: "complete" as const },
+        "report:directors_report": { agentId: "report:directors_report", label: "Directors’ report", role: "DIRECTORS_REPORT", status: "complete" as const },
+      };
+      const { container } = render(
+        <AgentTabs agents={agents} tabOrder={Object.keys(agents)} activeTab="sofp" onTabClick={() => {}}
+          statementsInRun={["SOFP"]} notesInRun={[]} />,
+      );
+      const reports = container.querySelector('[data-bucket="reports"]');
+      expect(reports?.textContent).toContain("Reports");
+      expect(reports?.textContent).toContain("Directors’ report");
+      expect(container.querySelector('[data-bucket="statements"]')?.textContent).not.toContain("Directors’ report");
+    });
+
     test("tablist separates document preparation, statements, notes, and run checks", () => {
       const agents = twelveTabAgents();
       const { container } = render(

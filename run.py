@@ -100,6 +100,7 @@ def run_agent(
     variants: Optional[Dict[str, str]] = None,
     use_scout: bool = True,
     first_financial_statements: bool = False,
+    reports: Optional[Set[str]] = None,
 ) -> AgentResult:
     """Run a CLI extraction through the SAME canonical pipeline as the web server.
 
@@ -176,6 +177,7 @@ def run_agent(
     run_config = RunConfigRequest(
         statements=[s.value for s in statements],
         notes_to_run=sorted(n.value for n in notes),
+        reports_to_run=sorted(reports or set()),
         filing_level=filing_level,
         filing_standard=filing_standard,
         denomination=denomination,
@@ -334,6 +336,7 @@ def build_parser():
                              "advisory only.")
     parser.add_argument("--first-financial-statements", action="store_true",
                         help="First statements after incorporation; extract only the current period.")
+    parser.add_argument("--reports", nargs="*", choices=["DIRECTORS_REPORT", "AUDITORS_REPORT"], default=[])
     return parser
 
 
@@ -369,6 +372,7 @@ if __name__ == "__main__":
         model=model,
         statements=stmts,
         notes=notes_set,
+        reports=set(args.reports),
         filing_level=args.level,
         filing_standard=args.standard,
         denomination=args.denomination,

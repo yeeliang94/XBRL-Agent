@@ -112,13 +112,15 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
   const handleRetryAgent = (statementType: string): Promise<void> => {
     if (!detail?.config || !detail.session_id) return Promise.reject(new Error("Saved extraction settings are unavailable."));
     const isNotes = statementType.startsWith("NOTES_");
+    const isReport = statementType === "DIRECTORS_REPORT" || statementType === "AUDITORS_REPORT";
     const role = isNotes ? statementType.slice(6) : statementType;
     const saved = detail.config as unknown as RunConfigPayload;
     const config: RunConfigPayload = {
       ...saved,
       filing_standard: detail.filing_standard ?? saved.filing_standard ?? "mfrs",
       filing_level: detail.filing_level ?? saved.filing_level ?? "company",
-      statements: isNotes ? [] : [role as StatementType],
+      statements: isNotes || isReport ? [] : [role as StatementType],
+      reports_to_run: isReport ? [statementType] : [],
       notes_to_run: isNotes ? [role as NotesTemplateType] : [],
       use_scout: false,
     };

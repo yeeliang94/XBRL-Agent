@@ -20,6 +20,7 @@
   font-family: Arial, sans-serif;
   font-size: var(--nt-cell-font-size, 13px);
   line-height: 1.5;
+  text-align: justify;
   color: #000000;
   min-height: 40px;
   outline: none;
@@ -28,6 +29,11 @@
 .notes-review-tab .tiptap:focus-within {
   border-color: #000000;
   box-shadow: 0 0 0 3px #EEEFF1;
+}
+
+/* Report narratives read as unbordered previews until the reviewer edits them. */
+.notes-review-tab.report-narrative-preview .tiptap {
+  border-color: transparent;
 }
 
 .notes-review-tab .tiptap p {
@@ -66,6 +72,7 @@
 }
 
 .notes-review-tab .tiptap :is(h1, h2, h3, h4, h5, h6) {
+  text-align: left;
   /* Heading size/weight are theme-driven (--nt-heading-*) so the editor
      preview matches the clipboard paste + mTool fill; the fallbacks are the
      editor's historic values. */
@@ -76,9 +83,14 @@
 }
 
 .notes-review-tab .tiptap table {
+  text-align: left;
   border-collapse: collapse;
   margin: var(--nt-para-spacing, 8px) 0;
   width: 100%;
+}
+
+.notes-review-tab .tiptap :is(td, th) :is(h1, h2, h3, h4, h5, h6) {
+  text-align: inherit;
 }
 
 /* View-only legacy hierarchy; explicit user indentation remains inline. */

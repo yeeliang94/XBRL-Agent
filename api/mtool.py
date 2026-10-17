@@ -49,7 +49,7 @@ from mtool.template_map import inspect_template, resolve_filing_doc
 from mtool.notes_decorate import NotesTableStyle
 from mtool.notes_exporter import NotesOutputContentError, build_notes_fill_doc, build_notes_snapshot, notes_source_sheets, prepare_note_output
 from mtool.offline_fill import (
-    fill_footnotes, fill_workbook, validate_input, validate_notes_input)
+    fill_footnotes, fill_workbook, fill_report_fields, load_workbook_entries, validate_input, validate_notes_input)
 from mtool.preflight import evaluate_preflight, written_keys_from_doc
 from mtool.receipt import (
     fetch_receipts, record_receipt_download, write_fill_receipt)
@@ -282,6 +282,15 @@ def _build_doc(run_id: int):
         # Only reachable under a non-identity manifest — but if it ever fires,
         # it must read as a refusal to guess, not a crash.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    from reports.repository import snapshot as report_snapshot
+    with closing(server._open_audit_conn()) as conn:
+        conn.execute("BEGIN")
+        reports = report_snapshot(conn, run_id)
+    doc["reports"] = reports
+    if reports["reports"]:
+        for report in reports["reports"]:
+            doc["sheets"].setdefault(report["sheet"], {"columns": {}})
+        doc["meta"]["sheets_covered"] = sorted(doc["sheets"])
     infopack = ((run.config or {}).get("infopack") or {})
     doc["meta"]["reporting_period_cy"] = infopack.get("reporting_period_cy")
     doc["meta"]["reporting_period_py"] = infopack.get("reporting_period_py")
@@ -461,7 +470,7 @@ def _sweep_artifacts() -> None:
 
 
 def _register_artifact(run_id: int, tmp: Path, path: Path, *, status: str,
-                       receipt_id: int | None) -> str:
+                       receipt_id: int | None, reports_digest: str | None = None) -> str:
     import time
     import uuid as _uuid
 
@@ -471,7 +480,7 @@ def _register_artifact(run_id: int, tmp: Path, path: Path, *, status: str,
             "run_id": run_id, "dir": tmp, "path": path,
             "filename": f"mtool_filled_run{run_id}.xlsx",
             "created": time.monotonic(), "status": status,
-            "receipt_id": receipt_id,
+            "receipt_id": receipt_id, "reports_digest": reports_digest,
         }
     _sweep_artifacts()
     return artifact_id
@@ -554,7 +563,7 @@ def patch_mtool_template(
         doc, selection = _select_sheets_or_422(selected_sheets, doc, note_sheets)
         if selection is not None:
             note_sheets &= set(selection["selected_sheets"])
-    if not doc["writes"] and not (fill_notes and note_sheets):
+    if not doc["writes"] and not (fill_notes and note_sheets) and not doc.get("reports", {}).get("reports"):
         raise HTTPException(status_code=422, detail="Run has no fillable facts or enabled notes in the selected sheets.")
     if selection is not None and not fill_notes:
         selection["excluded_notes"] = 0
@@ -747,7 +756,7 @@ def patch_mtool_template(
         # unless notes are actually WRITTEN: producing a notes workbook is not
         # the same as filling anything into it.
         notes_snapshot = None
-        if fill_notes:
+        if fill_notes or doc.get("reports", {}).get("reports"):
             try:
                 notes_doc = build_notes_fill_doc(
                     server.AUDIT_DB_PATH, run_id,
@@ -759,8 +768,10 @@ def patch_mtool_template(
                         "message": "Notes or appearance changed. Refresh the notes preview before preparing the draft.",
                         "notes_output_revision": notes_doc["meta"]["notes_output_revision"],
                     })
+                if not fill_notes:
+                    notes_doc = scope_notes(notes_doc, {"selected_sheets": [r["sheet"] for r in doc["reports"]["reports"]]})
                 notes_doc = scope_notes(notes_doc, selection)
-                if not doc["writes"] and not notes_doc["footnotes"]:
+                if not doc["writes"] and not notes_doc["footnotes"] and not doc.get("reports", {}).get("reports"):
                     raise HTTPException(status_code=422, detail="Run has no fillable facts or enabled notes in the selected sheets.")
                 # Operator-chosen placements for ambiguous/near-miss notes
                 # (the preview's decision UI). 422s on a malformed payload —
@@ -876,7 +887,31 @@ def patch_mtool_template(
             logger.info("mtool_note_unresolved run_id=%s request_id=%s reason=%s",
                         run_id, request.state.mtool_request_id, u.get("reason", "unresolved"))
 
+        report_fill = None
+        if doc.get("reports", {}).get("reports"):
+            from reports.exporter import resolve_reports
+            from reports.repository import snapshot as current_reports
+            with closing(server._open_audit_conn()) as conn:
+                if current_reports(conn, run_id)["digest"] != doc["reports"]["digest"]:
+                    raise HTTPException(409, "Reports changed during preparation. Prepare the workbook again.")
+            _, report_data, _ = load_workbook_entries(str(final))
+            occupied = [(w["sheet"], w["cell"]) for w in report.get("written", [])]
+            for note in (notes_report or {}).get("footnotes_written", []):
+                if note.get("visible_cell") and "!" in note["visible_cell"]:
+                    occupied.append(tuple(note["visible_cell"].rsplit("!", 1)))
+                if note.get("hidden_sheet") and note.get("hidden_cell"):
+                    occupied.append((note["hidden_sheet"], note["hidden_cell"]))
+            report_doc = resolve_reports(report_data, doc["reports"],
+                                         selection["selected_sheets"] if selection else None, occupied)
+            report_out = Path(final).with_name("reports-filled.xlsx")
+            report_fill = fill_report_fields(str(final), report_doc, str(report_out))
+            final = report_out
+
         summary = _full_report(report, notes_report)
+        if report_fill is not None:
+            summary["reports"] = report_fill
+            if report_fill["status"] != "ok":
+                summary["status"] = "degraded"
         summary["filing_coverage"] = filing_coverage
         summary["preflight"] = preflight
         if selection is not None:
@@ -944,7 +979,7 @@ def patch_mtool_template(
                        "Nothing was filed — try again.") from exc
         artifact_id = _register_artifact(
             run_id, tmp, final, status=summary["status"],
-            receipt_id=receipt_id)
+            receipt_id=receipt_id, reports_digest=(doc.get("reports") or {}).get("digest") if doc.get("reports", {}).get("reports") else None)
         known = describe_template(fingerprint)
         return JSONResponse({
             **summary,
@@ -984,6 +1019,11 @@ def download_mtool_artifact(run_id: int, artifact_id: str,
             status_code=404,
             detail="That filled workbook is no longer available — fills are "
                    "held for 15 minutes. Run the fill again.")
+    if rec.get("reports_digest"):
+        from reports.repository import snapshot
+        with closing(server._open_audit_conn()) as conn:
+            if snapshot(conn, run_id)["digest"] != rec["reports_digest"]:
+                raise HTTPException(409, "Reports changed after preparation. Fill a fresh workbook before downloading.")
     ack = (acknowledge_degraded or "").strip()
     if rec["status"] != "ok" and not ack:
         raise HTTPException(

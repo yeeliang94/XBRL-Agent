@@ -127,3 +127,15 @@ def test_content_factory_supplies_frozen_guidance_to_agent(env, tmp_path, monkey
             filing_standard="mfrs", output_dir=str(tmp_path), **common)
     assert "Frozen role receipt" in received[0]
     assert "Later role receipt" not in received[0]
+
+
+def test_reports_receive_global_frozen_guidance_without_financial_notes_rules(env):
+    path, client = env
+    assert save(client, all="Global report practice", notes="Financial note practice").status_code == 200
+    with repo.db_session(path) as conn:
+        rid = repo.create_run(conn, "report.pdf")
+    assert save(client, 1, all="Later practice").status_code == 200
+    text = guidance_for_run(path, rid, "reports_extraction")
+    assert "Global report practice" in text
+    assert "Financial note practice" not in text
+    assert "Later practice" not in text

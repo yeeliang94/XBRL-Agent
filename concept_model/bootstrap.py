@@ -104,6 +104,8 @@ def import_all_notes_templates(db_path: str | Path) -> list[str]:
                     import_notes_template(db_path, template_id, nodes)
                     persist_template_manifest(db_path, path)
                 template_ids.append(template_id)
+    from reports.registry import import_templates as import_report_templates
+    import_report_templates(db_path)
     return template_ids
 
 

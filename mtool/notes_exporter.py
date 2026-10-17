@@ -51,9 +51,15 @@ def notes_source_sheets(db_path: str | Path, run_id: int) -> set[str]:
     """Read selection names without rendering or decorating note content."""
     conn = sqlite3.connect(str(db_path))
     try:
-        return {row[0] for row in conn.execute(
+        sheets = {row[0] for row in conn.execute(
             "SELECT DISTINCT sheet FROM notes_cells WHERE run_id = ?", (run_id,)
         ) if row[0]}
+        from reports.repository import snapshot
+        try:
+            sheets.update(r["sheet"] for r in snapshot(conn, run_id)["reports"])
+        except LookupError:
+            pass
+        return sheets
     finally:
         conn.close()
 
@@ -153,6 +159,9 @@ def build_notes_fill_doc(
             """,
             (family_prefix + "%", family_prefix + "%", family_prefix + "%", run_id),
         ).fetchall()
+        cleared_reports = {(r[0], r[1]) for r in conn.execute(
+            "SELECT ts.sheet,ts.row FROM report_fields rf JOIN template_slots ts "
+            "ON ts.canonical_target_id=rf.target_id WHERE rf.run_id=? AND rf.value_kind='html' AND rf.value_status='cleared'", (run_id,))}
     finally:
         conn.close()
 
@@ -184,6 +193,8 @@ def build_notes_fill_doc(
             skipped_non_writable_slot += 1
             continue
         html = (r["html"] or "").strip()
+        if (r["sheet"], r["row"]) in cleared_reports:
+            html = "<p></p>"
         label = (r["label"] or "").strip()
         if not html:
             skipped_empty += 1
@@ -197,7 +208,7 @@ def build_notes_fill_doc(
         # `decorate=False` keeps the raw HTML (the "no styling" diagnostic
         # toggle on the fill endpoint, plus tests / debug).
         try:
-            prepared = prepare_note_output(r["html"] or "", style, decorate=decorate)
+            prepared = prepare_note_output(html, style, decorate=decorate)
         except NotesOutputContentError as exc:
             raise NotesOutputContentError(
                 f"{exc} Note: {r['sheet']} row {r['row']}."

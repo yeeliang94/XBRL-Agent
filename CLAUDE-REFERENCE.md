@@ -437,7 +437,9 @@ element named in a screenshot. Specifically:
   Settings. Do not use an unexplained three-dot menu, unclickable tab-like
   label, empty section, or duplicate navigation heading as visual storage.
   Notes rechecks use one compact notice beside the action without internal row
-  numbers. Edit/copy controls wrap with clear vertical spacing. Only peer fields
+  numbers. Partial-formatting notices never render backend summary paragraphs
+  or failed row IDs; keep detailed findings in Activity and retain the retry
+  action beside one short status. Edit/copy controls wrap with clear vertical spacing. Only peer fields
   own separators; nested note wrappers add no extra rules. Pinned by
   `web/src/__tests__/NotesReviewTab.test.tsx` and `designSystemParity.test.ts`.
 - Align titles, tabs, work surfaces, and footers to shared page boundaries.
@@ -446,7 +448,10 @@ element named in a screenshot. Specifically:
   horizontally. Sticky controls must not cover content.
 - A field or source-note destination click updates the source PDF immediately.
   Reselecting the same source returns to its cited page after manual paging;
-  changing destination sheets must not silently lose source context.
+  changing destination sheets must not silently lose source context. Keep the
+  selected field heading visible below sticky headers after asynchronous output
+  previews finish; manual navigation cancels late scroll correction. Pinned by
+  `web/src/__tests__/NotesReviewTab.test.tsx`.
 - Every material wait appears in the stage heading or Live activity, including
   notes formatting, saving, and final workbook preparation. A completed
   workstream count must never imply the full run is ready while downstream work
@@ -892,6 +897,17 @@ page, never presented as certified (gotcha #31). Pinned by
 `tests/test_pdf_search.py`.
 
 ### 14. Notes feature — five supplementary templates (parallel with face)
+
+Directors' and auditors' reports are independent report workstreams, not
+financial-note inventory entries. `reports/registry.py` owns roles 120000 and
+130000 across both standards and filing levels. Their canonical narratives
+share `notes_cells`; typed scalars and assessments live in `report_fields`.
+Financial-notes review and integrity checks exclude these report sheets.
+Report-only runs do not trigger the prepared financial-note template expansion.
+The report workers use the shared bounded agent loop, cancellation registry and
+frozen global team guidance. See `docs/REPORTS.md`; pinned by
+`tests/test_reports.py`, `tests/test_db_schema_v54.py` and
+`tests/test_agent_instructions.py`.
 
 Notes agents fill MBRS templates 10–14 (MFRS) / 11–15 (MPERS) in parallel
 with face statements. Discovery is PDF-first: scout extracts a
@@ -2571,7 +2587,13 @@ Load-bearing invariants:
   scout sub-note titles and page ranges with their references for that list.
   Selecting a sub-note opens its own cited PDF page; use the parent note page
   only when the child page is unavailable. A child with multiple placements
-  retains every destination link, and switching fields keeps its cited pages.
+  retains every destination link in the Note content pane, and switching fields
+  keeps its cited pages. Keep XBRL destination titles out of the source inventory;
+  that list contains source headings and coverage states. Parent navigation may
+  use recorded child destinations when the parent has none; deduplicate by sheet
+  and row. With no recorded destination, show an explicit state instead of
+  unrelated worksheet content. Pinned by
+  `web/src/__tests__/NotesReviewTab.test.tsx` and `designSystemParity.test.ts`.
   Missing destination coordinates on saved parent or child rows are recovered
   at read time from live structured provenance and active source placements.
   Deleted cells are excluded. Navigation recovery never changes the saved
@@ -2602,6 +2624,15 @@ Pinned by `tests/test_coverage_checklist.py`,
 inventory warning, Next issue navigation, and Needs attention filter.
 
 ### 28. mTool fill pipeline — semantic addressing, one patcher, receipts
+
+Report scalars use `offline_fill.fill_report_fields` in the same standalone
+standard-library patcher. Require exact taxonomy bindings or a unique unlocked
+input on a taxonomy marker row, verified native date/selection encoding, and
+typed read-back. Keep explicit human clears distinct from absent disclosures.
+Selected report narratives export independently of the financial-notes toggle.
+Report revisions appear in receipt reports and invalidate stale artifact
+downloads. Preserve report tabs through canonical remerges. Pinned by
+`tests/test_reports.py`; native Windows acceptance remains a separate check.
 
 **Prose preservation at export (Plan A).** The notes exporter compares canonical
 content, heading/list structure and emphasis before and after destination

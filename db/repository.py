@@ -1366,7 +1366,7 @@ def list_notes_cells_for_run(
     try:
         rows = conn.execute(
             "SELECT * FROM notes_cells WHERE run_id = ? "
-            "ORDER BY sheet, row",
+            "AND sheet NOT IN ('Report-Directors','Report-Auditors') ORDER BY sheet, row",
             (run_id,),
         ).fetchall()
     finally:
