@@ -118,12 +118,14 @@ function ReportFieldEditor({ runId, report, field, onSaved, onDirty, onSource }:
 }
 
 /** Hide empty signing-director slots beyond the saved number of signers. */
-function visibleFields(fields: ReportField[]): ReportField[] {
+function visibleFields(report: Report, dirty: ReadonlySet<string>): ReportField[] {
+  const fields = report.fields;
   const count = Number(fields.find(f => f.concept === SIGNER_COUNT)?.value);
   if (!Number.isInteger(count) || count < 1) return fields;
   return fields.filter(f => {
     const slot = directorSlot(f.concept);
-    return slot == null || slot <= count || Boolean(f.value) || f.value_status === "unresolved";
+    return slot == null || slot <= count || Boolean(f.value) || f.value_status === "unresolved"
+      || dirty.has(`${report.type}:${f.concept}`);
   });
 }
 
@@ -164,7 +166,7 @@ function ReportsReview({ runId, onPreparationBlocked }: ReportsReviewProps) {
     <div style={{ flex: "1 1 480px", minWidth: 0, maxWidth: "100%", display: "grid", gap: pwc.space.xxl }}>
       {reports.map(report => <section key={report.type} aria-label={report.label}>
         <h2 style={styles.heading}>{report.label}</h2>
-        {visibleFields(report.fields).map(field => <ReportFieldEditor key={`${field.concept}:${field.revision}`}
+        {visibleFields(report, dirty).map(field => <ReportFieldEditor key={`${field.concept}:${field.revision}`}
           runId={runId} report={report.type} field={field} onDirty={markDirty}
           onSource={pages => setSource(s => ({ pages, key: s.key + 1 }))}
           onSaved={saved => setReports(old => old?.map(r => r.type === report.type

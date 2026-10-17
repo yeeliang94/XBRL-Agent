@@ -128,7 +128,9 @@ def export_internal(conn, run_id: int, report: str, output: str) -> None:
             if f["kind"] == "html" and value:
                 from notes.html_to_text import html_to_excel_text
                 value = html_to_excel_text(value)
-            ws.cell(f["row"], 2, value)
+            cell = ws.cell(f["row"], 2, value)
+            if isinstance(value, str):
+                cell.data_type = "s"
         atomic_save_workbook(wb, output)
     finally:
         wb.close()
