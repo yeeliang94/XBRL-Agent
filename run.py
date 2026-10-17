@@ -307,9 +307,9 @@ def build_parser():
     parser.add_argument("--model", default=None,
                         help="Model to use (e.g. openai.global.gpt-5.6-luna, gemini-3-flash-preview, claude-sonnet-4-6). "
                              "Defaults to the resolved TEST_MODEL runtime setting")
-    parser.add_argument("--statements", nargs="+", default=all_stmt_names,
+    parser.add_argument("--statements", nargs="*", default=all_stmt_names,
                         choices=all_stmt_names,
-                        help="Statements to extract (default: all 5)")
+                        help="Statements to extract (default: all 5; pass without values for notes/report-only runs)")
     parser.add_argument("--notes", nargs="*", default=[],
                         choices=sorted(_NOTES_CLI_MAP.keys()),
                         help="Notes templates to fill (default: none). "
@@ -346,6 +346,8 @@ def parse_cli_args(argv: list[str] | None = None):
     args = parser.parse_args(argv)
     if not args.use_scout and args.denomination is None:
         parser.error("--denomination is required with --no-scout")
+    if not args.statements and not args.notes and not args.reports:
+        parser.error("Select at least one statement, notes template or report")
     return args
 
 

@@ -197,6 +197,7 @@ def _copy_sheet(src_ws, dest_wb: openpyxl.Workbook) -> None:
     for row in src_ws.iter_rows():
         for cell in row:
             dest_cell = dest_ws.cell(row=cell.row, column=cell.column, value=cell.value)
+            dest_cell.data_type = cell.data_type
 
             # Copy style attributes
             if cell.has_style:

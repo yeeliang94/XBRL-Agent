@@ -317,20 +317,25 @@ def test_reports_export_narratives_independently_of_financial_notes(report_run, 
         assert any("Opinion and complete report." in text for text in texts)
 
 
-def test_report_only_diagnostic_download_rebuilds_current_canonical_edits(report_run, monkeypatch, tmp_path):
+@pytest.mark.parametrize("kind,value", [("text", "0012"), ("text", "=1+1"), ("html", "=1+1"),
+                                       ("text", "#REF!"), ("html", "#REF!")])
+def test_report_only_diagnostic_download_rebuilds_current_canonical_edits(report_run, monkeypatch, tmp_path, kind, value):
     import server
     db, rid = report_run
     monkeypatch.setattr(server, "AUDIT_DB_PATH", db)
-    field = next(f for f in fields("AUDITORS_REPORT") if f.kind == "text")
+    field = next(f for f in fields("AUDITORS_REPORT") if f.kind == kind)
     with repo.db_session(db) as conn:
         conn.execute("UPDATE runs SET merged_workbook_path=? WHERE id=?", (str(tmp_path / "merged.xlsx"), rid))
-        save_field(conn, rid, "AUDITORS_REPORT", field.concept, "0012", "user_override", "Correction", [])
+        save_field(conn, rid, "AUDITORS_REPORT", field.concept, f"<p>{value}</p>" if kind == "html" else value,
+                   "user_override", "Correction", [])
     rebuilt = server._reexport_and_remerge_from_facts(rid)
     assert rebuilt is not None
     try:
         wb = load_workbook(rebuilt)
         try:
-            assert wb[REPORTS["AUDITORS_REPORT"][2]].cell(field.row, 2).value == "0012"
+            cell = wb[REPORTS["AUDITORS_REPORT"][2]].cell(field.row, 2)
+            assert cell.value == value
+            assert cell.data_type == "s"
         finally:
             wb.close()
     finally:

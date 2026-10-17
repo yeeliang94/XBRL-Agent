@@ -14,7 +14,7 @@ const field = { concept: "ssmt_LicenseNumberOfAuditor", label: "Auditor licence 
 const loaded = { reports: [{ type: "AUDITORS_REPORT", label: "Auditors' report", fields: [field] }] };
 
 describe("report review", () => {
-  beforeEach(() => { vi.clearAllMocks(); });
+  beforeEach(() => { vi.resetAllMocks(); });
 
   it("preserves identifier text, saves clearing with a revision and returns to the cited PDF page", async () => {
     vi.mocked(apiFetch).mockResolvedValueOnce(loaded).mockResolvedValueOnce({ ...field, value: null, revision: 2, value_status: "not_disclosed" });
@@ -70,6 +70,32 @@ describe("report review", () => {
     render(<ReportsReviewTab runId={7} onPreparationBlocked={vi.fn()} />);
     fireEvent.focus(await screen.findByLabelText("Auditor licence number"));
     expect(screen.getByTestId("source")).toHaveTextContent("4:1");
+  });
+
+  it.each(["save", "discard"])("retains a director draft after reducing signers until %s", async (action) => {
+    const count = { ...field, concept: "ssmt_NumberOfDirectorsSigningDirectorsReport", kind: "choice",
+      label: "Directors signing", choices: ["1", "2", "3"], value: "3" };
+    const third = { ...field, concept: "ssmt_NameOfThirdDirectorWhoSignedDirectorsReport",
+      label: "Third director", value: null, value_status: "not_disclosed" };
+    vi.mocked(apiFetch).mockResolvedValueOnce({ reports: [
+      { type: "DIRECTORS_REPORT", label: "Directors' report", fields: [count, third] },
+    ] }).mockResolvedValueOnce({ ...count, value: "2", revision: 2 })
+      .mockResolvedValueOnce({ ...third, value: "Draft director", value_status: "user_override", revision: 2 });
+    const blocked = vi.fn();
+    render(<ReportsReviewTab runId={7} onPreparationBlocked={blocked} />);
+    fireEvent.change(await screen.findByLabelText("Director 3 name"), { target: { value: "Draft director" } });
+    fireEvent.change(screen.getByLabelText("Directors signing"), { target: { value: "2" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Save changes" })[0]);
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Save changes" })).toHaveLength(1));
+    expect(screen.getByLabelText("Director 3 name")).toHaveValue("Draft director");
+    expect(blocked).toHaveBeenLastCalledWith(true);
+    fireEvent.click(screen.getByRole("button", { name: action === "save" ? "Save changes" : "Discard changes" }));
+    await waitFor(() => expect(blocked).toHaveBeenLastCalledWith(false));
+    if (action === "save") {
+      expect(screen.getByLabelText("Director 3 name")).toHaveValue("Draft director");
+      expect(apiFetch).toHaveBeenLastCalledWith("/api/runs/7/reports/DIRECTORS_REPORT/ssmt_NameOfThirdDirectorWhoSignedDirectorsReport",
+        expect.objectContaining({ body: JSON.stringify({ value: "Draft director", revision: 1 }) }));
+    } else expect(screen.queryByLabelText("Director 3 name")).toBeNull();
   });
 
   it("keeps old runs without reports empty", async () => {
