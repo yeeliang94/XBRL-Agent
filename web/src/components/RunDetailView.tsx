@@ -1,7 +1,9 @@
 import { guardNavigationHistory } from "../lib/navigationHistory";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useId } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useId, lazy, Suspense } from "react";
 import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
+const ReportsReviewTab = lazy(() => import("./ReportsReviewTab"));
+
 import { PdfSourcePane } from "./PdfSourcePane";
 import { parseEvidencePages } from "../lib/evidencePages";
 import { ConceptsPage } from "../pages/ConceptsPage";
@@ -134,6 +136,8 @@ function ConfigBlock({
   const notesToRun = Array.isArray(config.notes_to_run)
     ? (config.notes_to_run as string[])
     : [];
+  const reportsToRun = Array.isArray(config.reports_to_run) ? config.reports_to_run as string[] : [];
+  if (reportsToRun.length) entries.push({ label: "Reports", value: reportsToRun.map(r => workstreamTitle(r) ?? r).join(", ") });
   if (notesToRun.length > 0) {
     entries.push({
       label: "Notes",
@@ -372,7 +376,7 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
               codes or format keys. */}
           <span style={styles.agentStatement}>{workstreamTitle(agent.statement_type, filingStandard) ?? displayName}</span>
           {onRetry && ["failed", "cancelled", "aborted"].includes(agent.status) &&
-            ([...STATEMENT_TYPES, ...NOTES_TEMPLATE_TYPES.map((type) => `NOTES_${type}`)] as string[]).includes(agent.statement_type) &&
+            ([...STATEMENT_TYPES, "DIRECTORS_REPORT", "AUDITORS_REPORT", ...NOTES_TEMPLATE_TYPES.map((type) => `NOTES_${type}`)] as string[]).includes(agent.statement_type) &&
             <button type="button" style={ui.buttonSecondary} disabled={retryPending}
               onClick={() => onRetry(agent.statement_type)}>Retry {displayName}</button>}
           {agent.error_type && (
@@ -449,6 +453,8 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
   );
 }
 
+const isReportType = (type: string) => type === "DIRECTORS_REPORT" || type === "AUDITORS_REPORT";
+
 function recordedAgentStatus(agent: RunAgentJson): string {
   // Older reviews recorded a completed human escalation as a tool exception.
   // Only that explicit terminal outcome may be reclassified on read.
@@ -457,6 +463,10 @@ function recordedAgentStatus(agent: RunAgentJson): string {
   const terminalData = terminal?.event === "complete" ? terminal.data : null;
   if (agent.statement_type === "CORRECTION" && agent.status === "failed"
       && agent.error_type === "tool_exception" && terminalData?.error === "reviewer_investigation_unresolved") {
+    return "completed_with_errors";
+  }
+  // A report that ran to the end but left fields uncertain needs review, not a retry.
+  if (isReportType(agent.statement_type) && agent.status === "failed" && agent.error_type === "report_incomplete") {
     return "completed_with_errors";
   }
   // Final database outcomes remain authoritative, particularly failures
@@ -642,12 +652,14 @@ function SavedAgentWorkspace({ detail, filingStandard, onRetry, retryPending }: 
       return [...detail.agents.filter((agent) => agent.statement_type !== "NOTES_FORMATTING").map((agent) => {
         const status = recordedAgentStatus(agent);
         const legacyReview = status === "completed_with_errors" && agent.status === "failed";
+        const reportReview = legacyReview && isReportType(agent.statement_type);
         const stage = observed.find((item) => item.statement_type === agent.statement_type);
         return { ...agent, status, events: stage
           ? [...agent.events, ...stage.events].sort((left, right) => left.timestamp - right.timestamp)
           : [...agent.events, ...savedPreparationEvents(detail, agent)].sort((left, right) => left.timestamp - right.timestamp),
           error_type: legacyReview ? null : agent.error_type,
-          error_message: legacyReview ? "AI review completed; a source question needs your review." : agent.error_message };
+          error_message: reportReview ? "Some fields need your review in Reports."
+            : legacyReview ? "AI review completed; a source question needs your review." : agent.error_message };
       }), ...observed.filter((agent) => agent.statement_type === "NOTES_FORMATTING"
         || !detail.agents.some((item) => item.statement_type === agent.statement_type))]
       .sort((a, b) => agentActivityOrder(a) - agentActivityOrder(b));
@@ -675,7 +687,8 @@ function SavedAgentWorkspace({ detail, filingStandard, onRetry, retryPending }: 
         role: agent.statement_type, status: savedAgentStatus(agent.status),
         task, taskDetail: formatterProgress ? (formatterRunning ? `${formatterRunning} running` : null)
           : unfinished && task !== source ? source : null,
-        flag: agent.status === "completed_with_errors" ? "Review the unresolved findings" : null,
+        flag: agent.status === "completed_with_errors"
+          ? isReportType(agent.statement_type) ? "Review fields in Reports" : "Review the unresolved findings" : null,
       };
     }
     return tabs;
@@ -925,6 +938,7 @@ export function RunDetailView({
     { key: "overview", label: "Overview" },
     ...(canonicalEnabled ? [{ key: "values" as RunTabKey, label: "Figures" }] : []),
     { key: "notes", label: "Notes" },
+    ...(((detail.config?.reports_to_run as string[] | undefined)?.length || detail.agents.some(a => a.statement_type === "DIRECTORS_REPORT" || a.statement_type === "AUDITORS_REPORT")) ? [{ key: "reports" as RunTabKey, label: "Reports" }] : []),
     { key: "checks", label: "Cross-checks" },
     { key: "agents", label: "Activity" },
     ...(canonicalEnabled ? [{ key: "review" as RunTabKey, label: "AI review" }] : []),
@@ -1062,7 +1076,9 @@ export function RunDetailView({
       <ConfirmDialog isOpen={retryAgent != null} title="Retry extraction?"
         message={retryAgent?.startsWith("NOTES_")
           ? "This replaces extracted results and any edits for the selected notes template. For prepared documents, it also reruns Corporate Information, Accounting Policies and List of Notes, replacing results and edits in every retried template."
-          : "This replaces extracted results and any edits for the selected statement."}
+          : retryAgent === "DIRECTORS_REPORT" || retryAgent === "AUDITORS_REPORT"
+            ? "This extracts the selected report again in a new run. Your current report and edits remain saved."
+            : "This replaces extracted results and any edits for the selected statement."}
         confirmLabel="Retry extraction" onCancel={() => setRetryAgent(null)}
         onConfirm={async () => {
           if (!retryAgent || !onRetryAgent || retryPending) return;
@@ -1109,7 +1125,7 @@ export function RunDetailView({
             style={isInvestigationOutcome ? ui.buttonSecondary : ui.buttonPrimary}
             title={
               notesPreparationBlocked
-                ? "Wait for notes to finish saving or formatting before preparing mTool"
+                ? tab === "reports" ? "Save or discard report changes before preparing mTool" : "Wait for notes to finish saving or formatting before preparing mTool"
                 : canFillMtool
                 ? isInvestigationOutcome
                   ? "Prepare an investigation draft using your mTool template"
@@ -1132,7 +1148,7 @@ export function RunDetailView({
               Compare with human file
             </button>
           )}
-          {notesPreparationBlocked && <span role="status" style={styles.dim}>Notes have unsaved changes or active formatting. Resolve any save errors in Notes before preparing.</span>}
+          {notesPreparationBlocked && <span role="status" style={styles.dim}>{tab === "reports" ? "Save or discard report changes before preparing." : "Notes have unsaved changes or active formatting. Resolve any save errors in Notes before preparing."}</span>}
           {/* The "Figures" tab is the single door to reviewing values — the
               old duplicate "Review values" button was removed (Phase 2). */}
           {/* Keep routine preparation in the header. Run management sits at
@@ -1355,6 +1371,9 @@ export function RunDetailView({
           replaying the shared fade-in so the new panel arrives instead of
           hard-swapping. The child <section> keeps role="tabpanel". */}
       <TabPanelFade tabKey={activeTab}>
+      {activeTab === "reports" && <section role="tabpanel"><Suspense fallback={<p role="status">Loading reports…</p>}>
+        <ReportsReviewTab runId={detail.id} onPreparationBlocked={setNotesPreparationBlocked} />
+      </Suspense></section>}
       {activeTab === "overview" && (
         <section style={styles.overview} role="tabpanel">
           {/* Lead with the operator's two immediate questions: can the filing

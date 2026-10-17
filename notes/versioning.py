@@ -13,7 +13,8 @@ This module owns the pure-backend helpers that make that reversibility work:
 * :func:`snapshot_notes_cells` — overwrite-snapshot (test/internal only).
 * :func:`revert_notes_to_original` — replace the run's live prose with the
   snapshot. Crucially a **full-set replace** (delete-all-then-restore), so a
-  reviewer-AUTHORED row that did not exist at snapshot time is removed on revert.
+    reviewer-AUTHORED row that did not exist at snapshot time is removed on revert.
+    Report narratives are excluded from snapshots, restores and review diffs.
 * :func:`compute_notes_review_diff` — diff live prose vs the snapshot for the
   Notes-review panel.
 
@@ -52,6 +53,8 @@ def _open_conn(db_path: str | Path) -> sqlite3.Connection:
 _SNAPSHOT_COLS = (
     "sheet, row, label, html, evidence, source_pages, concept_uuid, style_source"
 )
+# Report narratives share storage, but only report review owns their revisions.
+_FINANCIAL_NOTES = "sheet NOT IN ('Report-Directors', 'Report-Auditors')"
 
 
 def snapshot_notes_cells(db_path: str | Path, run_id: int) -> int:
@@ -74,12 +77,12 @@ def snapshot_notes_cells(db_path: str | Path, run_id: int) -> int:
                 run_id, {_SNAPSHOT_COLS}, snapshot_at
             )
             SELECT run_id, {_SNAPSHOT_COLS}, ?
-            FROM notes_cells WHERE run_id = ?
+            FROM notes_cells WHERE run_id = ? AND {_FINANCIAL_NOTES}
             """,
             (now, run_id),
         )
         count = conn.execute(
-            "SELECT COUNT(*) FROM run_notes_cell_snapshots WHERE run_id = ?",
+            f"SELECT COUNT(*) FROM run_notes_cell_snapshots WHERE run_id = ? AND {_FINANCIAL_NOTES}",
             (run_id,),
         ).fetchone()[0]
         # Record the taken-marker so has_notes_snapshot / revert work even when
@@ -129,7 +132,7 @@ def ensure_notes_snapshot(db_path: str | Path, run_id: int) -> bool:
                 run_id, {_SNAPSHOT_COLS}, snapshot_at
             )
             SELECT run_id, {_SNAPSHOT_COLS}, ?
-            FROM notes_cells WHERE run_id = ?
+            FROM notes_cells WHERE run_id = ? AND {_FINANCIAL_NOTES}
             """,
             (now, run_id),
         )
@@ -171,12 +174,12 @@ def revert_notes_to_original(db_path: str | Path, run_id: int) -> dict[str, Any]
 
     Full-set replace, in one transaction:
 
-    1. DELETE every live ``notes_cells`` row for the run, then re-INSERT the
+    1. DELETE every live financial-notes row for the run, then re-INSERT the
        snapshot set. We delete-then-insert (not upsert) precisely so a
        reviewer-AUTHORED row absent from the snapshot disappears on revert —
        the tombstone behaviour peer-review #2 called for.
     2. Reconcile workbook tombstones (v25) so the download overlay matches the
-       restored prose: clear every tombstone for the run (a cleared/moved row
+       restored prose: clear financial-notes tombstones (a cleared/moved row
        is back in ``notes_cells`` now and must NOT be blanked), then re-tombstone
        any reviewer-AUTHORED coordinate (present live, absent from the snapshot)
        so its prose — already flattened into the xlsx by the reviewer's
@@ -209,37 +212,37 @@ def revert_notes_to_original(db_path: str | Path, run_id: int) -> dict[str, Any]
         # Captured BEFORE the delete so we can blank their xlsx prose on revert.
         live_coords = {
             (r["sheet"], int(r["row"])) for r in conn.execute(
-                "SELECT sheet, row FROM notes_cells WHERE run_id = ?", (run_id,)
+                f"SELECT sheet, row FROM notes_cells WHERE run_id = ? AND {_FINANCIAL_NOTES}", (run_id,)
             ).fetchall()
         }
         snap_coords = {
             (r["sheet"], int(r["row"])) for r in conn.execute(
-                "SELECT sheet, row FROM run_notes_cell_snapshots WHERE run_id = ?",
+                f"SELECT sheet, row FROM run_notes_cell_snapshots WHERE run_id = ? AND {_FINANCIAL_NOTES}",
                 (run_id,),
             ).fetchall()
         }
         authored_coords = live_coords - snap_coords
 
-        conn.execute("DELETE FROM notes_cells WHERE run_id = ?", (run_id,))
+        conn.execute(f"DELETE FROM notes_cells WHERE run_id = ? AND {_FINANCIAL_NOTES}", (run_id,))
         conn.execute(
             f"""
             INSERT INTO notes_cells(
                 run_id, {_SNAPSHOT_COLS}, updated_at
             )
             SELECT run_id, {_SNAPSHOT_COLS}, ?
-            FROM run_notes_cell_snapshots WHERE run_id = ?
+            FROM run_notes_cell_snapshots WHERE run_id = ? AND {_FINANCIAL_NOTES}
             """,
             (now, run_id),
         )
         restored = conn.execute(
-            "SELECT COUNT(*) FROM notes_cells WHERE run_id = ?",
+            f"SELECT COUNT(*) FROM notes_cells WHERE run_id = ? AND {_FINANCIAL_NOTES}",
             (run_id,),
         ).fetchone()[0]
         # Workbook tombstones (v25): reset to exactly the authored set so the
         # download overlay restores cleared/moved rows and blanks authored ones.
         if _table_exists(conn, "notes_cell_tombstones"):
             conn.execute(
-                "DELETE FROM notes_cell_tombstones WHERE run_id = ?", (run_id,)
+                f"DELETE FROM notes_cell_tombstones WHERE run_id = ? AND {_FINANCIAL_NOTES}", (run_id,)
             )
             for sheet, row in sorted(authored_coords):
                 conn.execute(
@@ -287,14 +290,14 @@ def compute_notes_review_diff(
             return []
         snap_rows = conn.execute(
             "SELECT sheet, row, label, html FROM run_notes_cell_snapshots "
-            "WHERE run_id = ?",
+            f"WHERE run_id = ? AND {_FINANCIAL_NOTES}",
             (run_id,),
         ).fetchall()
         snapshot = {(r["sheet"], r["row"]): r for r in snap_rows}
 
         live_rows = conn.execute(
             "SELECT sheet, row, label, html, evidence FROM notes_cells "
-            "WHERE run_id = ?",
+            f"WHERE run_id = ? AND {_FINANCIAL_NOTES}",
             (run_id,),
         ).fetchall()
         live = {(r["sheet"], r["row"]): r for r in live_rows}

@@ -212,6 +212,29 @@ test("recorded human escalation is needs review while real reviewer failures sta
   cleanup();
 });
 
+test("an incomplete report needs review while a crashed report stays failed and retryable", () => {
+  window.history.replaceState({}, "", "/");
+  render(<RunDetailView detail={makeDetail({ agents: [makeAgent({
+    statement_type: "DIRECTORS_REPORT", status: "failed", error_type: "report_incomplete",
+    error_message: "Report assessment incomplete. Review missing or uncertain fields.",
+  })] })} onDelete={() => {}} onDownload={() => {}} onRetryAgent={async () => {}} />);
+  clickRunTab(/^activity$/i);
+  const tab = within(screen.getByRole("tablist", { name: "Run workstreams" })).getByRole("tab", { name: /Directors’ report/ });
+  expect(tab).toHaveTextContent("Needs review");
+  expect(screen.queryByTestId("agent-error-type")).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Retry/ })).toBeNull();
+  cleanup();
+  window.history.replaceState({}, "", "/");
+  render(<RunDetailView detail={makeDetail({ agents: [makeAgent({
+    statement_type: "DIRECTORS_REPORT", status: "failed", error_type: null,
+    error_message: "Report extraction failed. Captured values are retained for review.",
+  })] })} onDelete={() => {}} onDownload={() => {}} onRetryAgent={async () => {}} />);
+  clickRunTab(/^activity$/i);
+  expect(within(screen.getByRole("tablist", { name: "Run workstreams" })).getByRole("tab", { name: /Directors’ report/ })).toHaveTextContent("Failed");
+  expect(screen.getByRole("button", { name: /^Retry/ })).toBeVisible();
+  cleanup();
+});
+
 // A tool_call / tool_result pair used across the fixture so each agent
 // renders a non-empty timeline.
 const sampleEvents: SSEEvent[] = [

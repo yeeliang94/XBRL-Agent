@@ -145,11 +145,11 @@ describe("notesFormatErrorMessage", () => {
 });
 
 
-test("partial formatting names failed rows when no summary is available", () => {
+test.each([null, "Applied source-visible table roles. Formatting saved for 2 row(s); unresolved: 112, 113."])("partial formatting stays concise with summary %s", (summary) => {
   const message = notesFormatErrorMessage("validation_failed", "invalid target", {
-    changed_rows: 2, failed_rows: [112, 113],
+    changed_rows: 2, failed_rows: [112, 113], summary,
   });
-  expect(message).toContain("Formatting saved for 2 row(s).");
-  expect(message).toContain("Unresolved rows: 112, 113.");
+  expect(message).toBe("Some formatting was saved. Some notes still need review.");
+  expect(message).not.toContain("112");
   expect(message).not.toContain("nothing was saved");
 });

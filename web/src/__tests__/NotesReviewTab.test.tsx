@@ -684,19 +684,24 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(within(inventory).getByText("1 sub-note needs review")).toBeVisible();
     const subnote = within(inventory).getByRole("button", { name: /1\(a\).*Not checked/i });
     expect(subnote).toBeVisible();
+    fireEvent.click(within(inventory).getByTestId("source-note-1"));
+    expect(screen.getByRole("status", { name: "Source note destination" })).toHaveTextContent("No filing field is recorded for source note 1.");
+    expect(screen.queryByRole("button", { name: "Review Corporate info" })).toBeNull();
     fireEvent.click(subnote);
     expect(within(subnote).getByText("Review incomplete")).toBeVisible();
     expect(within(inventory).getByTestId("source-note-1")).toHaveAttribute("aria-current", "true");
   });
 
-  test.each(["not_applicable", "confirmed_absent"])("excludes %s notes from coverage warnings", async (verdict) => {
+  test.each(["not_applicable", "confirmed_absent"])("excludes %s notes from coverage warnings and opens unresolved child destinations", async (verdict) => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
       String(input).endsWith("/notes_cells") ? SAMPLE : String(input).endsWith("/notes-coverage") ? {
         rows: [
           { note_num: 1, title: "Resolved note", status: "missing", reviewer_verdict: verdict,
             placements: [{ sheet: "Notes-CI", row: 4 }], page_lo: 3, page_hi: 3 },
           { note_num: 2, title: "Unresolved note", status: "suspected_gap",
-            placements: [{ sheet: "Notes-CI", row: 12 }], page_lo: 3, page_hi: 3 },
+            placements: [], page_lo: 3, page_hi: 3,
+            subnotes: [{ subnote_ref: "2.1", title: "Registered office", state: "not_verified",
+              placements: [{ sheet: "Notes-CI", row: 12, row_label: "Registered office" }] }] },
         ],
       } : {},
     ), { status: 200 })) as typeof fetch;
@@ -707,6 +712,8 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(within(unresolved).getByLabelText("Needs review")).toBeInTheDocument();
     fireEvent.click(unresolved);
     expect(unresolved).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: "Review Registered office" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Kuala Lumpur");
     expect(screen.queryByRole("button", { name: "Next issue" })).toBeNull();
     expect(screen.queryByRole("combobox", { name: "Notes field filter" })).toBeNull();
   });
@@ -817,6 +824,33 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     );
     expect(screen.getByText("Revenue")).toBeInTheDocument();
     expect(screen.queryByText("Corporate info")).toBeNull();
+  });
+
+  test.each([false, true])("late output previews preserve the field jump unless the user navigates (manual=%s)", async (manual) => {
+    const scroll = vi.fn();
+    const previous = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scroll;
+    let resolveOutput!: (response: Response) => void;
+    const output = new Promise<Response>((resolve) => { resolveOutput = resolve; });
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => String(input).includes("/notes-output?")
+      ? (await output).clone() : new Response(JSON.stringify(SAMPLE), { status: 200 }));
+    try {
+      render(<NotesReviewTab runId={42} focusCell={{ sheet: "Notes-CI", row: 12, key: 1 }} />);
+      await waitFor(() => expect(scroll).toHaveBeenCalledWith({ block: "start", behavior: "smooth" }));
+      scroll.mockClear();
+      if (manual) fireEvent.wheel(window);
+      resolveOutput(new Response(JSON.stringify({ html: "<p>Prepared content</p>", revision: "1", tier: "full",
+        source_styling_dropped: false, white_grid_dropped: false }), { status: 200 }));
+      await waitFor(() => expect(document.querySelector('[data-output-pending="true"]')).toBeNull());
+      if (manual) expect(scroll).not.toHaveBeenCalled();
+      else {
+        await waitFor(() => expect(scroll).toHaveBeenCalledWith({ block: "start", behavior: "auto" }));
+        expect((scroll.mock.instances[0] as HTMLElement).dataset.cellRow).toBe("12");
+      }
+    } finally {
+      cleanup();
+      Element.prototype.scrollIntoView = previous;
+    }
   });
 
   test("plain sheet navigation does not scroll the document", async () => {
@@ -3108,7 +3142,7 @@ describe("NotesReviewTab — AI formatter", () => {
       status: (url) => url.includes("Notes-CI") && launched
         ? { status: "done", sheet: "Notes-CI", changed_rows: 1,
             error: "row 113: target matched no elements",
-            summary: "Formatting saved for 1 row(s); 1 row(s) remain unresolved: 113.",
+            summary: "Applied source-visible table roles and amount-column rules. Separate amount-column strokes with visible gaps cannot be reproduced exactly. Formatting saved for 1 row(s); 1 row(s) remain unresolved: 113.",
             failed_rows: [113],
             error_type: "validation_failed", can_revert: true }
         : { status: "idle", sheet: "other" },
@@ -3125,8 +3159,10 @@ describe("NotesReviewTab — AI formatter", () => {
     await vi.advanceTimersByTimeAsync(2100);
     const summary = screen.getByTestId("notes-format-summary");
     expect(summary).toHaveAttribute("role", "alert");
-    expect(summary).toHaveTextContent("Formatting saved for 1 row(s);");
-    expect(summary).toHaveTextContent("1 row(s) remain unresolved: 113.");
+    expect(summary).toHaveTextContent("Some formatting was saved. Some notes still need review.");
+    expect(summary).not.toHaveTextContent("113");
+    expect(summary).not.toHaveTextContent("amount-column");
+    expect(screen.getByRole("button", { name: "Retry formatting Corporate Information" })).toBeEnabled();
     expect(summary).not.toHaveTextContent("Nothing was saved");
     expect(notesCellsCalls(fetchMock)).toBeGreaterThan(before);
     expect(screen.queryByTestId("notes-format-revert")).toBeNull();
@@ -3344,23 +3380,26 @@ describe("NotesReviewTab — AI formatter", () => {
     expect(screen.getByTestId("notes-format-button")).toHaveTextContent("Retry formatting");
   });
 
-  test("shows placed field subheadings instead of worksheet names and jumps to the selected field", async () => {
+  test.each([false, true])("keeps source headings in the inventory and opens parent or child destinations (children=%s)", async (children) => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
       String(input).endsWith("/notes_cells") ? SAMPLE : String(input).endsWith("/notes-coverage") ? {
         rows: [{
           note_num: 2,
           title: "Property, plant and equipment",
           status: "placed",
-          placements: [
+          placements: children ? [] : [
             { sheet: "Notes-SummaryofAccPol", row: 7, row_label: "Property, plant and equipment", kind: "fan_out" },
             { sheet: "Notes-CI", row: 4, row_label: "Principal activities", kind: "primary" },
           ],
           page_lo: 16,
           page_hi: 18,
           subnotes: [
-            { subnote_ref: "2.1", title: "Description of accounting policies", state: "verified" },
-            { subnote_ref: "2.10", title: "Employee benefits", state: "verified" },
-            { subnote_ref: "2.2", title: "New standards", state: "verified" },
+            { subnote_ref: "2.1", title: "Description of accounting policies", state: "verified",
+              placements: children ? [{ sheet: "Notes-SummaryofAccPol", row: 7, row_label: "Property, plant and equipment", kind: "fan_out" }] : [] },
+            { subnote_ref: "2.10", title: "Employee benefits", state: "verified",
+              placements: children ? [{ sheet: "Notes-CI", row: 4, row_label: "Principal activities", kind: "primary" }] : [] },
+            { subnote_ref: "2.2", title: "New standards", state: "verified",
+              placements: children ? [{ sheet: "Notes-CI", row: 4, row_label: "Principal activities", kind: "primary" }] : [] },
             { subnote_ref: "2(a)", state: "not_verified" },
           ],
         }],
@@ -3382,7 +3421,7 @@ describe("NotesReviewTab — AI formatter", () => {
     expect(getComputedStyle(reviewSummary).paddingLeft).toBe(getComputedStyle(subnote).paddingLeft);
     fireEvent.click(within(inventory).getByRole("button", { name: /2\(a\).*Not checked/i }));
     expect(within(inventory).getByRole("button", { name: /2\(a\).*Not checked/i })).toHaveAttribute("aria-current", "true");
-    expect(screen.getByTestId("sheet-title")).toHaveTextContent("Corporate Information");
+    expect(screen.getByRole("status", { name: "Source note destination" })).toHaveTextContent("No filing field is recorded for source note 2(a).");
     expect(within(inventory).getByText(/Exact field not recorded/)).toBeVisible();
     expect(within(inventory).queryByLabelText("Destinations for note 2")).not.toBeInTheDocument();
     const search = screen.getByRole("searchbox", { name: "Search note field names" });
@@ -3390,7 +3429,10 @@ describe("NotesReviewTab — AI formatter", () => {
     fireEvent.click(within(inventory).getByTestId("source-note-2"));
     expect(search).toHaveValue("");
     expect(within(inventory).getByTestId("source-note-2")).toHaveStyle({ background: "rgb(238, 239, 241)", fontWeight: 500 });
-    const destinations = within(inventory).getByLabelText("Destinations for note 2");
+    expect(within(inventory).queryByLabelText("Destinations for note 2")).toBeNull();
+    expect(within(inventory).queryByRole("button", { name: "Principal activities" })).toBeNull();
+    const destinations = within(screen.getByRole("region", { name: "XBRL notes fields" })).getByRole("navigation", { name: "Destinations for note 2" });
+    expect(within(destinations).getAllByRole("button")).toHaveLength(2);
     expect(within(destinations).getByRole("button", { name: "Property, plant and equipment" })).toBeVisible();
     fireEvent.click(within(destinations).getByRole("button", { name: "Property, plant and equipment" }));
     expect(within(destinations).getByRole("button", { name: "Property, plant and equipment" })).toHaveAttribute("aria-current", "true");
@@ -3461,15 +3503,19 @@ describe("NotesReviewTab — AI formatter", () => {
     fireEvent.click(within(inventory).getByRole("button", { name: "2.1 Revenue policy" }));
     expect(screen.getByTestId("sheet-title")).toHaveTextContent("Summary of Accounting Policies");
     expect(onActiveCellPages).toHaveBeenLastCalledWith([18]);
+    expect(within(inventory).queryByRole("button", { name: "Principal activities" })).toBeNull();
+    expect(within(inventory).queryByRole("button", { name: "Revenue" })).toBeNull();
+    const fields = screen.getByRole("region", { name: "XBRL notes fields" });
     if (multiple) {
-      fireEvent.click(within(inventory).getByRole("button", { name: "Principal activities" }));
+      const destinations = within(fields).getByRole("navigation", { name: "Destinations for note 2" });
+      fireEvent.click(within(destinations).getByRole("button", { name: "Principal activities" }));
       expect(screen.getByTestId("sheet-title")).toHaveTextContent("Corporate Information");
       expect(onActiveCellPages).toHaveBeenLastCalledWith([18]);
-      fireEvent.click(within(inventory).getByRole("button", { name: "Revenue" }));
+      fireEvent.click(within(destinations).getByRole("button", { name: "Revenue" }));
       expect(screen.getByTestId("sheet-title")).toHaveTextContent("Summary of Accounting Policies");
       expect(onActiveCellPages).toHaveBeenLastCalledWith([18]);
     } else {
-      expect(within(inventory).queryByRole("button", { name: "Revenue" })).toBeNull();
+      expect(within(fields).queryByRole("navigation", { name: "Destinations for note 2" })).toBeNull();
     }
   });
 

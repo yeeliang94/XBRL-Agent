@@ -42,6 +42,7 @@ def merge(
     output_path: str,
     notes_workbook_paths: Optional[Dict[NotesTemplateType, str]] = None,
     skip_recalc: bool = False,
+    report_workbook_paths: Optional[Dict[str, str]] = None,
 ) -> MergeResult:
     """Merge per-statement and per-notes workbooks into a single output file.
 
@@ -64,7 +65,7 @@ def merge(
         MergeResult with success flag and error details.
     """
     notes_workbook_paths = notes_workbook_paths or {}
-    if not workbook_paths and not notes_workbook_paths:
+    if not workbook_paths and not notes_workbook_paths and not report_workbook_paths:
         return MergeResult(success=False, errors=["No workbook paths provided"])
 
     errors: list[str] = []
@@ -119,6 +120,18 @@ def merge(
             _copy_sheet(src_ws, merged)
             sheets_copied += 1
         src_wb.close()
+
+    for report, path in (report_workbook_paths or {}).items():
+        try:
+            src_wb = openpyxl.load_workbook(path, data_only=False)
+            try:
+                for src_ws in src_wb.worksheets:
+                    _copy_sheet(src_ws, merged)
+                    sheets_copied += 1
+            finally:
+                src_wb.close()
+        except Exception as exc:
+            errors.append(f"{report}: failed to open: {exc}")
 
     if sheets_copied == 0:
         return MergeResult(

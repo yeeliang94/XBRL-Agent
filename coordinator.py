@@ -301,6 +301,8 @@ class RunConfig:
     # here. The coordinator renders its per-statement payload into the prompt
     # (advisory only — see entity_memory.py). None when no match / disabled.
     prior_year_advisory: Any = None
+    reports_to_run: Set[str] = field(default_factory=set)
+    reports_models: Dict[str, Any] = field(default_factory=dict)
 
 
 # Item 9 (PLAN-orchestration-hardening): structured failure taxonomy for

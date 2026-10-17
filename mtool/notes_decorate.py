@@ -935,6 +935,9 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     # compact_tables) — the theme contributes no borders to these.
     source_styled_tables: set[int] = set()
     for table in soup.find_all("table"):
+        # Prose inherits justification from the output wrapper; tables retain
+        # their label/amount alignment, including compact output cells.
+        _merge_cell_style(table, "text-align: left;")
         # Captured BEFORE the merge below injects the decorator's own
         # `width: 100%` — after it, every table looks "explicitly sized" and
         # the page-width fit would never fire (the first-cut bug).
@@ -1094,6 +1097,8 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         else:
             _merge_style(p, para_style)
     for h in soup.find_all(("h1", "h2", "h3", "h4", "h5", "h6")):
+        if h.find_parent(("td", "th")) is None:
+            _merge_cell_style(h, "text-align: left;")
         if _has_persisted_indent(h):
             weight = style.heading_weight if style.heading_weight is not None else 600
             _merge_style(h, _heading_font_css(style) + " margin-top: 12px; margin-right: 0; "
@@ -1121,7 +1126,7 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     # Carry the font on a wrapping container so any element we did not style
     # (bare <strong>, <em>, loose text) still inherits the face.
     wrapper = soup.new_tag("div")
-    wrapper["style"] = font_css
+    wrapper["style"] = font_css + " text-align: justify;"
     for node in list(soup.contents):
         wrapper.append(node.extract())
     return str(wrapper)

@@ -777,6 +777,8 @@ export interface RunConfigPayload {
   /** Draft-only intent: false permits preparation to replace an autosaved value.
    * Older drafts without this field retain their saved denomination. */
   denomination_user_selected?: boolean;
+  reports_to_run?: ("DIRECTORS_REPORT" | "AUDITORS_REPORT")[];
+  reports_models?: Record<string, string>;
   notes_to_run?: NotesTemplateType[];
   /** Per-notes-template model overrides. Unspecified templates fall back
    *  to the run's default model on the backend. Sent only when the user

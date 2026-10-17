@@ -29,6 +29,8 @@ ADDRESS_VERSION = "2022-v2"
 
 # The presentation roles are the source used by the template generators.
 _ROLES_BY_FILE: dict[str, tuple[str, ...]] = {
+    "Report-Directors.xlsx": ("120000",),
+    "Report-Auditors.xlsx": ("130000",),
     "01-SOFP-CuNonCu.xlsx": ("210000", "210100"),
     "02-SOFP-OrderOfLiquidity.xlsx": ("220000", "220100"),
     "03-SOPL-Function.xlsx": ("310000", "310100"),

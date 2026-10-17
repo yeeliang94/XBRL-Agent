@@ -505,10 +505,10 @@ async def rerun_agent(session_id: str, body: RunConfigRequest, request: Request)
 
     n_stmts = len(body.statements)
     n_notes = len(body.notes_to_run)
-    if n_stmts + n_notes != 1:
+    if n_stmts + n_notes + len(body.reports_to_run) != 1:
         raise HTTPException(
             status_code=400,
-            detail="Rerun expects exactly one statement or one notes template.",
+            detail="Rerun expects exactly one statement, notes template or report.",
         )
 
     # Block rerun while an extraction is already running for this session

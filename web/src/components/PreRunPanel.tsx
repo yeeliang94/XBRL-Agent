@@ -575,6 +575,11 @@ function NotesInventoryEditor({
   );
 }
 
+const REPORT_CHOICES = [
+  ["DIRECTORS_REPORT", "Directors’ report"],
+  ["AUDITORS_REPORT", "Auditors’ report"],
+] as const;
+
 export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onConfigChange, isAdmin = false, preparation, waitForPreparation = false }: Props) {
   const savedStandard = initialConfig?.filing_standard;
   const unsupportedStandard = savedStandard != null && savedStandard !== "mfrs" && savedStandard !== "mpers";
@@ -715,6 +720,16 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   const [notesModelOverrides, setNotesModelOverrides] = useState<
     Record<NotesTemplateType, string>
   >(() => _seedNotesModelOverrides(initialConfig));
+
+  const [reportsEnabled, setReportsEnabled] = useState<string[]>(() => {
+    const saved = initialConfig?.reports_to_run;
+    return Array.isArray(saved) ? saved.filter((r): r is string => typeof r === "string")
+      : initialConfig ? [] : ["DIRECTORS_REPORT", "AUDITORS_REPORT"];
+  });
+  const [reportsModels, setReportsModels] = useState<Record<string, string>>(() => {
+    const saved = initialConfig?.reports_models;
+    return saved && typeof saved === "object" ? Object.fromEntries(Object.entries(saved).filter((entry): entry is [string, string] => typeof entry[1] === "string")) : {};
+  });
 
   // Load settings on mount
   useEffect(() => {
@@ -1214,6 +1229,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       filing_standard: filingStandard,
       denomination,
       denomination_user_selected: denominationUserSelected,
+      reports_to_run: reportsEnabled.filter((r): r is "DIRECTORS_REPORT" | "AUDITORS_REPORT" => r === "DIRECTORS_REPORT" || r === "AUDITORS_REPORT"),
+      reports_models: reportsModels,
       notes_to_run,
       notes_models,
     };
@@ -1221,7 +1238,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     statementsEnabled, variantSelections, modelOverrides, infopack,
     notesInventoryOverrides,
     filingLevel, firstFinancialStatements, filingStandard, denomination, denominationUserSelected, notesEnabled,
-    notesModelOverrides,
+    notesModelOverrides, reportsEnabled, reportsModels,
   ]);
 
   const handleRun = useCallback(() => {
@@ -1286,7 +1303,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   // (current behaviour). Notes-only runs are also allowed so an operator
   // can refill just the notes sheets after an earlier face extraction.
   const canRun =
-    (enabledStmts.length > 0 || enabledNotes.length > 0) &&
+    (enabledStmts.length > 0 || enabledNotes.length > 0 || reportsEnabled.length > 0) &&
     preparation?.status !== "failed" &&
     preparation?.status !== "cancelled" &&
     (!waitForPreparation || preparation?.status === "succeeded");
@@ -1629,6 +1646,42 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
               />
             );
           })()}
+        </div>
+      </section>
+
+      <section aria-label="Reports" style={styles.section}>
+        <div style={styles.sectionHead}><h2 style={styles.heading}>Reports</h2></div>
+        <div style={styles.sectionBody}>
+          <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }} role="group" aria-label="Reports">
+            <tbody>
+              {REPORT_CHOICES.map(([key, label]) => {
+                const checked = reportsEnabled.includes(key);
+                return (
+                  <tr key={key} style={{ borderBottom: `1px solid ${pwc.grey100}` }}>
+                    <td style={{ padding: `${pwc.space.sm}px 0`, verticalAlign: "middle" }}>
+                      <label style={{ fontSize: 14, display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer",
+                        color: checked ? pwc.grey900 : pwc.grey700 }}>
+                        <input type="checkbox" style={ui.checkbox} checked={checked}
+                          onChange={e => setReportsEnabled(old => e.target.checked ? [...old, key] : old.filter(r => r !== key))} />
+                        <span>{label}</span>
+                      </label>
+                    </td>
+                    {showAdvanced && !preparationStarted && (
+                      <td style={{ padding: `${pwc.space.sm}px 0 ${pwc.space.sm}px ${pwc.space.lg}px`, verticalAlign: "middle" }}>
+                        <select aria-label={`Model for ${label}`} value={reportsModels[key] ?? ""} disabled={!checked}
+                          onChange={e => setReportsModels(old => {
+                            const next = { ...old }; if (e.target.value) next[key] = e.target.value; else delete next[key]; return next;
+                          })} style={{ ...ui.select, width: "100%", minWidth: 0 }}>
+                          <option value="">Run default</option>
+                          {availableModels.map(model => <option key={model.id} value={model.id}>{model.display_name}</option>)}
+                        </select>
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </section>
 
