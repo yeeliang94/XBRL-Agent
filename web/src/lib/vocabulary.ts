@@ -184,25 +184,26 @@ export function crossCheckParties(name: string): [string, string] {
 }
 
 /** Notes-formatter failure taxonomy (`error_type`) → a plain sentence that
- *  tells the operator what happened and that nothing was saved. The backend
+ *  tells the operator what needs attention without guessing whether output
+ *  was saved. The backend
  *  `error` string is an engineer-facing message (it can carry a raw Python
  *  dict, e.g. "target matched no elements: {'table': 0, 'cell': {...}}") and
  *  must never be the primary thing shown — map the code instead. */
 const NOTES_FORMAT_ERROR_LABELS: Record<string, string> = {
   visual_review_failed:
-    "Table appearance could not be verified against the source PDF. Unresolved notes were not saved. Review their formatting or retry.",
+    "Table appearance needs review against the source PDF. Extracted content is saved.",
   validation_failed:
-    "The formatter tried to style part of a table that no longer matches your text — your edits may have changed it. Nothing was saved; try formatting again.",
+    "Formatting could not be applied safely. Review the saved notes.",
   timeout:
-    "The formatter ran out of time before it finished. Nothing was saved — try again, or format one section at a time.",
+    "Formatting reached its time limit. Review the saved notes.",
   turn_budget:
-    "The formatter reached its step limit before finishing. Nothing was saved — try again.",
+    "Formatting reached its step limit. Review the saved notes.",
   low_confidence:
     "The formatter wasn't confident enough about the styling to apply it, so nothing was changed.",
   wrong_sheet:
     "The formatter targeted the wrong section, so nothing was changed.",
   model_error:
-    "The AI service returned an error while formatting. Nothing was saved — try again in a moment.",
+    "The AI service could not finish formatting. Review the saved notes.",
   precondition_failed:
     "This section couldn't be formatted right now (it may be numeric-only or mid-edit). Nothing was changed.",
   no_unfinished_rows:

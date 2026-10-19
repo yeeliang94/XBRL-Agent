@@ -134,9 +134,9 @@ export function formatterProgressSummary(sheets: FormatterSheet[]): string | nul
   if (sheets.some((sheet) => sheet.status === "running" || sheet.status === "pending")) {
     return `${partsDone} of ${partsTotal} parts done`;
   }
-  // The row's status label already says Failed; the panel names the sheet.
+  // Count verified sheets; a sheet needing review may still have saved formatting.
   const formatted = sheets.filter((sheet) => sheet.status === "complete").length;
-  return `${formatted} of ${sheets.length} sheets formatted`;
+  return `${formatted} of ${sheets.length} sheets verified`;
 }
 
 /** How many parts are working right now, for the list's second line. */

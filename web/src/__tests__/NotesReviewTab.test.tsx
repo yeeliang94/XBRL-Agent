@@ -3201,7 +3201,7 @@ describe("NotesReviewTab — AI formatter", () => {
     const alert = screen.getByRole("alert");
     // The timeout taxonomy code renders as plain language, not the raw
     // backend string ("Formatter timed out after 300s.").
-    expect(alert).toHaveTextContent("ran out of time");
+    expect(alert).toHaveTextContent("Formatting reached its time limit. Review the saved notes.");
     expect(notesCellsCalls(fetchMock)).toBe(before);
     vi.useRealTimers();
   });
@@ -3238,7 +3238,7 @@ describe("NotesReviewTab — AI formatter", () => {
     const alert = screen.getByRole("alert");
     expect(alert).not.toHaveTextContent("target matched no elements");
     expect(alert).not.toHaveTextContent("{");
-    expect(alert).toHaveTextContent("no longer matches your text");
+    expect(alert).toHaveTextContent("Formatting could not be applied safely. Review the saved notes.");
     vi.useRealTimers();
   });
 

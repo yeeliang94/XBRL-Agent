@@ -462,7 +462,10 @@ element named in a screenshot. Specifically:
   Stage failures persist in run events with their own details rather than creating
   a misleading setup worker. Failed/partial passes
   remain failed, stopped passes remain stopped, and a pass that never ran is
-  not shown as complete. Pinned by `web/src/__tests__/ExtractPage.test.tsx`.
+  not shown as complete. Notes formatting displays Needs review with the attention
+  icon for a recorded failed/partial pass; this does not change its audit
+  status or verification requirements. Sheet progress counts verified sheets,
+  since unresolved sheets may retain saved formatting. Pinned by `web/src/__tests__/ExtractPage.test.tsx`.
 
 Before changing UI, classify visible content as keep, shorten, relocate, show
 only when relevant, or remove. Follow the design guide's Writing and microcopy section:

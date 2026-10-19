@@ -497,10 +497,10 @@ describe("ExtractPage — render-gate regression guards", () => {
         data: { type: "notes_formatting_incomplete", message } }],
     }} />);
     const panel = within(screen.getByRole("tabpanel", { name: "Notes formatting activity" }));
-    expect(panel.getByText("Failed")).toBeVisible();
+    expect(panel.getByText("Needs review")).toBeVisible();
     expect(panel.getByText(message)).toBeVisible();
     expect(panel.queryByText("Formatting complete")).toBeNull();
-    expect(screen.getByRole("tab", { name: /notes formatting/i })).toHaveTextContent("Failed");
+    expect(screen.getByRole("tab", { name: /notes formatting/i })).toHaveTextContent("Needs review");
   });
 
   test("formatting reads like other workstreams: one chip per sheet, parts and the queue", () => {
@@ -534,16 +534,16 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(panel.queryByText("Checking formatted notes against the source PDF…")).toBeNull();
     const chips = within(panel.getByRole("tablist", { name: "Formatting by sheet" }));
     expect(chips.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
-      "All", "Issued Capital · Failed", "List of Notes · 1 of 2", "Related Party Transactions · Waiting",
+      "All", "Issued Capital · Needs review", "List of Notes · 1 of 2", "Related Party Transactions · Waiting",
     ]);
     const updates = () => within(panel.getByRole("list", { name: "Activity updates" }));
     expect(updates().getByText("List of Notes · part 1: Checking formatted notes against the source PDF…")).toBeVisible();
     expect(updates().queryByText("Zooming into source page 12 (bottom half).")).toBeNull();
     // A sheet's failure is reported while other sheets are still working.
     expect(panel.queryByTestId("formatting-failure")).toBeNull();
-    fireEvent.click(chips.getByRole("tab", { name: "Issued Capital · Failed" }));
+    fireEvent.click(chips.getByRole("tab", { name: "Issued Capital · Needs review" }));
     expect(panel.getByTestId("formatting-failure")).toHaveTextContent(
-      "What went wrong1 note still looks different from the source PDF. Retry it from the Notes tab.");
+      "Needs attention1 note still looks different from the source PDF. Retry it from the Notes tab.");
     expect(panel.queryByText(/row 2 is bold/)).toBeNull();
     expect(updates().getByText("Zooming into source page 12 (bottom half).")).toBeVisible();
     expect(updates().queryByText(/Checking formatted notes/)).toBeNull();

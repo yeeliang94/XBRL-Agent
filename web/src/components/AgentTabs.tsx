@@ -138,16 +138,17 @@ const STATUS_ICON_SYMBOL: Record<AgentTabStatus, StatusSymbol> = {
   pending: STATUS_SYMBOLS.inactive,
 };
 
-function StatusBadge({ status, flagged = false }: { status: AgentTabStatus; flagged?: boolean }) {
+function StatusBadge({ status, flagged = false, role }: { status: AgentTabStatus; flagged?: boolean; role?: string }) {
   const spec = STATUS_BADGES[status];
+  const label = role ? workstreamStatusLabel(status, role) : spec.label;
   return (
     <span
       data-status={status}
       className="pwc-status-change"
       style={{ display: "inline-flex", width: 18, justifyContent: "center", flexShrink: 0 }}
-      aria-label={spec.label}
+      aria-label={label}
     >
-      <StatusIcon symbol={flagged ? STATUS_SYMBOLS.attention : STATUS_ICON_SYMBOL[status]} />
+      <StatusIcon symbol={flagged || label === "Needs review" ? STATUS_SYMBOLS.attention : STATUS_ICON_SYMBOL[status]} />
     </span>
   );
 }
@@ -254,7 +255,7 @@ function AgentTabsImpl({
         className="agent-tab"
         style={{ ...styles.tab, ...(isActive ? styles.tabActive : {}) }}
       >
-        <StatusBadge status={agent.status} flagged={Boolean(agent.flag)} />
+        <StatusBadge status={agent.status} flagged={Boolean(agent.flag)} role={agent.role} />
         <span style={styles.tabLabelStack}>
           <span style={styles.tabLabelText}>{displayLabel}</span>
           {agent.task && (
@@ -281,7 +282,7 @@ function AgentTabsImpl({
         )}
         {!agent.flag && (
           <span style={{ ...styles.tabStatus, ...(agent.status === "running" ? styles.tabStatusRunning : {}) }}>
-            {STATUS_BADGES[agent.status].label}
+            {workstreamStatusLabel(agent.status, agent.role)}
           </span>
         )}
       </button>
