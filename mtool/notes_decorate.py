@@ -293,6 +293,8 @@ def _is_totals_row(row: Tag) -> bool:
 # table's own borders are the WHOLE truth, including the sides it leaves silent.
 # Adding the house grid there would draw lines the source document never had.
 SOURCE_STYLED_ATTR = "data-source-styled"
+# Mirrors notes/format_patch.py FORMATTER_WIDTHS_ATTR (kept import-free).
+FORMATTER_WIDTHS_ATTR = "data-formatter-widths"
 
 
 def _is_source_styled(table: Tag) -> bool:
@@ -660,6 +662,46 @@ def _has_operator_column_widths(table: Tag) -> bool:
         if c.find_parent("table") is table)
 
 
+def _layout_column_widths(table: Tag) -> list[int] | None:
+    """Pixel widths from the ``<colgroup>`` the formatter wrote.
+
+    The formatter marks its column sizing (notes/format_patch.py
+    ``column_widths``) with :data:`FORMATTER_WIDTHS_ATTR`, one
+    ``<col style="width: Npx">`` per grid column. An editor resize carries no
+    marker, so it keeps its existing hands-off treatment."""
+    groups = [g for g in table.find_all("colgroup", recursive=False)
+              if g.get(FORMATTER_WIDTHS_ATTR) == "true"]
+    if len(groups) != 1:
+        return None
+    widths = []
+    for col in groups[0].find_all("col"):
+        found = [int(m.group(1)) for m in (re.fullmatch(r"width:\s*(\d+)px", d, re.I)
+                                           for d in _decls(col.get("style") or "")) if m]
+        if len(found) != 1 or found[0] <= 0:
+            return None
+        widths.append(found[0])
+    rows = [r for r in table.find_all("tr") if r.find_parent("table") is table]
+    grid = max((sum(_span(c, "colspan") for c in _cells(r)) for r in rows), default=0)
+    return widths if widths and len(widths) == grid else None
+
+
+def _apply_layout_widths(table: Tag, widths: list[int], table_width: str) -> None:
+    """Speak the formatter's sizing in TX's dialect: legacy ``width``
+    attributes (TX ignores CSS widths — see ``_fit_table_width``). The table
+    keeps its stated percentage, else fills the page; every unmerged row
+    carrying all grid columns gets percentage widths in the stated proportion."""
+    table["width"] = table_width
+    total = sum(widths)
+    shares = [round(w * 100 / total) for w in widths]
+    shares[0] += 100 - sum(shares)  # rounding remainder goes to the label column
+    for row in (r for r in table.find_all("tr") if r.find_parent("table") is table):
+        cells = _cells(row)
+        if len(cells) == len(widths) and all(_span(c, "colspan") == 1 for c in cells):
+            for cell, share in zip(cells, shares):
+                cell["width"] = f"{share}%"
+            return
+
+
 def _fill_undeclared_borders_white(
         el: Tag, skip: frozenset[str] = frozenset()) -> None:
     """Paint every border side the cell does NOT declare as explicit white.
@@ -931,6 +973,8 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     # full form while its siblings compact).
     compact_tables: set[int] = set()
     operator_sized_tables: set[int] = set()
+    # Formatter column sizing to carry into TX as legacy attributes.
+    layout_widths: dict[int, tuple[list[int], str]] = {}
     # Tables whose grid came verbatim from the Word source (by identity, like
     # compact_tables) — the theme contributes no borders to these.
     source_styled_tables: set[int] = set()
@@ -943,6 +987,12 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         # the page-width fit would never fire (the first-cut bug).
         operator_sized = (_table_has_explicit_width(table)
                           or table.has_attr("width"))
+        widths = _layout_column_widths(table)
+        if widths is not None:
+            percent = next((m.group(1) for m in (
+                re.fullmatch(r"width:\s*(\d{1,3}%)", d, re.I)
+                for d in _decls(table.get("style") or "")) if m), "100%")
+            layout_widths[id(table)] = (widths, percent)
         if operator_sized or _has_operator_column_widths(table):
             operator_sized_tables.add(id(table))
         _merge_style(table, _table_style(
@@ -987,7 +1037,9 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         # (TipTap-resized / source-sized) are the operator's decision — skip;
         # so are tables whose COLUMNS the operator sized (<colgroup>/colwidth),
         # which the table-level width check can't see.
-        if not operator_sized and not _has_operator_column_widths(table):
+        if id(table) in layout_widths:
+            _apply_layout_widths(table, *layout_widths[id(table)])
+        elif not operator_sized and not _has_operator_column_widths(table):
             _fit_table_width(table)
 
     # Row-by-row so the row-label column (first cell of a multi-column row) can
@@ -1118,7 +1170,9 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     if editable_merged_cells:
         expanded = _expand_merged_cells(soup)
         for table in expanded:
-            if id(table) not in operator_sized_tables:
+            if id(table) in layout_widths:
+                _apply_layout_widths(table, *layout_widths[id(table)])
+            elif id(table) not in operator_sized_tables:
                 _fit_table_width(table, editable_merged=True)
 
     _add_transport_breaks(soup)

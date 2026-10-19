@@ -1465,7 +1465,19 @@ Key invariants:
     rowspan; `frame: grid` boxes every cell) and compiles it
     into patch operations, starting with a `reset_formatting` of owned cell
     properties (border, text-align, vertical-align, background, padding). Cell
-    overrides may set horizontal and/or top/middle/bottom vertical alignment.
+    overrides may set horizontal and/or top/middle/bottom vertical alignment
+    or add bold to one cell. Exact unique cell-owned text selections may add
+    bold across inline marks, but never across paragraphs, hard breaks or nested
+    tables; ambiguous selections are rejected. Table width percentages and
+    bounded per-grid-column pixel widths are presentation preferences, not
+    changes to rows or merged cells. A layout changes sizing only when it
+    states widths, so an editor resize or source widths survive a layout that
+    omits them. Copy and prepared output retain the widths; the mTool decorator
+    restates marked formatter column widths (`data-formatter-widths`) as legacy
+    `width` attributes for TX instead of skipping the page fit
+    (`tests/test_mtool_notes_decorate.py`). Empty column-sizing markup
+    is ignored by the format-only structure comparison; actual cells and text
+    remain protected. These checks do not certify native mTool sizing.
     Paragraph overrides address an existing cell-owned `<p>` by its manifest
     index and set alignment and/or bounded indentation in 2em levels. Nested
     table paragraphs use their own cell coordinates; hard-break lines are not
@@ -1474,8 +1486,8 @@ Key invariants:
     paragraph structure and source emphasis. Editor cell attributes retain
     vertical alignment; prepared Copy/mTool HTML retains both capabilities.
     Native save/reopen fidelity is not certified by these HTML checks.
-    `unsupported_layout` findings (inset/gapped cell-edge rules, arbitrary text
-    fragments, individual hard-break indentation) remain unresolved and bypass
+    `unsupported_layout` findings (inset/gapped cell-edge rules, unsupported
+    fragment styling, individual hard-break indentation) remain unresolved and bypass
     style correction and source re-copy, even if the checker calls them passed.
     The finding must quote this table in `observed_text`; an unquoted claim is
     downgraded to an ordinary style correction. A note whose only findings are

@@ -40,6 +40,13 @@ def test_block_alignment_matches_the_validator():
         {"row": 1, "cell": 1, "paragraph": 1, "indent": 9, "reason": "Too deep"}]}]},
     {"row": 1, "tables": [{"table": 0, "columns": ["label"], "paragraphs": [
         {"row": 1, "cell": 1, "paragraph": 1, "reason": "No style"}]}]},
+    {"row": 1, "tables": [{"table": 0, "columns": ["label"], "column_widths": [0]}]},
+    {"row": 1, "tables": [{"table": 0, "columns": ["label"], "column_widths": [True]}]},
+    {"row": 1, "tables": [{"table": 0, "columns": ["label"], "width_percent": 101}]},
+    {"row": 1, "tables": [{"table": 0, "columns": ["label"], "overrides": [
+        {"row": 1, "cell": 1, "bold": False, "reason": "Remove source bold"}]}]},
+    {"row": 1, "tables": [{"table": 0, "columns": ["label"], "emphasis": [
+        {"row": 1, "cell": 1, "text": "", "reason": "No quote"}]}]},
 ])
 def test_unknown_keys_and_values_are_refused(note):
     with pytest.raises(ValidationError):

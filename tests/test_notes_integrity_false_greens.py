@@ -81,16 +81,23 @@ def test_a_complete_write_verifies_clean(run):
     assert _verdict(conn, run_id, gen).findings == []
 
 
-def test_prepared_source_remains_clean_after_formatter_patch(run):
+@pytest.mark.parametrize("source,operations", [
+    ("<p>one</p>", [{"target": {"blocks": "all"}, "style": {"bold": True}}]),
+    ("<table><tr><td>Ordinary shares</td><td>100</td></tr></table>", [
+        {"target": {"table": 0, "range": "table"}, "style": {"column_widths": [300, 100]}},
+        {"target": {"table": 0, "cell": {"r": 1, "c": 1}}, "style": {"bold_text": "Ordinary"}},
+    ]),
+])
+def test_prepared_source_remains_clean_after_formatter_patch(run, source, operations):
     from notes.format_patch import apply_sheet_patch
 
     conn, run_id, gen, _ = run
     conn.execute("UPDATE notes_source_generations SET input_kind='prepared_document' WHERE id=?", (gen,))
+    conn.execute("UPDATE notes_source_blocks SET canonical_html=? WHERE generation_id=? AND block_id='b1'",
+                 (source, gen))
     _write(conn, run_id, gen, ["b1", "b2"])
     before = conn.execute("SELECT html FROM notes_cells WHERE run_id=?", (run_id,)).fetchone()[0]
-    formatted = apply_sheet_patch({10: before}, {"cells": [{"row": 10, "operations": [
-        {"target": {"blocks": "all"}, "style": {"bold": True}},
-    ]}]}).rows[10]
+    formatted = apply_sheet_patch({10: before}, {"cells": [{"row": 10, "operations": operations}]}).rows[10]
     assert formatted != before
     assert repo.cas_update_notes_cell_html(conn, run_id=run_id, sheet="Notes", row=10,
         expected_html=before, new_html=formatted, style_source="formatter")

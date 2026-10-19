@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional
 
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
 from notes.format_verify import table_rows as _table_rows, verify_format_only
 from notes.html_sanitize import sanitize_notes_html
@@ -474,13 +474,40 @@ def _looks_numeric(text: str) -> bool:
 # Table-cell properties a layout owns on PDF tables. Preparation emits no
 # presentation styles and person-styled notes never reach the formatter, so
 # these can only be an earlier formatter decision that a new layout replaces.
+FORMATTER_WIDTHS_ATTR = "data-formatter-widths"
 LAYOUT_OWNED_PREFIXES = ("border", "text-align", "vertical-align", "background", "padding")
 
 
 def _apply_style(el: Tag, style: dict[str, Any]) -> None:
     current = _parse_style(el.get("style") or "")
     for key, value in style.items():
-        if key == "reset_formatting":
+        if key == "column_widths":
+            # Replaces any earlier column sizing (formatter or editor resize).
+            grid, _ = _build_grid(el) if el.name == "table" else ({}, {})
+            columns = max((col for _, col in grid), default=-1) + 1
+            if (not isinstance(value, list) or not value or len(value) != columns
+                    or any(type(width) is not int or not 16 <= width <= 2000 for width in value)):
+                raise FormatPatchError("column_widths must give a bounded pixel width for every grid column")
+            for group in el.find_all("colgroup", recursive=False):
+                group.decompose()
+            for cell in el.find_all(["td", "th"]):
+                if cell.find_parent("table") is el:
+                    cell.attrs.pop("colwidth", None)
+            root = el
+            while root.parent is not None:
+                root = root.parent
+            group = root.new_tag("colgroup")
+            # Tells the mTool decorator these widths are the formatter's, so it
+            # restates them for TX (an editor resize is left alone there).
+            group[FORMATTER_WIDTHS_ATTR] = "true"
+            for width in value:
+                col = root.new_tag("col")
+                col["style"] = f"width: {width}px"
+                group.append(col)
+            el.insert(0, group)
+        elif key == "bold_text":
+            _bold_text(el, value)
+        elif key == "reset_formatting":
             # Compiler-only (notes/table_layout.py); not in the AI schema.
             if value is not True or el.name not in ("td", "th"):
                 raise FormatPatchError("reset_formatting applies only to table cells")
@@ -602,6 +629,61 @@ def _colour(value: Any) -> str:
     if value == "transparent":
         return value
     raise FormatPatchError(f"unsupported colour: {value}")
+
+
+def _bold_text(el: Tag, quote: Any) -> None:
+    """Add emphasis to one exact cell-owned quote without rebuilding content."""
+    if el.name not in {"td", "th"} or not isinstance(quote, str) or not quote.strip():
+        raise FormatPatchError("bold_text requires a table cell and a nonempty exact quote")
+    runs: list[list[NavigableString]] = [[]]
+    boundaries = {"p", "div", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6"}
+
+    def visit(parent: Tag) -> None:
+        for child in parent.children:
+            if isinstance(child, Comment):
+                continue
+            if isinstance(child, NavigableString):
+                runs[-1].append(child)
+            elif isinstance(child, Tag):
+                if child.name in {"br", "table"}:
+                    runs.append([])
+                elif child.name in boundaries:
+                    runs.append([])
+                    visit(child)
+                    runs.append([])
+                else:
+                    visit(child)
+
+    visit(el)
+    matches = []
+    for nodes in runs:
+        text = "".join(str(node) for node in nodes)
+        start = text.find(quote)
+        while start >= 0:
+            matches.append((nodes, start))
+            start = text.find(quote, start + 1)
+    if len(matches) != 1:
+        raise FormatPatchError("bold_text must match exactly one cell-owned text selection")
+    nodes, start = matches[0]
+    end = start + len(quote)
+    root = el
+    while root.parent is not None:
+        root = root.parent
+    offset = 0
+    for node in nodes:
+        text = str(node)
+        left, right = max(0, start - offset), min(len(text), end - offset)
+        offset += len(text)
+        if left >= right or node.find_parent(["strong", "b"]) is not None:
+            continue
+        if left:
+            node.insert_before(NavigableString(text[:left]))
+        mark = root.new_tag("strong")
+        mark.string = text[left:right]
+        node.insert_before(mark)
+        if right < len(text):
+            node.insert_before(NavigableString(text[right:]))
+        node.extract()
 
 
 def _wrap_contents(el: Tag, tag_name: str) -> None:

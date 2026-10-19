@@ -84,6 +84,12 @@ def _format_structure(html: str) -> tuple:
     into several. Source emphasis preservation is checked separately.
     """
     soup = BeautifulSoup(html or "", "html.parser")
+    # Column sizing is presentation, not a change to the table's cells.
+    for col in soup.find_all("col"):
+        if not col.contents:
+            col.decompose()
+    for group in soup.find_all("colgroup"):
+        group.unwrap()
     for node in soup.find_all(["div", "span", "strong", "b", "em", "i", "u"]):
         if node.name == "div" and node.get("data-note-section") == "1":
             continue
