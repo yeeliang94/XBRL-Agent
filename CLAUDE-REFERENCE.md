@@ -1481,8 +1481,11 @@ Key invariants:
     changes to rows or merged cells. A layout changes sizing only when it
     states widths, so an editor resize or source widths survive a layout that
     omits them. Copy and prepared output retain the widths; the mTool decorator
-    restates marked formatter column widths (`data-formatter-widths`) as legacy
-    `width` attributes for TX instead of skipping the page fit
+    restates marked formatter sizing as legacy `width` attributes for TX:
+    column widths (`data-formatter-widths` on the `<colgroup>`, whole-percent
+    shares of at least 1%) and table width (`data-formatter-table-width` on the
+    `<table>`; width alone keeps the usual column fit). An unmarked existing
+    table width is never replaced
     (`tests/test_mtool_notes_decorate.py`). Empty column-sizing markup
     is ignored by the format-only structure comparison; actual cells and text
     remain protected. These checks do not certify native mTool sizing.

@@ -986,7 +986,7 @@ def test_formatter_column_widths_reach_tx_as_width_attributes():
     restates it as legacy attributes in the same proportion instead of
     dropping the table to content-sized columns."""
     out = decorate_notes_html(
-        '<table style="width: 80%"><colgroup data-formatter-widths="true"><col style="width: 300px"><col style="width: 100px">'
+        '<table data-formatter-table-width="true" style="width: 80%"><colgroup data-formatter-widths="true"><col style="width: 300px"><col style="width: 100px">'
         '</colgroup><tbody><tr><th colspan="2">Capital</th></tr>'
         "<tr><td>Ordinary shares</td><td>1,000</td></tr></tbody></table>", NotesTableStyle())
     assert re.search(r'<table[^>]*width="80%"', out)
@@ -1012,9 +1012,39 @@ def test_formatter_column_widths_apply_after_merged_cells_expand():
     assert re.findall(r'<td[^>]*width="(\d+%)"', out) == ["75%", "25%"]
 
 
+def test_formatter_table_width_alone_reaches_tx_and_keeps_the_column_fit():
+    """A layout that sets only width_percent writes CSS, which TX ignores;
+    the decorator restates it and still applies the label/amount split."""
+    out = decorate_notes_html(
+        '<table data-formatter-table-width="true" style="width: 80%"><tbody>'
+        "<tr><td>Revenue</td><td>1,000</td><td>900</td></tr></tbody></table>", NotesTableStyle())
+    assert re.search(r'<table[^>]*width="80%"', out)
+    assert re.findall(r'<td[^>]*width="(\d+%)"', out) == ["64%", "18%", "18%"]
+
+
+def test_formatter_column_widths_keep_an_existing_table_width():
+    """New column proportions must not stretch a fixed-width table to the page."""
+    out = decorate_notes_html(
+        '<table style="width: 380px"><colgroup data-formatter-widths="true"><col style="width: 300px">'
+        '<col style="width: 80px"></colgroup><tbody><tr><td>Label</td><td>1,000</td></tr></tbody></table>',
+        NotesTableStyle())
+    assert not re.search(r'<table[^>]*\swidth="', out)
+    assert re.findall(r'<td[^>]*width="(\d+%)"', out) == ["79%", "21%"]
+
+
+def test_formatter_column_shares_never_round_to_zero():
+    out = decorate_notes_html(
+        '<table><colgroup data-formatter-widths="true"><col style="width: 2000px">'
+        '<col style="width: 2000px"><col style="width: 16px"></colgroup>'
+        "<tbody><tr><td>a</td><td>1</td><td>2</td></tr></tbody></table>", NotesTableStyle())
+    shares = [int(w) for w in re.findall(r'<td[^>]*width="(\d+)%"', out)]
+    assert shares == [49, 50, 1] and sum(shares) == 100
+
+
 def test_formatter_markers_never_reach_tx():
     from mtool.notes_decorate import add_transport_breaks
-    html = ('<table><colgroup data-formatter-widths="true"><col style="width: 300px">'
+    html = ('<table data-formatter-table-width="true" style="width: 80%">'
+            '<colgroup data-formatter-widths="true"><col style="width: 300px">'
             '<col style="width: 100px"></colgroup><tr><td>'
             '<strong data-formatter-emphasis="true">Total</strong></td><td>1</td></tr></table>')
     for out in (decorate_notes_html(html, NotesTableStyle()), add_transport_breaks(html)):

@@ -475,6 +475,7 @@ def _looks_numeric(text: str) -> bool:
 # presentation styles and person-styled notes never reach the formatter, so
 # these can only be an earlier formatter decision that a new layout replaces.
 FORMATTER_WIDTHS_ATTR = "data-formatter-widths"
+FORMATTER_TABLE_WIDTH_ATTR = "data-formatter-table-width"
 # Marks emphasis the formatter added, so a later layout reset can take it
 # back off without ever touching emphasis copied from the source.
 FORMATTER_EMPHASIS_ATTR = "data-formatter-emphasis"
@@ -574,6 +575,7 @@ def _apply_style(el: Tag, style: dict[str, Any]) -> None:
             if not isinstance(value, str) or not WIDTH_RE.match(value):
                 raise FormatPatchError("invalid table_width")
             current["width"] = value
+            el[FORMATTER_TABLE_WIDTH_ATTR] = "true"
         elif key == "bold":
             if value is False:
                 raise FormatPatchError("bold removal is unsupported; existing source emphasis must be preserved")
