@@ -74,6 +74,16 @@ This is content for the normal writer, not a complete injection request. Styling
 comes from the resolved run/firm theme, approved formatter patches or source-table
 markup. Do not infer an extra total or rule merely from this example.
 
+The formatter can add bold to a whole row, one cell, or an exact unique text
+selection within a cell. It preserves source emphasis, words, figures and table
+cells. It can also set an overall table width and preferred widths for every
+grid column, including columns beneath merged headers. Existing alignment and
+paragraph indentation controls remain available. Widths are output preferences:
+mTool output carries them as width attributes in the same proportion, and a
+layout without widths keeps the existing sizing. Native mTool can still resize
+tables on save/reopen. Ambiguous text selections and
+unsupported formatting remain unresolved for review.
+
 ## 2. Let the production pipeline format and inject
 
 The normal route is:

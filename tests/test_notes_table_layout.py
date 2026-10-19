@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from notes.format_verify import verify_format_only
 from notes.rule_map import table_rules
 from notes.table_layout import (
-    CellOverride, LayoutError, LineSpec, ParagraphOverride, RowSpec, TableLayout,
+    CellOverride, LayoutError, LineSpec, ParagraphOverride, RowSpec, TableLayout, TextEmphasis,
     compile_layouts, layout_manifest, validate_layouts,
 )
 
@@ -124,6 +124,78 @@ def test_source_bold_is_never_removed():
     html = ROLL.replace("<td>At 31 December</td>", "<td><strong>At 31 December</strong></td>")
     out = compile_layouts(html, [TableLayout(table=0, columns=["label", "amount", "amount"])])
     assert "<strong>At 31 December</strong>" in out
+
+
+def test_selective_bold_and_widths_preserve_content_through_prepared_output():
+    from mtool.notes_exporter import prepare_note_output
+
+    html = ('<table><tr><th colspan="2">Capital</th></tr><tr><td><p>Ordinary '
+            '<em>shares</em> issued</p></td><td>100</td></tr></table>')
+    layout = TableLayout(table=0, columns=["label", "amount"], width_percent=80,
+                         column_widths=[300, 100],
+                         overrides=[CellOverride(row=2, cell=2, bold=True, reason="Source amount is bold")],
+                         emphasis=[TextEmphasis(row=2, cell=1, text="Ordinary shares", reason="Source emphasis")])
+    out = compile_layouts(html, [layout])
+    assert verify_format_only(html, out).ok
+    for representation in (out, prepare_note_output(out)["html"]):
+        soup = BeautifulSoup(representation, "html.parser")
+        assert "width: 80%" in soup.table["style"]
+        assert [col["style"] for col in soup.find_all("col")] == ["width: 300px", "width: 100px"]
+        label, amount = soup.find_all("td")
+        assert "".join(mark.get_text() for mark in label.find_all("strong")) == "Ordinary shares"
+        assert label.em.get_text() == "shares" and "issued" not in label.find("strong").get_text()
+        assert amount.strong.get_text() == "100"
+    assert compile_layouts(out, [layout]) == out
+    # The sizing survives the sanitiser and reaches TX as legacy attributes.
+    from mtool.notes_decorate import decorate_notes_html
+    from notes.html_sanitize import sanitize_notes_html
+    decorated = BeautifulSoup(decorate_notes_html(sanitize_notes_html(out)[0]), "html.parser")
+    assert decorated.table["width"] == "80%"
+    assert [td.get("width") for td in decorated.find_all("td")] == ["75%", "25%"]
+    # A layout that states no sizing keeps the current widths and every mark.
+    kept = compile_layouts(out, [TableLayout(table=0, columns=["label", "amount"])])
+    kept_soup = BeautifulSoup(kept, "html.parser")
+    assert [col["style"] for col in kept_soup.find_all("col")] == ["width: 300px", "width: 100px"]
+    assert "width: 80%" in kept_soup.table["style"]
+    assert verify_format_only(out, kept).ok
+    # Stated widths replace the previous ones.
+    resized = compile_layouts(out, [TableLayout(table=0, columns=["label", "amount"],
+                                                column_widths=[200, 120])])
+    assert [col["style"] for col in BeautifulSoup(resized, "html.parser").find_all("col")] == [
+        "width: 200px", "width: 120px"]
+
+
+def test_layout_without_widths_keeps_an_editor_resize():
+    html = ('<table style="width: 380px"><colgroup><col style="width: 300px"><col style="width: 80px">'
+            '</colgroup><tr><td colwidth="300">Label</td><td colwidth="80">1,000</td></tr></table>')
+    out = compile_layouts(html, [TableLayout(table=0, columns=["label", "amount"])])
+    soup = BeautifulSoup(out, "html.parser")
+    assert [col["style"] for col in soup.find_all("col")] == ["width: 300px", "width: 80px"]
+    assert [td["colwidth"] for td in soup.find_all("td")] == ["300", "80"]
+    assert "width: 380px" in soup.table["style"]
+
+
+@pytest.mark.parametrize("content,quote", [
+    ("Total Total", "Total"),
+    ("Total", "Missing"),
+    ("<p>Ordinary</p><p>shares</p>", "Ordinaryshares"),
+    ("Ordinary<br>shares", "Ordinaryshares"),
+    ("<table><tr><td>Nested</td></tr></table>", "Nested"),
+])
+def test_selective_bold_refuses_ambiguous_missing_or_cross_boundary_text(content, quote):
+    html = f"<table><tr><td>{content}</td></tr></table>"
+    layouts = [TableLayout(table=0, columns=["label"], emphasis=[
+        TextEmphasis(row=1, cell=1, text=quote, reason="Source bold")])]
+    if "<table>" in content:
+        layouts.append(TableLayout(table=1, columns=["label"]))
+    with pytest.raises(LayoutError, match="exactly one"):
+        compile_layouts(html, layouts)
+
+
+def test_column_widths_must_match_the_expanded_grid():
+    with pytest.raises(LayoutError, match="widths.*grid columns"):
+        compile_layouts(ROLL, [TableLayout(table=0, columns=["label", "amount", "amount"],
+                                          column_widths=[300, 100])])
 
 
 @pytest.mark.parametrize("layout,message", [

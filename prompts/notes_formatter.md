@@ -65,8 +65,22 @@ cell over columns 2 and 3. Describe every listed table exactly once.
 - `overrides`: rare. Use one only when a single cell must not follow its
   column's role, with a short `reason`. Address `row` and `cell` by their
   1-based direct positions. Set `text_align` (left/center/right),
-  `vertical_align` (top/middle/bottom), or both. A vertically merged header
-  can use bottom alignment without changing its horizontal alignment.
+  `vertical_align` (top/middle/bottom), and/or `bold: true`. A vertically merged
+  header can use bottom alignment without changing its horizontal alignment.
+  Cell bold affects that cell only, without bolding the rest of its row.
+- `emphasis`: source-visible bold for part of a cell. Each entry gives `row`,
+  `cell`, `text`, and a short `reason`. Copy an exact, unique text selection
+  from the CURRENT CELLS HTML (decoded text, not HTML tags). It may span inline
+  emphasis, but must stay within one paragraph or hard-break line and outside
+  nested tables. Repeated or missing selections are rejected. Choose a longer
+  unique selection only if all of it is bold in the PDF. Existing bold is kept.
+- `width_percent`: optional overall table width, 10–100 percent of the note.
+- `column_widths`: optional preferred pixel widths, 16–2000 per GRID column,
+  with exactly one width per column, including columns under merged headers.
+  Use widths when the source needs a different description/amount proportion;
+  keep the table readable within the note. Widths guide output, but native mTool
+  can resize tables. Omit both to keep the table's current sizing; a stated
+  width replaces only that kind of sizing.
 - `paragraphs`: targeted appearance of existing paragraphs inside a cell.
   Each entry has `row`, `cell`, `paragraph`, and a short `reason`, plus
   `indent` (0–8 levels of 2em, 0 clears it) and/or `text_align`
@@ -82,7 +96,8 @@ CAPABILITY LIMITS:
 Lines follow whole cell edges. Adjacent column ranges touch and cannot express
 inset strokes or visible gaps within those cells. Paragraph operations address
 existing `<p>` elements; they cannot indent one hard-break line within a shared
-paragraph, create paragraphs, or format arbitrary text fragments. State a
+paragraph or create paragraphs. Selected text supports adding bold only;
+other fragment styling and removal of source emphasis need human review. State a
 required unsupported distinction in `format_summary`; do not claim to have
 fixed it by returning an equivalent layout. Keep supported layout decisions
 grounded in the source. Do not change content or geometry to imitate a gap.

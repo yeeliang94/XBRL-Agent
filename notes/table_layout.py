@@ -13,7 +13,7 @@ Addressing (docs/local/notes-table-layout-plan.md, revision 2):
 """
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
 from bs4 import BeautifulSoup, Tag
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -55,12 +55,13 @@ class CellOverride(BaseModel):
     cell: int = Field(ge=1, description="1-based direct cell number within the row")
     text_align: Optional[Literal["left", "center", "right"]] = None
     vertical_align: Optional[Literal["top", "middle", "bottom"]] = None
+    bold: Optional[Literal[True]] = Field(default=None, description="Add bold to this cell only.")
     reason: str = Field(min_length=3, description="Why the column role does not apply here")
 
     @model_validator(mode="after")
     def require_alignment(self):
-        if self.text_align is None and self.vertical_align is None:
-            raise ValueError("a cell override must specify an alignment")
+        if self.text_align is None and self.vertical_align is None and self.bold is None:
+            raise ValueError("a cell override must specify alignment or bold")
         return self
 
 
@@ -80,6 +81,14 @@ class ParagraphOverride(BaseModel):
         return self
 
 
+class TextEmphasis(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    row: int = Field(ge=1)
+    cell: int = Field(ge=1)
+    text: str = Field(min_length=1, description="Exact, unique text in this cell; may span inline marks, never paragraphs or hard breaks.")
+    reason: str = Field(min_length=3)
+
+
 class TableLayout(BaseModel):
     model_config = ConfigDict(extra="forbid")
     table: int = Field(ge=0, description="Zero-based table index in the note")
@@ -92,6 +101,11 @@ class TableLayout(BaseModel):
     lines: list[LineSpec] = Field(default_factory=list, description="Every source-visible horizontal line")
     overrides: list[CellOverride] = Field(default_factory=list)
     paragraphs: list[ParagraphOverride] = Field(default_factory=list)
+    emphasis: list[TextEmphasis] = Field(default_factory=list)
+    width_percent: Optional[int] = Field(default=None, ge=10, le=100, strict=True)
+    column_widths: Optional[list[Annotated[int, Field(ge=16, le=2000, strict=True)]]] = Field(
+        default=None, description="Preferred width in pixels for every GRID column, including merged columns.",
+    )
 
 
 def layout_tables(html: str) -> list[int]:
@@ -110,6 +124,8 @@ def _table_errors(table: Tag, layout: TableLayout) -> list[str]:
     name = f"table {layout.table}"
     if len(layout.columns) != n_cols:
         errors.append(f"{name}: columns lists {len(layout.columns)} roles but the table has {n_cols} grid columns")
+    if layout.column_widths is not None and len(layout.column_widths) != n_cols:
+        errors.append(f"{name}: widths must describe all {n_cols} grid columns")
     seen_rows = set()
     for spec in layout.rows:
         if spec.row > n_rows:
@@ -136,13 +152,13 @@ def _table_errors(table: Tag, layout: TableLayout) -> list[str]:
             errors.append(f"{label} cuts through merged cells on both sides of the edge; "
                           "widen or narrow it to whole cells on at least one side")
     targets = set()
-    for item in [*layout.overrides, *layout.paragraphs]:
+    for item in [*layout.overrides, *layout.paragraphs, *layout.emphasis]:
         cells = (rows[item.row - 1].find_all(["th", "td"], recursive=False)
                  if item.row <= n_rows else [])
         if item.cell > len(cells):
             errors.append(f"{name}: override targets row {item.row} cell {item.cell}, which does not exist")
             continue
-        key = (item.row, item.cell, getattr(item, "paragraph", None))
+        key = (item.row, item.cell, getattr(item, "text", getattr(item, "paragraph", None)))
         if key in targets:
             errors.append(f"{name}: override target {key} is described twice")
         targets.add(key)
@@ -248,6 +264,7 @@ def _operations(table: Tag, layout: TableLayout, cell_padding: tuple[int, int]) 
     for item in layout.overrides:
         cell_op(item.row, item.cell, {key: value for key, value in {
             "text_align": item.text_align, "vertical_align": item.vertical_align,
+            "bold": item.bold,
         }.items() if value is not None})
     for item in layout.paragraphs:
         style = {}
@@ -257,6 +274,8 @@ def _operations(table: Tag, layout: TableLayout, cell_padding: tuple[int, int]) 
             style["text_align"] = item.text_align
         ops.append({"target": {"table": layout.table, "cell": {"r": item.row, "c": item.cell},
                                "paragraph": item.paragraph}, "style": style})
+    for item in layout.emphasis:
+        cell_op(item.row, item.cell, {"bold_text": item.text})
     return ops
 
 
@@ -273,6 +292,15 @@ def layout_operations(html: str, layouts: list[TableLayout],
     tables = BeautifulSoup(html or "", "html.parser").find_all("table")
     ops: list[dict] = []
     for layout in sorted(layouts, key=lambda item: item.table):
+        # Sizing is touched only when the layout states it, so an editor
+        # resize or source widths survive a layout that leaves sizing alone.
+        table_style: dict = {}
+        if layout.width_percent is not None:
+            table_style["table_width"] = f"{layout.width_percent}%"
+        if layout.column_widths is not None:
+            table_style["column_widths"] = layout.column_widths
+        if table_style:
+            ops.append({"target": {"table": layout.table, "range": "table"}, "style": table_style})
         ops.append({"target": {"table": layout.table, "range": "all"},
                     "style": {"reset_formatting": True}})
         ops.extend(_operations(tables[layout.table], layout, cell_padding))
@@ -298,6 +326,10 @@ def describe_layouts(layouts: list[TableLayout]) -> str:
         cols = ", ".join(f"{i}={role}" for i, role in enumerate(layout.columns, 1))
         out.append(f"table {layout.table}: columns {cols}"
                    + ("; boxed grid" if layout.frame == "grid" else ""))
+        if layout.width_percent is not None:
+            out.append(f"  table width={layout.width_percent}%")
+        if layout.column_widths is not None:
+            out.append(f"  column widths (px)={layout.column_widths}")
         for spec in layout.rows:
             flags = [f for f, on in (("bold", spec.bold), ("shaded", spec.shaded)) if on]
             if spec.indent:
@@ -308,12 +340,14 @@ def describe_layouts(layouts: list[TableLayout]) -> str:
             out.append(f"  {line.kind} line {where}, columns {line.from_col}-{line.to_col}")
         for item in layout.overrides:
             values = ", ".join(f"{key}={value}" for key, value in
-                               (("text_align", item.text_align), ("vertical_align", item.vertical_align))
+                               (("text_align", item.text_align), ("vertical_align", item.vertical_align), ("bold", item.bold))
                                if value is not None)
             out.append(f"  override row {item.row} cell {item.cell}: {values} ({item.reason})")
         for item in layout.paragraphs:
             out.append(f"  row {item.row} cell {item.cell} paragraph {item.paragraph}: "
                        f"indent={item.indent}, text_align={item.text_align} ({item.reason})")
+        for item in layout.emphasis:
+            out.append(f"  bold row {item.row} cell {item.cell}: {item.text!r} ({item.reason})")
     return "\n".join(out) if out else "no tables"
 
 

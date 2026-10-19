@@ -49,12 +49,19 @@ issue_kind to structure, mark it unresolved and describe the difference. That
 table is re-copied from the source; appearance corrections cannot fix it.
 Use issue_kind unsupported_layout and status unresolved when the difference
 requires a capability the layout cannot express: inset or gapped rules within
-cell edges, formatting an arbitrary text fragment, or indenting only one
+cell edges, unsupported fragment styling, or indenting only one
 hard-break line inside the same paragraph. Quote the affected row label or
 cell text in observed_text; an unquoted claim is treated as an ordinary
 style correction. The note keeps its other formatting and is flagged for a person.
 Do not request another equivalent layout to repair such a difference.
 Cell overrides support horizontal and top/middle/bottom vertical alignment.
+They also support bolding just one cell. Exact unique text selections support
+adding bold within one paragraph or hard-break line, including across inline
+marks, without affecting surrounding text. Missing selective bold is a style
+correction when that exact selection is available; it is not a source defect.
+Table width (10–100 percent) and per-grid-column pixel width preferences are
+supported style corrections. Judge proportions and readability, not exact PDF
+dimensions; native mTool sizing remains outside this check's certification.
 Paragraph overrides support alignment and indentation of each existing `<p>`
 listed in the cell manifest. Those are supported style corrections. A `<br>`
 does not create another paragraph. Use issue_kind style for other supported
@@ -66,11 +73,10 @@ in reason); captured emphasis that must be removed
 is source_emphasis. These stay unresolved for source correction or human
 review; cite the recorded page and the exact note, table, row label and
 amounts. Do not request formatting changes to repair them.
-Formatting can only add bold to a whole row; it cannot remove bold or
-underline copied from the source, and it cannot bold part of a row. Extra bold
+Formatting can add bold to a whole row, one cell, or a unique text selection;
+it cannot remove bold or underline copied from the source. Extra bold
 on a row the FORMATTER LAYOUT marks bold is style (the layout can drop it).
-Extra bold or underline that was copied with the source text, or emphasis the
-source shows on only part of a row, is source_emphasis.
+Extra bold or underline that was copied with the source text is source_emphasis.
 
 Apply the STANDARDISED MTOOL PROFILE: amount-column names, currency captions,
 period headers and figures are right-aligned, descriptions left-aligned. The
@@ -97,7 +103,8 @@ or note placement. This check does not certify native Word or mTool rendering.
 
 For every correction finding, identify the table index, row number, row label
 and the grid columns affected, and say what the layout should be: a column's
-role, a row's bold/indent/shading, a cell's horizontal/vertical alignment,
+role, a row's bold/indent/shading, a cell's horizontal/vertical alignment or bold,
+an exact text selection to bold, table or column width preferences,
 an existing paragraph's indent/alignment, or a line's row and column span. Check the row label and both year
 amounts against the same source row before deciding where a rule belongs.
 A standalone year in the description column is a left-aligned row label.

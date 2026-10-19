@@ -981,6 +981,37 @@ def test_colgroup_sized_table_is_left_alone():
     assert not re.findall(r'<td[^>]*width="\d+%"', out)
 
 
+def test_formatter_column_widths_reach_tx_as_width_attributes():
+    """Formatter sizing is CSS-only (TX ignores CSS widths), so the decorator
+    restates it as legacy attributes in the same proportion instead of
+    dropping the table to content-sized columns."""
+    out = decorate_notes_html(
+        '<table style="width: 80%"><colgroup data-formatter-widths="true"><col style="width: 300px"><col style="width: 100px">'
+        '</colgroup><tbody><tr><th colspan="2">Capital</th></tr>'
+        "<tr><td>Ordinary shares</td><td>1,000</td></tr></tbody></table>", NotesTableStyle())
+    assert re.search(r'<table[^>]*width="80%"', out)
+    assert re.findall(r'<td[^>]*width="(\d+%)"', out) == ["75%", "25%"]
+
+
+def test_formatter_column_widths_without_table_width_fill_the_page():
+    out = decorate_notes_html(
+        '<table><colgroup data-formatter-widths="true"><col style="width: 100px"><col style="width: 100px">'
+        '<col style="width: 100px">'
+        "</colgroup><tbody><tr><td>Label</td><td>1</td><td>2</td></tr></tbody></table>",
+        NotesTableStyle(), editable_merged_cells=True)
+    assert re.search(r'<table[^>]*width="100%"', out)
+    assert re.findall(r'<td[^>]*width="(\d+%)"', out) == ["34%", "33%", "33%"]
+
+
+def test_formatter_column_widths_apply_after_merged_cells_expand():
+    out = decorate_notes_html(
+        '<table><colgroup data-formatter-widths="true"><col style="width: 300px"><col style="width: 100px">'
+        '</colgroup><tbody><tr><td colspan="2">Capital</td></tr></tbody></table>',
+        NotesTableStyle(), editable_merged_cells=True)
+    assert re.search(r'<table[^>]*width="100%"', out)
+    assert re.findall(r'<td[^>]*width="(\d+%)"', out) == ["75%", "25%"]
+
+
 def test_colwidth_attr_counts_as_operator_sizing():
     """TipTap's colwidth attr (unmeasured column width) is operator sizing."""
     out = decorate_notes_html(
