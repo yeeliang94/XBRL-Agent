@@ -109,8 +109,13 @@ describe("notesFormatErrorMessage", () => {
   });
   test("unverified table appearance remains a review exception", () => {
     expect(notesFormatErrorMessage("visual_review_failed", "row 112: bad edge")).toContain(
-      "Table appearance could not be verified against the source PDF",
+      "Table appearance needs review against the source PDF",
     );
+  });
+  test.each(["visual_review_failed", "validation_failed", "timeout", "turn_budget", "model_error"])("%s does not claim saved output was lost", (errorType) => {
+    const message = notesFormatErrorMessage(errorType, "technical detail");
+    expect(message).toMatch(/review/i);
+    expect(message).not.toMatch(/nothing was saved|were not saved|your edits/i);
   });
   test("explains when no unfinished notes remain", () => {
     expect(notesFormatErrorMessage("no_unfinished_rows", "internal detail")).toMatch(
@@ -130,7 +135,8 @@ describe("notesFormatErrorMessage", () => {
     );
     expect(msg).not.toContain("{");
     expect(msg).not.toContain("target matched");
-    expect(msg.toLowerCase()).toContain("no longer matches");
+    expect(msg).toBe("Formatting could not be applied safely. Review the saved notes.");
+    expect(msg).not.toContain("Nothing was saved");
   });
   test("an unmapped code with a dict-shaped error falls back to a generic sentence", () => {
     const msg = notesFormatErrorMessage("mystery", "boom {x: 1}");

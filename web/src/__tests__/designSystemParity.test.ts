@@ -72,6 +72,7 @@ describe("XBRL design system is the production authority", () => {
     expect(designSystem).toContain("Keep incomplete output, failed saves, and actionable filing issues visible");
     expect(designSystem).toContain("Source inventory remains visible in the worksheet rail");
     expect(designSystem).toContain("A completed run must not turn failed or stopped formatting into Complete");
+    expect(designSystem).toContain("Label unfinished notes formatting Needs review");
     expect(designSystem).toContain("Content finalization follows notes review and precedes source completeness checking and final formatting");
     expect(designSystem).toContain("Later content, source or prepared-output changes invalidate appearance verification");
   });

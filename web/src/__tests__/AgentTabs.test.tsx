@@ -25,6 +25,9 @@ describe("AgentTabs", () => {
     render(<AgentTabs agents={agents} tabOrder={Object.keys(agents)} activeTab="formatting" onTabClick={() => {}} />);
     const tabs = screen.getAllByRole("tab");
     expect(tabs[0]).toHaveTextContent("Notes formatting");
+    expect(tabs[0]).toHaveTextContent("Needs review");
+    expect(tabs[0]).not.toHaveTextContent("Failed");
+    expect(tabs[0].querySelector('[aria-label="Needs review"]')).not.toBeNull();
     expect(tabs[1]).toHaveTextContent("Notes completeness");
     expect(tabs[2]).toHaveTextContent("Notes cleanup");
   });

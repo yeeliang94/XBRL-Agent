@@ -866,7 +866,7 @@ export function ActiveTabPanel({
               <div style={styles.activityEyebrow}>{bySheet ? "Selected workstream" : "Current stage"}</div>
               <div style={styles.activityTitle}>{label}</div>
             </div>
-            <span style={styles.activeAgentStatus}>{workstreamStatusLabel(formatting.status)}</span>
+            <span style={styles.activeAgentStatus}>{workstreamStatusLabel(formatting.status, state.activeTab)}</span>
           </div>
           <div style={styles.activityHeaderRight}>
             {showStopAll && (
@@ -984,7 +984,7 @@ export function ActiveTabPanel({
           </div>
           {activeAgent && (
             <span style={styles.activeAgentStatus}>
-              {workstreamStatusLabel(activeAgent.status)}
+              {workstreamStatusLabel(activeAgent.status, activeAgent.role)}
             </span>
           )}
           {showStop && (

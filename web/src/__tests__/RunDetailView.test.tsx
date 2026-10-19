@@ -29,7 +29,7 @@ test.each(["failed", "succeeded"])("formatter calls share one workstream and ret
   const tabs = screen.getByRole("tablist", { name: "Run workstreams" });
   expect(within(tabs).getAllByRole("tab", { name: /Notes formatting/ })).toHaveLength(1);
   fireEvent.click(within(tabs).getByRole("tab", { name: /Notes formatting/ }));
-  expect(within(tabs).getByRole("tab", { name: /Notes formatting/ })).toHaveTextContent("Failed");
+  expect(within(tabs).getByRole("tab", { name: /Notes formatting/ })).toHaveTextContent("Needs review");
   expect(screen.getByText("Formatting calls")).toBeVisible();
   expect(within(screen.getByRole("list", { name: "Activity updates" })).getByText("Checked issued capital table.")).toBeVisible();
   cleanup();
@@ -57,19 +57,19 @@ test("saved formatting shows sheets, a plain failure and calls behind Technical 
   ] })} onDelete={() => {}} onDownload={() => {}} />);
   clickRunTab(/^activity$/i);
   const workstream = within(screen.getByRole("tablist", { name: "Run workstreams" })).getByRole("tab", { name: /Notes formatting/ });
-  expect(workstream).toHaveTextContent("1 of 2 sheets formatted");
+  expect(workstream).toHaveTextContent("1 of 2 sheets verified");
   fireEvent.click(workstream);
   // No unlabelled stage line or call list beside the chips.
   expect(screen.queryByText("Appearance checking finished.")).toBeNull();
   expect(screen.queryByText("Formatting calls")).toBeNull();
   const chips = within(screen.getByRole("tablist", { name: "Formatting by sheet" }));
-  expect(chips.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["All", "Issued Capital", "List of Notes · Failed"]);
+  expect(chips.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["All", "Issued Capital", "List of Notes · Needs review"]);
   expect(screen.getByTestId("formatting-failure")).toHaveTextContent(
     "List of Notes: 1 note still looks different from the source PDF. Retry it from the Notes tab.");
   expect(screen.queryByText(finding)).toBeNull();
   const updates = () => within(screen.getByRole("list", { name: "Activity updates" }));
   expect(updates().getByText("Issued Capital: Formatting finished.")).toBeVisible();
-  fireEvent.click(chips.getByRole("tab", { name: "List of Notes · Failed" }));
+  fireEvent.click(chips.getByRole("tab", { name: "List of Notes · Needs review" }));
   expect(updates().queryByText(/Formatting finished/)).toBeNull();
   fireEvent.click(screen.getByRole("checkbox", { name: "Technical detail" }));
   const calls = within(screen.getByRole("list", { name: "Formatting calls" }));
@@ -166,7 +166,7 @@ test.each([false, true])("formatting retries replace older failures with current
   clickRunTab(/^activity$/i);
   const formattingTab = () => within(screen.getByRole("tablist", { name: "Run workstreams" }))
     .getByRole("tab", { name: /Notes formatting/ });
-  expect(formattingTab()).toHaveTextContent("Failed");
+  expect(formattingTab()).toHaveTextContent("Needs review");
   const retry = makeAgent({ id: 12, statement_type: "NOTES_FORMATTING", status: "running",
     variant: "Notes-Listofnotes", started_at: "2026-04-10T09:33:00Z", ended_at: null });
   rerender(renderDetail([retry, failure])); // Response order must not determine currentness.
@@ -187,7 +187,7 @@ test.each(["Notes-Issuedcapital", "notes_format_Notes-Listofnotes_part1"])("a su
   ], run_events: [] })} onDelete={() => {}} onDownload={() => {}} />);
   clickRunTab(/^activity$/i);
   expect(within(screen.getByRole("tablist", { name: "Run workstreams" }))
-    .getByRole("tab", { name: /Notes formatting/ })).toHaveTextContent("Failed");
+    .getByRole("tab", { name: /Notes formatting/ })).toHaveTextContent("Needs review");
 });
 
 test("recorded human escalation is needs review while real reviewer failures stay failed", () => {

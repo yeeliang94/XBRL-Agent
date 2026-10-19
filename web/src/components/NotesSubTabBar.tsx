@@ -30,6 +30,7 @@ export interface NotesSubTabBarProps {
   /** Wrap chips onto further lines instead of scrolling sideways, and show
    *  each chip's status icon (notes formatter: one chip per sheet). */
   showStatus?: boolean;
+  failureLabel?: string;
 }
 
 const CHIP_STATUS_SYMBOL: Partial<Record<AgentTabStatus, StatusSymbol>> = {
@@ -46,6 +47,7 @@ export function NotesSubTabBar({
   onSelect,
   ariaLabel = "Sheet-12 sub-agents",
   showStatus = false,
+  failureLabel = "Failed",
 }: NotesSubTabBarProps) {
   // Don't render an orphan "All" chip when there are no sub-agents yet —
   // the parent relies on `subAgents.length > 0` to gate this component,
@@ -88,11 +90,12 @@ export function NotesSubTabBar({
             style={chipStyle(active)}
           >
             {showStatus && s.status && CHIP_STATUS_SYMBOL[s.status] && (
-              <StatusIcon symbol={CHIP_STATUS_SYMBOL[s.status]!} size={14} style={styles.chipIcon} />
+              <StatusIcon symbol={s.status === "failed" && failureLabel === "Needs review"
+                ? STATUS_SYMBOLS.attention : CHIP_STATUS_SYMBOL[s.status]!} size={14} style={styles.chipIcon} />
             )}
             {s.label ?? `Sub ${labelNum}${s.notes ? ` · ${noteRange}` : ""}`}
             {/* Only the exception is marked; running and finished chips stay plain. */}
-            {s.status === "failed" && <span style={styles.failed}> · Failed</span>}
+            {s.status === "failed" && <span style={styles.failed}> · {failureLabel}</span>}
             {showStatus && s.status === "pending" && " · Waiting"}
           </button>
         );

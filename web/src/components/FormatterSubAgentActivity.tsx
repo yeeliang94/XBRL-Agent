@@ -43,6 +43,7 @@ export function FormatterSubAgentActivity({ events, status, recorded = false, te
     <NotesSubTabBar
       ariaLabel="Formatting by sheet"
       showStatus
+      failureLabel="Needs review"
       subAgents={sheets.map((sheet) => ({
         subAgentId: sheet.sheet,
         notes: null,
@@ -56,7 +57,7 @@ export function FormatterSubAgentActivity({ events, status, recorded = false, te
     />
     {failed.length > 0 && (
       <div data-testid="formatting-failure" style={styles.failure}>
-        <span style={styles.failureLabel}>What went wrong</span>
+        <span style={styles.failureLabel}>Needs attention</span>
         {failed.map((sheet) => (
           <span key={sheet.sheet}>
             {!selected && <strong style={styles.sheetName}>{sheet.label}: </strong>}
