@@ -295,6 +295,8 @@ def _is_totals_row(row: Tag) -> bool:
 SOURCE_STYLED_ATTR = "data-source-styled"
 # Mirrors notes/format_patch.py FORMATTER_WIDTHS_ATTR (kept import-free).
 FORMATTER_WIDTHS_ATTR = "data-formatter-widths"
+# Mirrors notes/format_patch.py FORMATTER_EMPHASIS_ATTR.
+FORMATTER_EMPHASIS_ATTR = "data-formatter-emphasis"
 
 
 def _is_source_styled(table: Tag) -> bool:
@@ -808,9 +810,18 @@ def _add_transport_breaks(soup: BeautifulSoup) -> None:
                 right.insert_before(spacer)
 
 
+def _drop_formatter_markers(soup: BeautifulSoup) -> None:
+    """Formatter bookkeeping markers mean nothing to TX; drop them so they
+    cost no bytes against Excel's cell limit."""
+    for attr in (FORMATTER_EMPHASIS_ATTR, FORMATTER_WIDTHS_ATTR):
+        for el in soup.find_all(attrs={attr: True}):
+            del el[attr]
+
+
 def add_transport_breaks(html: str) -> str:
     """Add mTool-only blank lines to the unstyled size fallback."""
     soup = BeautifulSoup(html, "html.parser")
+    _drop_formatter_markers(soup)
     _add_transport_breaks(soup)
     return str(soup)
 
@@ -1175,6 +1186,7 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
             elif id(table) not in operator_sized_tables:
                 _fit_table_width(table, editable_merged=True)
 
+    _drop_formatter_markers(soup)
     _add_transport_breaks(soup)
 
     # Carry the font on a wrapping container so any element we did not style

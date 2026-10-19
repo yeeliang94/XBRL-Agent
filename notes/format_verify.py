@@ -143,8 +143,11 @@ def verify_format_only(before_html: str, after_html: str) -> VerificationResult:
     from collections import Counter
     def emphasis(html):
         soup = BeautifulSoup(html or "", "html.parser")
+        # Formatter-added emphasis is the formatter's to take back; only
+        # unmarked (source or human) emphasis must survive.
         return Counter(({"b": "strong", "i": "em"}.get(node.name, node.name), node.get_text())
-                       for node in soup.find_all(["strong", "b", "em", "i", "u"]))
+                       for node in soup.find_all(["strong", "b", "em", "i", "u"])
+                       if node.get("data-formatter-emphasis") != "true")
     if emphasis(before_html) - emphasis(after_html):
         return VerificationResult(False, "source emphasis was removed", before_hash, after_hash)
     return VerificationResult(True, "", before_hash, after_hash)

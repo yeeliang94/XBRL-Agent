@@ -475,6 +475,9 @@ def _looks_numeric(text: str) -> bool:
 # presentation styles and person-styled notes never reach the formatter, so
 # these can only be an earlier formatter decision that a new layout replaces.
 FORMATTER_WIDTHS_ATTR = "data-formatter-widths"
+# Marks emphasis the formatter added, so a later layout reset can take it
+# back off without ever touching emphasis copied from the source.
+FORMATTER_EMPHASIS_ATTR = "data-formatter-emphasis"
 LAYOUT_OWNED_PREFIXES = ("border", "text-align", "vertical-align", "background", "padding")
 
 
@@ -513,6 +516,9 @@ def _apply_style(el: Tag, style: dict[str, Any]) -> None:
                 raise FormatPatchError("reset_formatting applies only to table cells")
             current = {k: v for k, v in current.items()
                        if not k.startswith(LAYOUT_OWNED_PREFIXES)}
+            for mark in el.find_all(attrs={FORMATTER_EMPHASIS_ATTR: "true"}):
+                if mark.find_parent(["td", "th"]) is el:
+                    mark.unwrap()
             for paragraph in cell_paragraphs(el):
                 previous = _parse_style(paragraph.get("style") or "")
                 remaining = {k: v for k, v in previous.items() if k not in {"margin-left", "text-align"}}
@@ -679,6 +685,7 @@ def _bold_text(el: Tag, quote: Any) -> None:
         if left:
             node.insert_before(NavigableString(text[:left]))
         mark = root.new_tag("strong")
+        mark[FORMATTER_EMPHASIS_ATTR] = "true"
         mark.string = text[left:right]
         node.insert_before(mark)
         if right < len(text):
@@ -707,6 +714,7 @@ def _wrap_contents(el: Tag, tag_name: str) -> None:
     while getattr(root, "parent", None) is not None:
         root = root.parent  # type: ignore[assignment]
     new_tag = root.new_tag(tag_name)  # type: ignore[attr-defined]
+    new_tag[FORMATTER_EMPHASIS_ATTR] = "true"
     for child in list(el.contents):
         new_tag.append(child.extract())
     el.append(new_tag)
