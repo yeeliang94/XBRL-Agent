@@ -381,7 +381,7 @@ def test_can_set_table_width_without_structure_change():
         }],
     }
     out = apply_sheet_patch({1: html}, patch)
-    assert '<table style="width: 100%">' in out.rows[1]
+    assert '<table data-formatter-table-width="true" style="width: 100%">' in out.rows[1]
 
 
 def test_blocks_all_excludes_paragraphs_inside_tables():

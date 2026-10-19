@@ -295,6 +295,7 @@ def _is_totals_row(row: Tag) -> bool:
 SOURCE_STYLED_ATTR = "data-source-styled"
 # Mirrors notes/format_patch.py FORMATTER_WIDTHS_ATTR (kept import-free).
 FORMATTER_WIDTHS_ATTR = "data-formatter-widths"
+FORMATTER_TABLE_WIDTH_ATTR = "data-formatter-table-width"
 # Mirrors notes/format_patch.py FORMATTER_EMPHASIS_ATTR.
 FORMATTER_EMPHASIS_ATTR = "data-formatter-emphasis"
 
@@ -687,15 +688,46 @@ def _layout_column_widths(table: Tag) -> list[int] | None:
     return widths if widths and len(widths) == grid else None
 
 
-def _apply_layout_widths(table: Tag, widths: list[int], table_width: str) -> None:
-    """Speak the formatter's sizing in TX's dialect: legacy ``width``
-    attributes (TX ignores CSS widths — see ``_fit_table_width``). The table
-    keeps its stated percentage, else fills the page; every unmerged row
-    carrying all grid columns gets percentage widths in the stated proportion."""
-    table["width"] = table_width
+def _formatter_table_width(table: Tag) -> str | None:
+    """The formatter's table width as a legacy attribute value, if it set one."""
+    if table.get(FORMATTER_TABLE_WIDTH_ATTR) != "true":
+        return None
+    for decl in _decls(table.get("style") or ""):
+        match = re.fullmatch(r"width:\s*(\d{1,4})(%|px)", decl, re.I)
+        if match:
+            return match.group(1) + ("%" if match.group(2) == "%" else "")
+    return None
+
+
+def _percent_shares(widths: list[int]) -> list[int]:
+    """Whole-percent shares in proportion, at least 1% each (legacy HTML
+    percentages are integers, and 0% would erase a requested column)."""
     total = sum(widths)
-    shares = [round(w * 100 / total) for w in widths]
-    shares[0] += 100 - sum(shares)  # rounding remainder goes to the label column
+    shares = [max(1, round(w * 100 / total)) for w in widths]
+    shares[shares.index(max(shares))] += 100 - sum(shares)
+    return shares
+
+
+def _apply_layout_sizing(table: Tag, sizing: tuple[list[int] | None, str | None, bool],
+                         *, editable_merged: bool = False) -> None:
+    """Speak the formatter's sizing in TX's dialect: legacy ``width``
+    attributes (TX ignores CSS widths — see ``_fit_table_width``).
+
+    ``sizing`` is (column widths, formatter table width, keep existing table
+    width). Column widths go on every unmerged row carrying all grid columns,
+    in the stated proportion; without them the usual page fit sizes the
+    columns. The table width is the formatter's when it set one; otherwise an
+    existing width (editor resize or source) is kept, else the page width."""
+    widths, table_width, keep_existing = sizing
+    if widths is None:
+        _fit_table_width(table, editable_merged=editable_merged)
+    if table_width is not None:
+        table["width"] = table_width
+    elif not keep_existing and not table.has_attr("width"):
+        table["width"] = "100%"
+    if widths is None:
+        return
+    shares = _percent_shares(widths)
     for row in (r for r in table.find_all("tr") if r.find_parent("table") is table):
         cells = _cells(row)
         if len(cells) == len(widths) and all(_span(c, "colspan") == 1 for c in cells):
@@ -813,7 +845,7 @@ def _add_transport_breaks(soup: BeautifulSoup) -> None:
 def _drop_formatter_markers(soup: BeautifulSoup) -> None:
     """Formatter bookkeeping markers mean nothing to TX; drop them so they
     cost no bytes against Excel's cell limit."""
-    for attr in (FORMATTER_EMPHASIS_ATTR, FORMATTER_WIDTHS_ATTR):
+    for attr in (FORMATTER_EMPHASIS_ATTR, FORMATTER_WIDTHS_ATTR, FORMATTER_TABLE_WIDTH_ATTR):
         for el in soup.find_all(attrs={attr: True}):
             del el[attr]
 
@@ -985,7 +1017,7 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     compact_tables: set[int] = set()
     operator_sized_tables: set[int] = set()
     # Formatter column sizing to carry into TX as legacy attributes.
-    layout_widths: dict[int, tuple[list[int], str]] = {}
+    layout_widths: dict[int, tuple[list[int] | None, str | None, bool]] = {}
     # Tables whose grid came verbatim from the Word source (by identity, like
     # compact_tables) — the theme contributes no borders to these.
     source_styled_tables: set[int] = set()
@@ -999,11 +1031,12 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         operator_sized = (_table_has_explicit_width(table)
                           or table.has_attr("width"))
         widths = _layout_column_widths(table)
-        if widths is not None:
-            percent = next((m.group(1) for m in (
-                re.fullmatch(r"width:\s*(\d{1,3}%)", d, re.I)
-                for d in _decls(table.get("style") or "")) if m), "100%")
-            layout_widths[id(table)] = (widths, percent)
+        formatter_width = _formatter_table_width(table)
+        # An explicit width the formatter did not set (an editor resize or the
+        # source) stays as it is; otherwise column sizing fills the page.
+        keep_existing = operator_sized and formatter_width is None
+        if widths is not None or formatter_width is not None:
+            layout_widths[id(table)] = (widths, formatter_width, keep_existing)
         if operator_sized or _has_operator_column_widths(table):
             operator_sized_tables.add(id(table))
         _merge_style(table, _table_style(
@@ -1049,7 +1082,7 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         # so are tables whose COLUMNS the operator sized (<colgroup>/colwidth),
         # which the table-level width check can't see.
         if id(table) in layout_widths:
-            _apply_layout_widths(table, *layout_widths[id(table)])
+            _apply_layout_sizing(table, layout_widths[id(table)])
         elif not operator_sized and not _has_operator_column_widths(table):
             _fit_table_width(table)
 
@@ -1182,7 +1215,7 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         expanded = _expand_merged_cells(soup)
         for table in expanded:
             if id(table) in layout_widths:
-                _apply_layout_widths(table, *layout_widths[id(table)])
+                _apply_layout_sizing(table, layout_widths[id(table)], editable_merged=True)
             elif id(table) not in operator_sized_tables:
                 _fit_table_width(table, editable_merged=True)
 

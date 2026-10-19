@@ -336,6 +336,9 @@ _TABLE_STRUCTURE_ATTRS: frozenset[str] = frozenset({
     # marker is stripped on first save and the table reverts to the house grid.
     # Value-checked to the single literal below; it is a flag, not free text.
     "data-source-styled",
+    # Formatter-set table width (notes/format_patch.py ``table_width``), so the
+    # mTool decorator can restate it for TX. Value-checked like the flag above.
+    "data-formatter-table-width",
 })
 
 # Table structure values cross the browser/ProseMirror boundary too. Bound
@@ -354,7 +357,7 @@ def _is_valid_table_structure_attr(name: str, value: object) -> bool:
         return bool(_TABLE_SPAN_RE.match(raw))
     if name == "colwidth":
         return bool(_TABLE_COLWIDTH_RE.match(raw))
-    if name == "data-source-styled":
+    if name in {"data-source-styled", "data-formatter-table-width"}:
         return raw == "true"
     return False
 

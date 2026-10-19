@@ -165,6 +165,18 @@ def test_selective_bold_and_widths_preserve_content_through_prepared_output():
         "width: 200px", "width: 120px"]
 
 
+def test_table_width_alone_survives_the_sanitiser_and_reaches_tx():
+    from mtool.notes_decorate import decorate_notes_html
+    from notes.html_sanitize import sanitize_notes_html
+    html = "<table><tr><td>Revenue</td><td>1,000</td></tr></table>"
+    out = compile_layouts(html, [TableLayout(table=0, columns=["label", "amount"], width_percent=70)])
+    clean = sanitize_notes_html(out)[0]
+    assert 'data-formatter-table-width="true"' in clean
+    decorated = BeautifulSoup(decorate_notes_html(clean), "html.parser")
+    assert decorated.table["width"] == "70%"
+    assert not decorated.find(attrs={"data-formatter-table-width": True})
+
+
 def test_layout_without_widths_keeps_an_editor_resize():
     html = ('<table style="width: 380px"><colgroup><col style="width: 300px"><col style="width: 80px">'
             '</colgroup><tr><td colwidth="300">Label</td><td colwidth="80">1,000</td></tr></table>')
