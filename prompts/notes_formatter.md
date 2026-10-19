@@ -73,7 +73,9 @@ cell over columns 2 and 3. Describe every listed table exactly once.
   from the CURRENT CELLS HTML (decoded text, not HTML tags). It may span inline
   emphasis, but must stay within one paragraph or hard-break line and outside
   nested tables. Repeated or missing selections are rejected. Choose a longer
-  unique selection only if all of it is bold in the PDF. Existing bold is kept.
+  unique selection only if all of it is bold in the PDF. Source bold is always
+  kept. Bold from an earlier layout is replaced by this one, so restate any row,
+  cell or selection bold that should remain.
 - `width_percent`: optional overall table width, 10–100 percent of the note.
 - `column_widths`: optional preferred pixel widths, 16–2000 per GRID column,
   with exactly one width per column, including columns under merged headers.

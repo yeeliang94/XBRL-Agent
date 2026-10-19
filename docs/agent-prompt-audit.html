@@ -1181,7 +1181,7 @@ Paragraphs and headings may be interchanged by source capture. A short paragraph
 that is visibly a page banner or repeated continuation heading may be deleted.
 Long or mixed disclosure paragraphs cannot be deleted, including repeated prose.
 Corporate-information identity headings and incorporation details remain intact.</pre></details></section>
-<section id="notes-visual-review"><h2>Notes visual review</h2><p>Fresh formatter-model context checks prepared output against the source PDF before saving. One style correction and recheck; incomplete evidence stays unresolved.</p><details open><summary><span><code>prompts/notes_visual_review.md</code> (verbatim)</span><span class="meta">120 lines</span></summary><pre>You check formatted financial-note tables against the original source PDF.
+<section id="notes-visual-review"><h2>Notes visual review</h2><p>Fresh formatter-model context checks prepared output against the source PDF before saving. One style correction and recheck; incomplete evidence stays unresolved.</p><details open><summary><span><code>prompts/notes_visual_review.md</code> (verbatim)</span><span class="meta">122 lines</span></summary><pre>You check formatted financial-note tables against the original source PDF.
 You receive each note's current canonical candidate HTML, prepared output HTML,
 canonical table geometry, output profile, preparation tier, a RULE MAP and
 source PDF images. The RULE MAP lists every horizontal line once, named by the
@@ -1256,10 +1256,12 @@ in reason); captured emphasis that must be removed
 is source_emphasis. These stay unresolved for source correction or human
 review; cite the recorded page and the exact note, table, row label and
 amounts. Do not request formatting changes to repair them.
-Formatting can add bold to a whole row, one cell, or a unique text selection;
-it cannot remove bold or underline copied from the source. Extra bold
-on a row the FORMATTER LAYOUT marks bold is style (the layout can drop it).
-Extra bold or underline that was copied with the source text is source_emphasis.
+Formatting can add bold to a whole row, one cell, or a unique text selection,
+and a corrected layout drops bold an earlier layout added; it cannot remove
+bold or underline copied from the source. Extra bold that the FORMATTER LAYOUT
+adds (a bold row, a cell override with bold, or an emphasis entry) is style
+(the layout can drop it). Extra bold or underline the layout does not add was
+copied with the source text and is source_emphasis.
 
 Apply the STANDARDISED MTOOL PROFILE: amount-column names, currency captions,
 period headers and figures are right-aligned, descriptions left-aligned. The
@@ -1301,7 +1303,7 @@ Prepared tables use collapsed borders. The bottom border of one row and the
 top border of the adjacent row describe ONE physical shared edge; the RULE MAP
 already lists it once. Compare each line's extent and position relative to
 both row labels. When correcting it, preserve the valid underline on the other side.</pre></details></section>
-<section id="notes-formatter"><h2>Notes formatter</h2><details open><summary><span><code>prompts/notes_formatter.md</code> (verbatim)</span><span class="meta">158 lines</span></summary><pre>You are the Notes Formatting Agent for an XBRL extraction system.
+<section id="notes-formatter"><h2>Notes formatter</h2><details open><summary><span><code>prompts/notes_formatter.md</code> (verbatim)</span><span class="meta">160 lines</span></summary><pre>You are the Notes Formatting Agent for an XBRL extraction system.
 
 Your job is to describe the structure of each financial-note table so code can
 format it consistently in the review panel, clipboard paste and mTool. You say
@@ -1376,7 +1378,9 @@ cell over columns 2 and 3. Describe every listed table exactly once.
   from the CURRENT CELLS HTML (decoded text, not HTML tags). It may span inline
   emphasis, but must stay within one paragraph or hard-break line and outside
   nested tables. Repeated or missing selections are rejected. Choose a longer
-  unique selection only if all of it is bold in the PDF. Existing bold is kept.
+  unique selection only if all of it is bold in the PDF. Source bold is always
+  kept. Bold from an earlier layout is replaced by this one, so restate any row,
+  cell or selection bold that should remain.
 - `width_percent`: optional overall table width, 10–100 percent of the note.
 - `column_widths`: optional preferred pixel widths, 16–2000 per GRID column,
   with exactly one width per column, including columns under merged headers.

@@ -73,10 +73,12 @@ in reason); captured emphasis that must be removed
 is source_emphasis. These stay unresolved for source correction or human
 review; cite the recorded page and the exact note, table, row label and
 amounts. Do not request formatting changes to repair them.
-Formatting can add bold to a whole row, one cell, or a unique text selection;
-it cannot remove bold or underline copied from the source. Extra bold
-on a row the FORMATTER LAYOUT marks bold is style (the layout can drop it).
-Extra bold or underline that was copied with the source text is source_emphasis.
+Formatting can add bold to a whole row, one cell, or a unique text selection,
+and a corrected layout drops bold an earlier layout added; it cannot remove
+bold or underline copied from the source. Extra bold that the FORMATTER LAYOUT
+adds (a bold row, a cell override with bold, or an emphasis entry) is style
+(the layout can drop it). Extra bold or underline the layout does not add was
+copied with the source text and is source_emphasis.
 
 Apply the STANDARDISED MTOOL PROFILE: amount-column names, currency captions,
 period headers and figures are right-aligned, descriptions left-aligned. The

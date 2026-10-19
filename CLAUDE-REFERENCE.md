@@ -1471,7 +1471,12 @@ Key invariants:
     overrides may set horizontal and/or top/middle/bottom vertical alignment
     or add bold to one cell. Exact unique cell-owned text selections may add
     bold across inline marks, but never across paragraphs, hard breaks or nested
-    tables; ambiguous selections are rejected. Table width percentages and
+    tables; ambiguous selections are rejected. Bold the formatter adds carries
+    `data-formatter-emphasis`, so the next layout's `reset_formatting` removes
+    it and the format-only gate exempts it; unmarked (source or human) emphasis
+    can never be removed. An editor save drops the marker, which leaves that
+    bold permanent (the safe direction); mTool output strips both formatter
+    markers. Table width percentages and
     bounded per-grid-column pixel widths are presentation preferences, not
     changes to rows or merged cells. A layout changes sizing only when it
     states widths, so an editor resize or source widths survive a layout that

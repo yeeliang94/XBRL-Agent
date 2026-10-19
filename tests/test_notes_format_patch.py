@@ -1448,11 +1448,11 @@ async def test_visual_correction_replaces_the_first_layout_entirely(monkeypatch,
     fake = _FakeAgent([_layout(first), _layout(_note())])
     result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
     assert result["ok"]
-    assert "<strong>" in checks[0] and "border-bottom" in checks[0]
+    assert "<strong" in checks[0] and "border-bottom" in checks[0]
     db, _, run_id = formatter_db
     with repo.db_session(db) as conn:
         saved = repo.list_notes_cells_for_run(conn, run_id)[0].html
-    assert "<strong>" not in saved and "border-bottom" not in saved
+    assert "<strong" not in saved and "border-bottom" not in saved
     assert "text-align: right" in saved
     assert result["layouts"]["112"]["tables"][0].get("rows", []) == []
 
@@ -1810,11 +1810,11 @@ def test_bold_is_idempotent_across_repeated_patches():
     }
     html = "<table><tr><td>Total</td></tr></table>"
     first = apply_sheet_patch({1: html}, patch).rows[1]
-    assert first.count("<strong>") == 1
+    assert first.count("<strong") == 1
     # Feed the bolded HTML back through the same patch — a whitespace text node
     # or re-serialisation must not defeat the "already wrapped" guard.
     second = apply_sheet_patch({1: first}, patch).rows[1]
-    assert second.count("<strong>") == 1
+    assert second.count("<strong") == 1
 
 
 def test_formatter_agent_and_server_resolve_the_same_firm_theme(monkeypatch):

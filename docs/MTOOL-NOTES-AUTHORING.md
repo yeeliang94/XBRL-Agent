@@ -75,8 +75,8 @@ comes from the resolved run/firm theme, approved formatter patches or source-tab
 markup. Do not infer an extra total or rule merely from this example.
 
 The formatter can add bold to a whole row, one cell, or an exact unique text
-selection within a cell. It preserves source emphasis, words, figures and table
-cells. It can also set an overall table width and preferred widths for every
+selection within a cell, and a later formatting pass can take its own bold back
+off. It preserves source emphasis, words, figures and table cells. It can also set an overall table width and preferred widths for every
 grid column, including columns beneath merged headers. Existing alignment and
 paragraph indentation controls remain available. Widths are output preferences:
 mTool output carries them as width attributes in the same proportion, and a

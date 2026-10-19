@@ -1012,6 +1012,16 @@ def test_formatter_column_widths_apply_after_merged_cells_expand():
     assert re.findall(r'<td[^>]*width="(\d+%)"', out) == ["75%", "25%"]
 
 
+def test_formatter_markers_never_reach_tx():
+    from mtool.notes_decorate import add_transport_breaks
+    html = ('<table><colgroup data-formatter-widths="true"><col style="width: 300px">'
+            '<col style="width: 100px"></colgroup><tr><td>'
+            '<strong data-formatter-emphasis="true">Total</strong></td><td>1</td></tr></table>')
+    for out in (decorate_notes_html(html, NotesTableStyle()), add_transport_breaks(html)):
+        assert "data-formatter" not in out
+        assert ">Total</strong>" in out
+
+
 def test_colwidth_attr_counts_as_operator_sizing():
     """TipTap's colwidth attr (unmeasured column width) is operator sizing."""
     out = decorate_notes_html(

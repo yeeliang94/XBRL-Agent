@@ -41,7 +41,7 @@ def test_roles_drive_alignment_and_lines_are_one_physical_edge():
     grid = cells(out)
     assert align(grid[0][1][1]) == "right" and align(grid[0][0][1]) == "left"
     # Full-width "2024" section row stays left (the decorator used to push it right).
-    assert align(grid[1][0][1]) == "left" and "<strong>2024</strong>" in out
+    assert align(grid[1][0][1]) == "left" and ">2024</strong>" in out
     assert align(grid[2][1][1]) == "right" and align(grid[2][0][1]) is None
     assert [(r["below_row"], r["cells"], r["kind"]) for r in table_rules(out)] == [
         (4, [2, 3], "single"), (5, [2, 3], "double")]
@@ -173,6 +173,35 @@ def test_layout_without_widths_keeps_an_editor_resize():
     assert [col["style"] for col in soup.find_all("col")] == ["width: 300px", "width: 80px"]
     assert [td["colwidth"] for td in soup.find_all("td")] == ["300", "80"]
     assert "width: 380px" in soup.table["style"]
+
+
+def test_a_replacement_layout_removes_formatter_bold_but_never_source_bold():
+    html = ('<table><tr><td><strong>Capital</strong> reserve</td><td>100</td></tr>'
+            '<tr><td>Ordinary shares issued</td><td>200</td></tr></table>')
+    bolded = compile_layouts(html, [TableLayout(
+        table=0, columns=["label", "amount"], rows=[RowSpec(row=1, bold=True)],
+        overrides=[CellOverride(row=2, cell=2, bold=True, reason="Source amount is bold")],
+        emphasis=[TextEmphasis(row=2, cell=1, text="Ordinary shares", reason="Source emphasis")])])
+    assert BeautifulSoup(bolded, "html.parser").find_all(attrs={"data-formatter-emphasis": "true"})
+    plain = compile_layouts(bolded, [TableLayout(table=0, columns=["label", "amount"])])
+    assert verify_format_only(bolded, plain).ok
+    soup = BeautifulSoup(plain, "html.parser")
+    assert [mark.get_text() for mark in soup.find_all("strong")] == ["Capital"]
+    assert soup.get_text() == BeautifulSoup(html, "html.parser").get_text()
+    # Restating the bold brings back the same output.
+    assert compile_layouts(plain, [TableLayout(
+        table=0, columns=["label", "amount"], rows=[RowSpec(row=1, bold=True)],
+        overrides=[CellOverride(row=2, cell=2, bold=True, reason="Source amount is bold")],
+        emphasis=[TextEmphasis(row=2, cell=1, text="Ordinary shares", reason="Source emphasis")])]
+    ) == bolded
+
+
+def test_removing_unmarked_bold_still_fails_the_format_gate():
+    before = '<table><tr><td><strong>Capital</strong></td></tr></table>'
+    after = '<table><tr><td>Capital</td></tr></table>'
+    assert not verify_format_only(before, after).ok
+    marked = '<table><tr><td><strong data-formatter-emphasis="true">Capital</strong></td></tr></table>'
+    assert verify_format_only(marked, after).ok
 
 
 @pytest.mark.parametrize("content,quote", [
