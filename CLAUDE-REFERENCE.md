@@ -1021,12 +1021,15 @@ Key invariants:
   all four value columns on group filings. Evidence always col D (Company) /
   col F (Group).
 - **Numeric presentation scale:** Sheets 13/14 receive the same declared
-  `denomination` as face statements. Values stay in the PDF's presentation
+  `denomination` as face statements. Monetary values stay in the PDF's presentation
   scale (for example RM'000 `2,500` remains `2,500`, never `2,500,000`). A
   curated notes↔face contradiction is a failed cross-check that tips filing
   readiness and requires human review; it is excluded from the face-facts
   reviewer because that pass cannot re-check or safely repair note values. It
-  is never silently auto-scaled.
+  is never silently auto-scaled. Share counts use whole individual shares;
+  counts printed in thousands are multiplied by 1,000. The shared denomination
+  instruction applies only to monetary amounts. Pinned for both notes workflows
+  by `tests/test_prepared_numeric_prose.py` and `tests/test_denomination.py`.
 - **Related-party numeric extraction requires a category.** The rendered prompt
   requires a source-supported taxonomy category on every transaction/balance
   payload, including zero values, with relationship evidence and a pre-save
@@ -2887,7 +2890,12 @@ Load-bearing invariants:
   alone does not require redundant column confirmation.
   Dimensional sheets compare
   their single physical block with CY; missing PY sections remain the separate
-  `template_period_section_missing` mapping diagnostic. Pinned by the period
+  `template_period_section_missing` mapping diagnostic. On current-year-only
+  Issued Capital and Related Party notes sheets, PY figures instead appear as
+  `comparative_not_filed_on_sheet` exclusions and remain stored in the run.
+  A declared PY section still receives comparatives. Pinned by
+  `tests/test_numeric_dimensions.py` and `tests/test_mtool_mpers_repair.py`.
+  Period compatibility is pinned by the period
   compatibility tests in `tests/test_mtool_column_detect.py` and the route-level
   mismatch test in `tests/test_mtool_routes.py`.
   An `abc::abc` placeholder `#DOM#` row with only empty/`Restated` display
