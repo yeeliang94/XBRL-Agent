@@ -251,8 +251,9 @@ def test_missing_category_period_is_reported_before_category_choices(tmp_path):
     assert ready['writes'][0]['canonical_sheet']=='Notes-Issuedcapital'
     doc['writes'][0].update(period='PY',column_role='prior_year')
     _,report=resolve_filing_doc(str(source),doc)
-    assert report['unresolved_writes'][0]['reason_code']=='template_period_section_missing'
-    assert not report['unresolved_writes'][0]['resolution_options']
+    # A current-year-only notes sheet does not file comparatives: excluded, not unresolved.
+    assert report['unresolved_writes']==[]
+    assert report['excluded_writes'][0]['reason_code']=='comparative_not_filed_on_sheet'
 
 
 def test_mpers_preparation_endpoint_preserves_calculations_and_receipt(client, tmp_path):
