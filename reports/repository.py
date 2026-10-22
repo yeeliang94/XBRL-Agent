@@ -9,7 +9,7 @@ import sqlite3
 
 from db import repository as runs
 from notes.html_sanitize import sanitize_notes_html
-from reports.registry import REPORTS, fields, template_path
+from reports.registry import REPORTS, fields, report_for_sheet, template_path
 from concept_model.parser import derive_template_id
 
 
@@ -51,6 +51,23 @@ def report_view(conn, run_id: int, report: str) -> dict:
                 item["value"] = row[0] if row else None
         result.append(item)
     return {"type": report, "label": REPORTS[report][0], "sheet": REPORTS[report][2], "fields": result}
+
+
+def bump_html_revision(conn, run_id: int, sheet: str, row: int) -> None:
+    """Notes-layer writes (formatting, cleanup, revert) change saved report text.
+
+    Bump the report revision so a reviewer holding the earlier text gets a
+    stale-edit refusal instead of silently overwriting the newer HTML.
+    """
+    report = report_for_sheet(sheet)
+    if report is None:
+        return
+    standard, _, _ = family(conn, run_id)
+    concepts = [f.concept for f in fields(report, standard) if f.kind == "html" and f.row == row]
+    if concepts:
+        conn.execute(
+            f"UPDATE report_fields SET revision=revision+1 WHERE run_id=? AND report_type=? "
+            f"AND concept_id IN ({','.join('?' * len(concepts))})", (run_id, report, *concepts))
 
 
 def save_field(conn, run_id: int, report: str, concept: str, value: str | None,
@@ -100,8 +117,16 @@ def save_field(conn, run_id: int, report: str, concept: str, value: str | None,
         (run_id, report, concept, target_id, f.kind, None if f.kind == "html" else value,
          status, evidence, json.dumps(pages), revision + 1, now))
     if f.kind == "html":
+        stored = conn.execute("SELECT html FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
+                              (run_id, REPORTS[report][2], f.row)).fetchone()
+        # Unchanged text keeps its verified style; new text needs formatting.
+        unchanged = stored is not None and stored[0] == (value or "")
         runs.upsert_notes_cell(conn, run_id=run_id, sheet=REPORTS[report][2], row=f.row,
-                              label=f.label, html=value or "", evidence=evidence, source_pages=pages, concept_uuid=target_id)
+                              label=f.label, html=value or "", evidence=evidence, source_pages=pages,
+                              concept_uuid=target_id, style_source=None if unchanged else "unstyled")
+        if status in {"user_override", "cleared"}:
+            conn.execute("UPDATE notes_cells SET content_origin='human_modified' WHERE run_id=? AND sheet=? AND row=?",
+                         (run_id, REPORTS[report][2], f.row))
     return revision + 1
 
 

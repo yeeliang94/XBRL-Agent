@@ -25,6 +25,7 @@ from notes import source_repository as srepo
 from notes.source_models import INPUT_KIND_PREPARED, IntegrityMode, SourceBlock, SourceNote
 from notes.source_write import APPROVED_DUPLICATE_PROSE_SHEETS
 from notes.writer import CELL_CHAR_LIMIT
+from reports.registry import NOT_REPORT_SHEET_SQL
 
 
 def _now() -> str:
@@ -81,14 +82,14 @@ def build_input(
 
     live_cells = frozenset(
         (r["sheet"], r["row"]) for r in conn.execute(
-            "SELECT sheet, row FROM notes_cells WHERE run_id = ? AND sheet NOT IN ('Report-Directors','Report-Auditors')", (run_id,)
+            f"SELECT sheet, row FROM notes_cells WHERE run_id = ? AND {NOT_REPORT_SHEET_SQL}", (run_id,)
         ).fetchall()
     )
 
     cells = []
     for r in conn.execute(
         "SELECT sheet, row, html, source_rendered_sha256, source_render_version, current_html_sha256, "
-        "content_origin FROM notes_cells WHERE run_id = ? AND sheet NOT IN ('Report-Directors','Report-Auditors') ORDER BY sheet, row",
+        f"content_origin FROM notes_cells WHERE run_id = ? AND {NOT_REPORT_SHEET_SQL} ORDER BY sheet, row",
         (run_id,),
     ).fetchall():
         key = (r["sheet"], r["row"])

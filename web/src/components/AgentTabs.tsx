@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import { pwc } from "../lib/theme";
 import type { AgentTabStatus, FilingStandard } from "../lib/types";
+import { isReportType } from "../lib/types";
 import { NON_AGENT_TAB_IDS } from "../lib/agentTabKinds";
 import { workstreamStatusLabel } from "../lib/workstreamStatus";
 import { statementCodeSubtitle } from "../lib/sheetLabels";
@@ -75,6 +76,7 @@ const WORKSTREAM_LABELS: Record<string, string> = {
   SOURCE_PREPARATION: "Source preparation",
   VALIDATOR: "Cross-checks",
   DIRECTORS_REPORT: "Directors’ report",
+  STATEMENT_BY_DIRECTORS: "Statement by directors",
   AUDITORS_REPORT: "Auditors’ report",
   NOTES_FORMATTING: "Notes formatting",
   NOTES_INTEGRITY: "Notes completeness",
@@ -199,7 +201,7 @@ function AgentTabsImpl({
       visibleChecks.push(id);
     } else if (id.startsWith(NOTES_TAB_PREFIX) || agent.role.startsWith("NOTES_")) {
       if (notesInRun === undefined || notesInRun.includes(agent.role)) visibleNotesActive.push(id);
-    } else if (agent.role === "DIRECTORS_REPORT" || agent.role === "AUDITORS_REPORT") {
+    } else if (isReportType(agent.role)) {
       visibleReports.push(id);
     } else if (statementsInRun === undefined || statementsInRun.includes(agent.role)) {
       visibleStatementActive.push(id);

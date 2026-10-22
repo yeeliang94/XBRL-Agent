@@ -2,6 +2,7 @@
 from contextlib import closing
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
+from db import repository as repo
 import server
 from reports.registry import REPORTS
 from reports.repository import family, snapshot, save_field, report_view, StaleReportEdit
@@ -34,6 +35,9 @@ def edit_report(run_id: int, report: str, concept: str, body: ReportEdit):
             _, _, run = family(conn, run_id)
             if run.status in {"running", "pending", "draft", "preparing"}:
                 raise HTTPException(409, "Wait for extraction to finish before editing reports")
+            task = repo.fetch_notes_format_task(conn, run_id, REPORTS[report][2])
+            if task and task.get("status") == "running":
+                raise HTTPException(409, "Wait for report formatting to finish before editing")
             previous = next((f for f in report_view(conn, run_id, report)["fields"] if f["concept"] == concept), None)
             if previous is None:
                 raise ValueError("Unknown report field")

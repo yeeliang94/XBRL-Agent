@@ -700,10 +700,12 @@ describe("AgentTabs", () => {
       expect(tablist?.getAttribute("aria-label")).toBe("Run workstreams");
     });
 
-    test("directors' and auditors' reports sit in their own Reports group", () => {
+    test("all three reports sit in their own Reports group", () => {
       const agents = {
         sofp: { agentId: "sofp", label: "SOFP", role: "SOFP", status: "complete" as const },
         "report:directors_report": { agentId: "report:directors_report", label: "Directors’ report", role: "DIRECTORS_REPORT", status: "complete" as const },
+        "report:statement_by_directors": { agentId: "report:statement_by_directors", label: "Statement by directors", role: "STATEMENT_BY_DIRECTORS", status: "complete" as const },
+        "report:auditors_report": { agentId: "report:auditors_report", label: "Auditors’ report", role: "AUDITORS_REPORT", status: "complete" as const },
       };
       const { container } = render(
         <AgentTabs agents={agents} tabOrder={Object.keys(agents)} activeTab="sofp" onTabClick={() => {}}
@@ -712,6 +714,8 @@ describe("AgentTabs", () => {
       const reports = container.querySelector('[data-bucket="reports"]');
       expect(reports?.textContent).toContain("Reports");
       expect(reports?.textContent).toContain("Directors’ report");
+      expect(reports?.textContent).toContain("Statement by directors");
+      expect(reports?.textContent).toContain("Auditors’ report");
       expect(container.querySelector('[data-bucket="statements"]')?.textContent).not.toContain("Directors’ report");
     });
 

@@ -1354,19 +1354,22 @@ def upsert_notes_cell(
 
 
 def list_notes_cells_for_run(
-    conn: sqlite3.Connection, run_id: int,
+    conn: sqlite3.Connection, run_id: int, *, include_reports: bool = False,
 ) -> list[NotesCell]:
     """Return every notes cell for a run, ordered by (sheet, row).
 
     Ordering matches the template walk so the editor UI can build its
     per-sheet sections by scanning the list once.
     """
+    from reports.registry import NOT_REPORT_SHEET_SQL
+
     prior_factory = conn.row_factory
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
             "SELECT * FROM notes_cells WHERE run_id = ? "
-            "AND sheet NOT IN ('Report-Directors','Report-Auditors') ORDER BY sheet, row",
+            + ("" if include_reports else f"AND {NOT_REPORT_SHEET_SQL} ")
+            + "ORDER BY sheet, row",
             (run_id,),
         ).fetchall()
     finally:
@@ -1392,12 +1395,14 @@ def list_formatter_cells_for_run(conn: sqlite3.Connection, run_id: int) -> list[
     from concept_model.filing_targets import writable_html_targets, html_cell_identity_valid
     from notes_types import NOTES_REGISTRY
 
-    cells = list_notes_cells_for_run(conn, run_id)
+    cells = list_notes_cells_for_run(conn, run_id, include_reports=True)
     run = fetch_run(conn, run_id)
     config = run.config if run and run.config else {}
     family = f"{config.get('filing_standard', 'mfrs').lower()}-{config.get('filing_level', 'company').lower()}-"
     targets = writable_html_targets(conn, family_prefix=family)
     numeric_sheets = {entry.sheet_name for entry in NOTES_REGISTRY.values() if entry.is_numeric}
+    from reports.registry import REPORT_SHEETS
+    typed_sheets = numeric_sheets | REPORT_SHEETS
     identities = {row[0]: (row[1], row[2]) for row in conn.execute(
         "SELECT id, concept_uuid, invalid_target FROM notes_cells WHERE run_id = ?", (run_id,))}
     # Recover omitted page records only from this cell's active frozen placements.
@@ -1413,7 +1418,7 @@ def list_formatter_cells_for_run(conn: sqlite3.Connection, run_id: int) -> list[
             cell.source_pages = sorted(placed_pages.get(
                 (cell.sheet, cell.row, cell.source_generation_id), set()))
     return [cell for cell in cells if cell.id in identities and not identities[cell.id][1]
-            and (cell.sheet not in numeric_sheets or html_cell_identity_valid(
+            and (cell.sheet not in typed_sheets or html_cell_identity_valid(
                 targets.get((cell.sheet, cell.row)), identities[cell.id][0]))]
 
 
@@ -2154,6 +2159,9 @@ def cas_update_notes_cell_html(
             "WHERE run_id = ? AND sheet = ? AND row = ? AND html = ?",
             (new_html, _now(), run_id, sheet, row, expected_html),
         )
+    if cur.rowcount > 0:
+        from reports.repository import bump_html_revision
+        bump_html_revision(conn, run_id, sheet, row)
     return cur.rowcount > 0
 
 

@@ -106,6 +106,26 @@ def resolve_reports(data: dict, report_snapshot: dict, selected_sheets=None, occ
             validations = [v for v in validations if _contains(v.get("sqref", ""), addr)]
             if field["value_status"] == "cleared":
                 base["value"], base["kind"] = "", "text"
+            elif field["concept"] == "ssmt_LicenseNumberOfAuditor":
+                # The taxonomy restricts this field to four digits. A longer
+                # source licence cannot be shortened without choosing which
+                # digits identify the auditor; retain it for human review.
+                if not re.fullmatch(r"[0-9]{4}", str(field["value"])):
+                    unresolved.append({**base, "reason": "native_identifier_encoding_unverified",
+                        "detail": "mTool requires a four-digit auditor licence. Confirm the licence in Reports before preparing this field."})
+                    continue
+            elif field["concept"] == "ssmt_RegistrationNumberOfAuditFirm":
+                # Native mTool asks for AF plus four digits, even when the
+                # source also discloses the firm's separate LLP registration.
+                numbers = set(re.findall(r"(?<![A-Za-z0-9])AF\s*([0-9]+)(?![A-Za-z0-9])",
+                                         str(field["value"]), flags=re.IGNORECASE))
+                if len(numbers) != 1 or not re.fullmatch(r"[0-9]{4}", next(iter(numbers))):
+                    unresolved.append({**base, "reason": "native_identifier_encoding_unverified",
+                        "detail": "mTool requires one audit firm number in AF0000 format. Confirm the number in Reports before preparing this field."})
+                    continue
+                base["value"] = "AF" + numbers.pop()
+                if base["value"] != field["value"]:
+                    base["source_value"] = field["value"]
             elif field["kind"] == "choice":
                 literal = next((v.findtext("m:formula1", "", NS) for v in validations if v.get("type") == "list"), "")
                 choices = literal[1:-1].split(',') if literal.startswith('"') and literal.endswith('"') else []

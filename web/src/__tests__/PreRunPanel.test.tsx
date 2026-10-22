@@ -90,7 +90,7 @@ function untickNotesExcept(keep: RegExp[]) {
 describe("PreRunPanel", () => {
   test("filing choices expose their selected state", async () => {
     render(<PreRunPanel sessionId="abc-123" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={vi.fn()} />);
-    await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(12));
+    await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(13));
 
     expect(screen.getByRole("button", { name: "MFRS" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "MPERS" })).toHaveAttribute("aria-pressed", "false");
@@ -114,9 +114,9 @@ describe("PreRunPanel", () => {
 
     // Wait for settings to load
     await waitFor(() => {
-      // 5 statement checkboxes + 5 notes checkboxes. Scanning is now an
+      // 5 statement, 5 notes and 3 report checkboxes. Scanning is now an
       // automatic pipeline stage, not a user-facing on/off control.
-      expect(screen.getAllByRole("checkbox")).toHaveLength(12);
+      expect(screen.getAllByRole("checkbox")).toHaveLength(13);
     });
     expect(screen.queryByTestId("automatic-pipeline-summary")).toBeNull();
     expect(screen.getByRole("region", { name: /filing details/i })).toBeInTheDocument();
@@ -219,7 +219,7 @@ describe("PreRunPanel", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getAllByRole("checkbox")).toHaveLength(12);
+      expect(screen.getAllByRole("checkbox")).toHaveLength(13);
     });
 
     // Uncheck SOCIE. Layout: [SOFP, SOPL, SOCI, SOCF, SOCIE, notes×5].
@@ -677,6 +677,7 @@ describe("PreRunPanel", () => {
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Directors’ report" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Auditors’ report" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Statement by directors" }));
 
     // With no face statements and no notes, Run must be disabled.
     const runBtn = screen.getByRole("button", { name: /start extraction/i }) as HTMLButtonElement;
@@ -1796,15 +1797,16 @@ describe("Upload-owned preparation", () => {
   });
 });
 
-test("reports can run independently and a report model can return to the run default", async () => {
+test.each(["AUDITORS_REPORT", "STATEMENT_BY_DIRECTORS"] as const)("%s can run independently and its model can return to the run default", async (report) => {
+  const label = report === "AUDITORS_REPORT" ? "Auditors’ report" : "Statement by directors";
   const onRun = vi.fn();
   render(<PreRunPanel sessionId="reports-only" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={onRun}
-    initialConfig={{ statements: [], notes_to_run: [], reports_to_run: ["AUDITORS_REPORT"] }} />);
-  await waitFor(() => expect(screen.getByRole("checkbox", { name: "Auditors’ report" })).toBeChecked());
+    initialConfig={{ statements: [], notes_to_run: [], reports_to_run: [report] }} />);
+  await waitFor(() => expect(screen.getByRole("checkbox", { name: label })).toBeChecked());
   await openAdvanced();
-  const model = screen.getByRole("combobox", { name: "Model for Auditors’ report" });
+  const model = screen.getByRole("combobox", { name: `Model for ${label}` });
   fireEvent.change(model, { target: { value: "claude-opus-4-6" } });
   fireEvent.change(model, { target: { value: "" } });
   startExtraction();
-  expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ statements: [], notes_to_run: [], reports_to_run: ["AUDITORS_REPORT"], reports_models: {} }));
+  expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ statements: [], notes_to_run: [], reports_to_run: [report], reports_models: {} }));
 });

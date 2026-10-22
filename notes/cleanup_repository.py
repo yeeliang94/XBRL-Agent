@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from notes.cleanup_patch import Patch, apply_patch, enumerate_blocks
 from notes.format_verify import verify_format_only
 from notes.lineage import content_sha256
+from reports.repository import bump_html_revision
 
 
 def source_evidence(conn, run_id, cell):
@@ -147,13 +148,6 @@ def save_cleanup(conn, *, run_id, cells, patch, viewed_pages, model):
                 'content_revision=COALESCE(content_revision,0)+1 WHERE run_id=? AND sheet=? AND row=?',
                 (cell['html'],now,digest,digest,run_id,before['sheet'],before['row']),
             )
-            if current['report_revision'] is not None:
-                # Report edits use their field revision, so approved content
-                # deletions must invalidate a previously loaded edit as well.
-                conn.execute(
-                    "UPDATE report_fields SET revision=revision+1,updated_at=? "
-                    "WHERE run_id=? AND target_id=? AND value_kind='html'",
-                    (now, run_id, current['concept_uuid']),
-                )
+            bump_html_revision(conn, run_id, before['sheet'], before['row'])
             changed += 1
     return {'changed_rows':changed,'skipped_cells':skipped,'removed_blocks':sum(len(c['removals']) for cid,c in result.items() if cid not in skipped)}

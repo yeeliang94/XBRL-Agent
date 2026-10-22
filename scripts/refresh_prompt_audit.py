@@ -97,8 +97,8 @@ COPY_REPLACEMENTS = (
 def refresh(text: str) -> tuple[str, list[str]]:
     changed: list[str] = []
     reports_body = (PROMPTS / "reports.md").read_text(encoding="utf-8").strip()
-    report_section = ('<section id="reports-extraction"><h2>Directors and auditors reports</h2>'
-        '<p>Two independent report workers reproduce full narratives and assess typed taxonomy fields. '
+    report_section = ('<section id="reports-extraction"><h2>Directors report, statement by directors and auditors report</h2>'
+        '<p>Three independent report workers reproduce full narratives and assess typed taxonomy fields. '
         'Source: <code>reports/agent.py::create_report_agent</code>.</p>'
         '<details><summary><span><code>reports.md</code> (verbatim)</span><span class="meta">'
         + str(len(reports_body.splitlines())) + ' lines</span></summary><pre>'
