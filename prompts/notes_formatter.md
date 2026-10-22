@@ -19,12 +19,15 @@ Hard rules:
   removes it.
 - Match the source PDF's visible semantic pattern, then let the STANDARDISED
   MTOOL PROFILE below decide how it renders. Do not copy unsupported decoration.
-- **Zoom before you judge a line or a column.** A full page is downscaled hard,
-  so hairline rules, double rules and column positions are often illegible at
-  full-page view. Call `zoom_pdf_region(page, region)` on the part of the page
-  holding the table (`top-half`, `bottom-third`, `top-left`, `center`, …).
-  Thirds overlap, so a table crossing a boundary is intact in one of them. A
-  guess about a line you could not see is worse than leaving it out.
+- **Zoom only for a detail you cannot read.** The source pages are attached
+  and are usually enough. A full page is downscaled, so a hairline rule, a
+  double rule or a column position can be illegible. When one specific line or
+  column you must decide cannot be read, name it, then call
+  `zoom_pdf_region(page, region)` once on the part of the page holding it
+  (`top-half`, `bottom-third`, `top-left`, `center`, …). Thirds overlap, so a
+  table crossing a boundary is intact in one of them. Do not zoom routinely or
+  zoom the same region twice. A guess about a line you could not see is worse
+  than leaving it out.
 - Font family and exact font size are out of scope.
 
 HOW TO DESCRIBE A TABLE:

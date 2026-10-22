@@ -22,6 +22,11 @@ class Patch(BaseModel):
     removals: list[Removal]
 
 
+class Proposal(BaseModel):
+    """What the cleanup agent returns; every supplied cell counts as inspected."""
+    removals: list[Removal]
+
+
 CONTINUED = re.compile(r"\s*(?:\(\s*(?:cont[’']?d\.?|continued)\s*\)|\bcontinued\b)\s*", re.I)
 def normalized(text):
     return ' '.join(CONTINUED.sub(' ', text).split()).casefold()
@@ -69,6 +74,44 @@ def _removal_errors(index, op, cell, blocks, nodes, removed, viewed):
         errors.append(f'{where}: Banner must not name a retained heading; '
                       'use reason continuation_heading or omit retained_block')
     return errors
+
+
+def partition_patch(cells, removals, viewed):
+    """Split proposed removals into a patch that applies safely and the rest.
+
+    A rejected removal only keeps its block; it never discards another
+    removal. Each rejection is returned with every reason it is unsafe.
+    """
+    rejected = []
+    grouped = {cid: [] for cid in cells}
+    for index, op in enumerate(removals):
+        if op.cell not in grouped:
+            rejected.append((op, f'removal {index}: Unknown cell {op.cell}'))
+        elif any(other.block == op.block for _, other in grouped[op.cell]):
+            rejected.append((op, f'removal {index}: Duplicate deletion of the same block'))
+        else:
+            grouped[op.cell].append((index, op))
+    kept = []
+    for cid, cell in cells.items():
+        _, nodes, blocks = enumerate_blocks(cell['html'])
+        removed = {op.block for _, op in grouped[cid]}
+        # Dropping an unsafe removal only shrinks `removed`, which cannot make
+        # another removal unsafe, so one pass is enough.
+        safe = []
+        for index, op in grouped[cid]:
+            errors = _removal_errors(index, op, cell, blocks, nodes, removed, viewed)
+            if errors:
+                rejected.append((op, '; '.join(errors)))
+            else:
+                safe.append(op)
+        if safe:
+            try:
+                apply_patch({cid: cell}, Patch(inspected_cells=[cid], removals=safe), viewed)
+            except ValueError as exc:
+                rejected.extend((op, str(exc)) for op in safe)
+                continue
+        kept.extend(safe)
+    return Patch(inspected_cells=list(cells), removals=kept), rejected
 
 
 def apply_patch(cells, patch, viewed):

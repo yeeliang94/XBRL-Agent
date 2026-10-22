@@ -143,6 +143,21 @@ async def test_unquoted_unsupported_claim_gets_an_ordinary_correction(review_har
 
 
 @pytest.mark.asyncio
+async def test_quote_copied_with_markup_still_names_the_table(review_harness):
+    # Windows run: the checker quoted a cell with its literal <br/>; the plain
+    # table text has none, so a real formatter limit became a pointless correction.
+    kwargs, decision, _ = review_harness
+    kwargs["rows"][112] = "<table><tr><td>Balance at<br/>31 December</td><td>1</td></tr></table>"
+    decision[0].update(issue_kind="unsupported_layout", status="unresolved",
+                       reason="Indent of one hard-break line cannot be drawn.",
+                       observed_text="Balance at<br/>31 December")
+    errors, result = await vr.check_visual_rows(**kwargs)
+    assert result["tables"][0]["issue_kind"] == "unsupported_layout"
+    assert result["limitation_rows"] == [112]
+    assert "cannot produce" in errors[112]
+
+
+@pytest.mark.asyncio
 async def test_limit_only_row_keeps_corrected_html_after_recheck(review_harness, monkeypatch):
     # A style finding is corrected; the recheck leaves only a formatter limit,
     # so the corrected candidate is returned instead of discarded.
@@ -370,3 +385,128 @@ async def test_duplicate_assessment_never_reaches_recopy(review_harness):
     errors, result = await vr.check_visual_rows(**kwargs)
     assert "duplicate" in errors[112]
     assert vr.structure_findings({"failed_rows": [112], "visual_review": result}) == {}
+
+
+@pytest.mark.asyncio
+async def test_large_note_is_checked_in_concurrent_chunks(review_harness, monkeypatch):
+    """Windows run: one checker request held ten tables and reached 114k input
+    tokens. A note with more tables than one request holds is split; each
+    chunk judges only its own tables and reports its usage back."""
+    import json
+    kwargs, _, _ = review_harness
+    kwargs["rows"][112] = "".join(f"<table><tr><td>Item {i}</td><td>{i}</td></tr></table>" for i in range(6))
+    monkeypatch.setattr(vr, "prepare_note_evidence", lambda html, style: (html, {"html_sha256": "abc"}))
+    calls = []
+
+    class Agent:
+        async def run(self, prompt, **run_kwargs):
+            calls.append((prompt, run_kwargs))
+            manifest = json.loads(prompt[0].split("Manifest: ", 1)[1].split("\n", 1)[0])
+            run_kwargs["usage"].requests += 1
+            return SimpleNamespace(output={"tables": [
+                {"row": m["row"], "table": m["table"], "status": "pass", "source_pages": [3],
+                 "reason": "Matches the source."} for m in manifest]}, all_messages=lambda: [])
+
+    monkeypatch.setattr(vr, "create_visual_review_agent",
+                        lambda **_: (Agent(), SimpleNamespace(viewed_pages=set())))
+    errors, review = await vr.check_visual_rows(**kwargs)
+    assert errors == {}
+    assert sorted((t["row"], t["table"]) for t in review["tables"]) == [(112, i) for i in range(6)]
+    assert len(calls) == 2
+    packets = ["".join(part for part in prompt if isinstance(part, str)) for prompt, _ in calls]
+    assert "TABLE 3 CANONICAL" in packets[0] and "TABLE 4 CANONICAL" not in packets[0]
+    assert "TABLE 4 CANONICAL" in packets[1] and "TABLE 3 CANONICAL" not in packets[1]
+    assert all(run_kwargs["usage"] is not kwargs["usage"] for _, run_kwargs in calls)
+    assert kwargs["usage"].requests == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_chunk_leaves_only_its_own_notes_unresolved(review_harness, monkeypatch):
+    import json
+    kwargs, _, _ = review_harness
+    kwargs["rows"][112] = "".join(f"<table><tr><td>A{i}</td></tr></table>" for i in range(4))
+    kwargs["rows"][113] = "<table><tr><td>B</td></tr></table>"
+    kwargs["cells"].append(SimpleNamespace(row=113, source_pages=[4]))
+
+    class Agent:
+        async def run(self, prompt, **_):
+            manifest = json.loads(prompt[0].split("Manifest: ", 1)[1].split("\n", 1)[0])
+            if manifest[0]["row"] == 113:
+                raise RuntimeError("provider error")
+            return SimpleNamespace(output={"tables": [
+                {"row": 112, "table": m["table"], "status": "pass", "source_pages": [3],
+                 "reason": "Matches."} for m in manifest]}, all_messages=lambda: [])
+
+    monkeypatch.setattr(vr, "create_visual_review_agent",
+                        lambda **_: (Agent(), SimpleNamespace(viewed_pages=set())))
+    errors, review = await vr.check_visual_rows(**kwargs)
+    assert set(errors) == {113}
+    assert {t["row"] for t in review["tables"]} == {112}
+
+
+@pytest.mark.asyncio
+async def test_compact_packet_keeps_the_evidence(review_harness, monkeypatch):
+    kwargs, _, harness = review_harness
+    monkeypatch.setattr(vr, "prepare_note_evidence", prepare_note_evidence_real)
+    kwargs["rows"][112] = ('<table><tr><td>Total</td><td style="border-bottom:1px solid #000000">'
+                           '24,000</td></tr></table>')
+    await vr.check_visual_rows(**kwargs)
+    prompt = harness.calls[-1][0]
+    note = next(part for part in prompt if isinstance(part, str) and "FORMATTED NOTE ROW" in part)
+    assert "geometry" not in note and "OUTPUT PROFILE" not in note
+    assert "OUTPUT PROFILE" in prompt[0]
+    assert "TABLE 0 CANONICAL CANDIDATE HTML:\n" + kwargs["rows"][112] in note
+    assert "RULE MAP" in note and "single line below row 1" in note
+    assert "EVERY CELL'S STYLE STARTS WITH:" in note
+
+
+def test_shared_cell_style_is_factored_without_changing_any_cell():
+    from bs4 import BeautifulSoup
+    same = BeautifulSoup('<table><tr><td style="padding: 3px; border: 1px solid #fff">a</td>'
+                         '<td style="padding: 3px; border: 1px solid #fff; border-bottom: 1px solid #000">b</td>'
+                         '</tr></table>', "html.parser").table
+    assert vr._factor_shared_cell_style(same) == "padding: 3px; border: 1px solid #fff"
+    assert [td.get("style") for td in same.find_all("td")] == [None, "border-bottom: 1px solid #000"]
+    # In the second cell the shared border comes after, and overrides, its own
+    # bottom rule; moving it in front would change that cell, so it stays.
+    order = BeautifulSoup('<table><tr><td style="padding: 3px; border: 1px solid #fff">a</td>'
+                          '<td style="padding: 3px; border-bottom: 1px solid #000; border: 1px solid #fff">b</td>'
+                          '</tr></table>', "html.parser").table
+    assert vr._factor_shared_cell_style(order) == "padding: 3px"
+    assert order.find_all("td")[1]["style"] == "border-bottom: 1px solid #000; border: 1px solid #fff"
+
+
+def test_repeated_declarations_are_never_factored():
+    """Peer review: removing every copy of a repeated declaration changed which
+    value wins (left, right, left became right in the packet)."""
+    from bs4 import BeautifulSoup
+    table = BeautifulSoup('<table><tr><td style="text-align: left; text-align: right; text-align: left">a</td>'
+                          '<td style="text-align: left">b</td></tr></table>', "html.parser").table
+    assert vr._factor_shared_cell_style(table) == ""
+    assert table.find("td")["style"] == "text-align: left; text-align: right; text-align: left"
+
+
+@pytest.mark.asyncio
+async def test_completed_chunk_usage_survives_a_stopped_sibling(review_harness, monkeypatch):
+    """Peer review: usage was added only after every chunk returned, so a stop
+    erased a response that had already completed."""
+    import asyncio
+    import json
+    kwargs, _, _ = review_harness
+    kwargs["rows"][112] = "".join(f"<table><tr><td>Item {i}</td></tr></table>" for i in range(5))
+    monkeypatch.setattr(vr, "prepare_note_evidence", lambda html, style: (html, {"html_sha256": "abc"}))
+
+    class Agent:
+        async def run(self, prompt, **run_kwargs):
+            manifest = json.loads(prompt[0].split("Manifest: ", 1)[1].split("\n", 1)[0])
+            run_kwargs["usage"].requests += 1
+            run_kwargs["usage"].input_tokens += 100
+            if len(manifest) == 1:
+                raise asyncio.CancelledError
+            return SimpleNamespace(output={"tables": []}, all_messages=lambda: [])
+
+    monkeypatch.setattr(vr, "create_visual_review_agent",
+                        lambda **_: (Agent(), SimpleNamespace(viewed_pages=set())))
+    with pytest.raises(asyncio.CancelledError):
+        await vr.check_visual_rows(**kwargs)
+    assert kwargs["usage"].requests == 2 and kwargs["usage"].input_tokens == 200

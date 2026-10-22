@@ -851,6 +851,7 @@ def test_formatter_tool_reports_page_images_as_a_count():
 @pytest.mark.asyncio
 async def test_visual_failure_is_corrected_once_before_saving(monkeypatch, formatter_db):
     from db import repository as repo
+    from notes import visual_review as vr
     checks = []
     async def check(**kwargs):
         checks.append(kwargs)
@@ -859,8 +860,10 @@ async def test_visual_failure_is_corrected_once_before_saving(monkeypatch, forma
                 {"row": 112, "table": 0, "status": "needs_correction"},
             ]}
         assert "border-bottom" in kwargs["rows"][112]
-        assert kwargs["usage"] is checks[0]["usage"]
-        assert kwargs["limits"] is checks[0]["limits"]
+        # The recheck has its own allowance; the initial check's spending
+        # (possibly by concurrent chunks) cannot exhaust it.
+        assert kwargs["usage"] is not checks[0]["usage"] and kwargs["usage"].requests == 0
+        assert kwargs["limits"].request_limit == vr.MAX_VISUAL_REVIEW_REQUESTS
         return {}, {"tables": [{"row": 112, "table": 0, "status": "pass"}]}
     correction = _layout(_note(lines=[{"after_row": 1, "from_col": 2, "to_col": 2, "kind": "double"}]),
                          summary="Closing rule corrected.")
@@ -1028,8 +1031,10 @@ async def test_visual_budgets_preserve_verified_rows(monkeypatch, formatter_db, 
             return {112: "Closing balance needs a bottom rule."}, {"tables": [
                 {"row": 112, "table": 0, "status": "needs_correction"},
             ]}
-        assert kwargs["usage"] is checks[0]["usage"]
-        assert kwargs["limits"] is checks[0]["limits"]
+        # The recheck has its own allowance; the initial check's spending
+        # (possibly by concurrent chunks) cannot exhaust it.
+        assert kwargs["usage"] is not checks[0]["usage"] and kwargs["usage"].requests == 0
+        assert kwargs["limits"].request_limit == vr.MAX_VISUAL_REVIEW_REQUESTS
         return {112: "Visual checking reached its request budget."}, {
             "tables": [], "error_type": "turn_budget",
         }

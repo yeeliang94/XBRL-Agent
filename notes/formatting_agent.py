@@ -295,10 +295,12 @@ def _create_notes_style_agent(
     ) -> list[Union[str, BinaryContent]]:
         """Re-render ONE region of a page so fine detail is legible.
 
-        Use this before deciding a border, a rule or a column alignment. A
-        whole page is downscaled hard before it reaches you, so hairline
-        rules, double rules and alignment are often illegible at full-page
-        view — and a guess there is worse than leaving the cell alone.
+        Use this only when a specific border, rule or column alignment you
+        must decide cannot be read on the attached page. A whole page is
+        downscaled, so hairline rules, double rules and alignment can be
+        illegible — and a guess there is worse than leaving the cell alone.
+        Zoom the one region holding that detail; do not zoom routinely or
+        repeat a region.
 
         `region` is one of: top-half, bottom-half, left-half, right-half,
         top-third, middle-third, bottom-third, top-left, top-right,
