@@ -12,19 +12,28 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 from agent_tracing import save_messages_trace
 from db import repository as repo
 from model_settings import build_model_settings, configured_role_thinking_level, describe_model_runtime
-from notes.cleanup_patch import Patch, apply_patch, enumerate_blocks
+from notes.cleanup_patch import Patch, Proposal, enumerate_blocks, partition_patch
 from notes.cleanup_repository import save_cleanup, source_evidence
 from pricing import estimate_cost_cache_adjusted
 from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
 from usage_metrics import split_usage
 
 MAX_CLEANUP_REQUESTS = 16
+# Cells per cleanup request, and requests at once. Policy fields stay in one
+# request: deciding which repeated policy banner to keep spans the fields.
+CLEANUP_CELLS_PER_GROUP = 10
+CLEANUP_MAX_CONCURRENT_GROUPS = 4
+POLICY_SHEET = 'Notes-SummaryofAccPol'
+# Protected blocks are context only; their opening words are enough.
+PROTECTED_PREVIEW_CHARS = 120
 PROMPT_PATH = Path(__file__).resolve().parents[1] / 'prompts' / 'notes_cleanup.md'
 
 @dataclass
 class CleanupDeps:
     pdf: str
     viewed: set[int] = field(default_factory=set)
+    accepted: list = field(default_factory=list)
+    dropped: list = field(default_factory=list)
 
 
 def cleanup_cells(db_path, run_id, sheets):
@@ -53,22 +62,50 @@ def cleanup_cells(db_path, run_id, sheets):
     return cells
 
 
-async def propose_cleanup(*, cells, pdf_path, model, usage, output_dir):
+def cleanup_groups(cells):
+    """Split cells into independent cleanup requests, keeping sheet order."""
+    by_sheet = {}
+    for cid, cell in cells.items():
+        by_sheet.setdefault(cid.rsplit(':', 1)[0], []).append((cid, cell))
+    groups = []
+    for sheet, members in by_sheet.items():
+        size = len(members) if sheet == POLICY_SHEET else CLEANUP_CELLS_PER_GROUP
+        groups.extend(dict(members[i:i + size]) for i in range(0, len(members), size))
+    return groups
+
+
+def _block_payload(block):
+    if block['eligible'] or len(block['text']) <= PROTECTED_PREVIEW_CHARS:
+        return block
+    return {**block, 'text': block['text'][:PROTECTED_PREVIEW_CHARS] + '…'}
+
+
+async def propose_cleanup(*, cells, pdf_path, model, usage, output_dir, trace_label='NOTES_CLEANUP'):
+    """Return the safe removals, the pages viewed, and removals dropped as unsafe.
+
+    An unsafe removal is sent back alone for correction; the safe ones are
+    kept. When retries run out, the unsafe ones are dropped and their blocks
+    stay, so one bad removal never costs the others.
+    """
     deps = CleanupDeps(pdf_path)
-    agent = Agent(model, deps_type=CleanupDeps, output_type=Patch,
+    agent = Agent(model, deps_type=CleanupDeps, output_type=Proposal,
                   system_prompt=PROMPT_PATH.read_text(), end_strategy='early',
                   retries={'output': 2},
                   model_settings=build_model_settings(model, cache_key='xbrl-notes-cleanup',
                       thinking_level=configured_role_thinking_level('notes_formatter')))
     @agent.output_validator
-    def validate_cleanup(ctx: RunContext[CleanupDeps], patch: Patch) -> Patch:
-        try:
-            apply_patch(cells, patch, ctx.deps.viewed)
-        except ValueError as exc:
-            raise ModelRetry(f'Invalid cleanup proposal: {exc}. Every listed removal must be '
-                             'corrected or dropped; removals not listed are valid and may be kept. '
-                             'Use the supplied blocks and pages actually viewed; keep uncertain blocks.') from exc
-        return patch
+    def validate_cleanup(ctx: RunContext[CleanupDeps], proposal: Proposal) -> Proposal:
+        # A correction may repeat an accepted removal; that is not a new one.
+        known = {(op.cell, op.block) for op in ctx.deps.accepted}
+        proposed = [*ctx.deps.accepted, *(op for op in proposal.removals if (op.cell, op.block) not in known)]
+        patch, rejected = partition_patch(cells, proposed, ctx.deps.viewed)
+        ctx.deps.accepted, ctx.deps.dropped = patch.removals, rejected
+        if rejected and ctx.retry < (ctx.max_retries or 0):
+            raise ModelRetry('These removals were rejected: ' + '; '.join(error for _, error in rejected)
+                             + '. Every other removal is accepted and kept. Return ONLY corrected versions '
+                             'of the rejected removals, or an empty list to keep those blocks. Use the '
+                             'supplied blocks and pages actually viewed; keep uncertain blocks.')
+        return Proposal(removals=patch.removals)
 
     @agent.tool
     async def view_pdf_pages(ctx: RunContext[CleanupDeps], pages: list[int]) -> list[str | BinaryContent]:
@@ -88,7 +125,8 @@ async def propose_cleanup(*, cells, pdf_path, model, usage, output_dir):
         return result
     inputs = {cid: {'label':c['label'],'source_pages':json.loads(c['source_pages'] or '[]'),
                     'source_block_pages': c.get('source_block_pages'),
-                    'blocks':enumerate_blocks(c['html'])[2]} for cid,c in cells.items()}
+                    'blocks':[_block_payload(block) for block in enumerate_blocks(c['html'])[2]]}
+              for cid,c in cells.items()}
     async with agent.iter(json.dumps(inputs),deps=deps,usage=usage,
                           usage_limits=UsageLimits(request_limit=MAX_CLEANUP_REQUESTS)) as run:
         try:
@@ -96,9 +134,10 @@ async def propose_cleanup(*, cells, pdf_path, model, usage, output_dir):
                 pass
             if run.result is None:
                 raise ValueError('Cleanup agent returned no assessment')
-            return run.result.output, deps.viewed
+            return (Patch(inspected_cells=list(cells), removals=run.result.output.removals),
+                    deps.viewed, [op.model_dump() | {'error': error} for op, error in deps.dropped])
         finally:
-            save_messages_trace(run.ctx.state.message_history, output_dir, 'NOTES_CLEANUP',
+            save_messages_trace(run.ctx.state.message_history, output_dir, trace_label,
                                 runtime_metadata=describe_model_runtime(model,role='notes_cleanup'))
 
 
@@ -119,16 +158,61 @@ async def run_notes_cleanup(*, run_id: int, db_path: str, pdf_path: str, sheets,
         on_progress(0,len(cells),None)
         if not Path(pdf_path).is_file():
             raise ValueError('Original PDF unavailable for notes cleanup')
-        model = model_factory()
-        patch, viewed = await asyncio.wait_for(propose_cleanup(cells=cells,pdf_path=pdf_path,
-                                             model=model,usage=usage,output_dir=output_dir), timeout_s)
-        with repo.db_session(db_path) as conn:
-            outcome = save_cleanup(conn,run_id=run_id,cells=cells,patch=patch,
-                                   viewed_pages=viewed,model=model_name)
-        outcome['ok'] = not outcome['skipped_cells']
+        groups = cleanup_groups(cells)
+        slots = asyncio.Semaphore(CLEANUP_MAX_CONCURRENT_GROUPS)
+
+        async def propose_group(index, group):
+            nonlocal model
+            label = 'NOTES_CLEANUP' if len(groups) == 1 else f'NOTES_CLEANUP_part{index}'
+            group_usage = RunUsage()
+            async with slots:
+                group_model = model_factory()
+                model = model or group_model
+                try:
+                    return await asyncio.wait_for(propose_cleanup(
+                        cells=group, pdf_path=pdf_path, model=group_model, usage=group_usage,
+                        output_dir=output_dir, trace_label=label), timeout_s)
+                finally:
+                    usage.incr(group_usage)
+
+        # Each group is judged and saved on its own: one failed group keeps
+        # its cells unchanged without discarding the others' finished work.
+        proposals = await asyncio.gather(*(propose_group(i, g) for i, g in enumerate(groups, 1)),
+                                         return_exceptions=True)
+        for result in proposals:
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+        failures = []
+        outcome = {'changed_rows': 0, 'removed_blocks': 0, 'skipped_cells': [], 'dropped_removals': []}
+        for group, result in zip(groups, proposals):
+            # A group's proposal or save can fail on its own; that group's
+            # fields stay unchanged and the others are still saved.
+            try:
+                if isinstance(result, BaseException):
+                    raise result
+                patch, viewed, dropped = result
+                with repo.db_session(db_path) as conn:
+                    saved = save_cleanup(conn,run_id=run_id,cells=group,patch=patch,
+                                         viewed_pages=viewed,model=model_name)
+            except Exception as exc:
+                logging.getLogger(__name__).warning('Notes cleanup group failed run=%s cells=%s',
+                                                    run_id, list(group), exc_info=exc)
+                failures.append(exc)
+                continue
+            outcome['changed_rows'] += saved['changed_rows']
+            outcome['removed_blocks'] += saved['removed_blocks']
+            outcome['skipped_cells'] += saved['skipped_cells']
+            outcome['dropped_removals'] += dropped
+        if len(failures) == len(groups):
+            raise failures[0]
+        outcome['ok'] = not outcome['skipped_cells'] and not failures
         status = 'completed' if outcome['ok'] else 'failed'
-        if not outcome['ok']:
+        if failures:
+            error = (f'Notes cleanup did not finish for {len(failures)} of {len(groups)} groups; '
+                     'their fields are unchanged.')
+        elif not outcome['ok']:
             error = 'Notes changed during cleanup; newer edits were preserved.'
+        if error:
             outcome['error'] = error
         on_progress(len(cells),len(cells),outcome['removed_blocks'])
         return outcome

@@ -35,8 +35,9 @@ source_block_pages is supplied, or a recorded cell source page for legacy cells.
 Keep blocks without recorded page evidence. A banner inherited from an ancestor
 page may cite that ancestor page only when recorded for that block. For each
 continuation deletion name the earlier retained block. For banners use null.
-When uncertain, keep the block. Return every inspected cell id in inspected_cells,
-including unchanged cells, and only the narrow deletions in the enforced schema.
+When uncertain, keep the block. Return only the narrow deletions in the
+enforced schema. Blocks marked not eligible are shown shortened, for context
+only; they can never be deleted.
 
 In policy fields, broad accounting-policy section headings repeated across
 separate fields are running banners. Retain at most one main section heading

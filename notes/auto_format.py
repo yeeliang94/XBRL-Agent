@@ -21,6 +21,7 @@ from notes.formatting_agent import (
     formatter_cell_is_candidate, list_formatter_cells_for_run, run_notes_formatter,
 )
 from notes.formatter_activity import FormatterActivity
+from notes.table_layout import layout_tables
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +42,13 @@ def candidate_sheets(
     })
 
 
-# Cells per concurrent formatter request. A large List-of-Notes sheet (about a
+# Limits per concurrent formatter request. A large List-of-Notes sheet (about a
 # dozen tables) otherwise waits on one request that reads every source page and
-# writes every patch; a failed repair then repeats all of it.
+# writes every patch; a failed repair then repeats all of it. Rows differ in
+# size, so a part is bounded by its tables and source pages as well as by rows.
 FORMAT_ROWS_PER_PART = 4
+FORMAT_TABLES_PER_PART = 4
+FORMAT_PAGES_PER_PART = 6
 FORMAT_MAX_CONCURRENT_REQUESTS = 10
 
 
@@ -55,17 +59,36 @@ def _precise_now() -> str:
 
 
 def _row_groups(db_path: str, run_id: int, sheet: str) -> list[list[int]]:
-    """Split a sheet's formatter candidates into ordered row groups."""
+    """Split a sheet's formatter candidates into ordered row groups.
+
+    Rows are packed in order until the next row would exceed the part's row,
+    table or page limit. A note is never split: one larger than the limits on
+    its own gets a part of its own.
+    """
     with repo.db_session(db_path) as conn:
-        rows = sorted(
-            c.row for c in list_formatter_cells_for_run(conn, run_id)
-            if c.sheet == sheet
-            and formatter_cell_is_candidate(c, PDF_FORMAT_CANDIDATE_SOURCES)
+        cells = sorted(
+            (c for c in list_formatter_cells_for_run(conn, run_id)
+             if c.sheet == sheet
+             and formatter_cell_is_candidate(c, PDF_FORMAT_CANDIDATE_SOURCES)),
+            key=lambda c: c.row,
         )
-    return [
-        rows[i:i + FORMAT_ROWS_PER_PART]
-        for i in range(0, len(rows), FORMAT_ROWS_PER_PART)
-    ]
+    groups: list[list[int]] = []
+    tables = 0
+    pages: set[int] = set()
+    for cell in cells:
+        weight = max(1, len(layout_tables(cell.html)))
+        cell_pages = set(cell.source_pages or [])
+        if not groups or (
+            len(groups[-1]) >= FORMAT_ROWS_PER_PART
+            or tables + weight > FORMAT_TABLES_PER_PART
+            or len(pages | cell_pages) > FORMAT_PAGES_PER_PART
+        ):
+            groups.append([])
+            tables, pages = 0, set()
+        groups[-1].append(cell.row)
+        tables += weight
+        pages |= cell_pages
+    return groups
 
 
 def _failure_result(
