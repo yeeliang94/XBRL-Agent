@@ -901,14 +901,24 @@ page, never presented as certified (gotcha #31). Pinned by
 
 ### 14. Notes feature — five supplementary templates (parallel with face)
 
-Directors' and auditors' reports are independent report workstreams, not
-financial-note inventory entries. `reports/registry.py` owns roles 120000 and
-130000 across both standards and filing levels. Their canonical narratives
+Directors' report, Statement by directors and Auditors' report are independent
+report workstreams, not financial-note inventory entries. `reports/registry.py`
+owns roles 120000, 120100 and 130000 across both standards and filing levels. Their canonical narratives
 share `notes_cells`; typed scalars and assessments live in `report_fields`.
 Financial-notes review and integrity checks exclude these report sheets.
-The shared final cleanup includes their narratives even on report-only runs;
-source-backed deletions preserve substantive report sections and signing details,
-advance report field revisions, and skip human overrides. Pinned by
+Shared page-banner cleanup and PDF style-only formatting include their
+canonical prose, including report-only runs. Formatter eligibility validates
+the exact filing-family target; report edits cannot race an active formatter.
+Reports captured from converted Word PDFs receive these formatting checks too;
+Word financial notes retain their separate source-style path. Provider overloads
+and other transient transport failures receive one announced fresh attempt via
+the shared retry runner, preserving partial canonical values, all attempts'
+usage and traces. Each attempt starts with fresh inspected-page evidence.
+The report save tool advertises exact per-report concept IDs, validates all IDs
+before writing, and returns the invalid IDs and full permitted catalogue on a
+rejected batch. Allow two bounded tool corrections; never alias a guessed ID.
+Source-backed cleanup deletions preserve substantive report sections and signing
+details, advance report field revisions, and skip human overrides. Pinned by
 `tests/test_reports.py` and `tests/test_preparation_integration.py`.
 Report-only runs do not trigger the prepared financial-note template expansion.
 The report workers use the shared bounded agent loop, cancellation registry and
@@ -2660,7 +2670,12 @@ inventory warning, Next issue navigation, and Needs attention filter.
 ### 28. mTool fill pipeline — semantic addressing, one patcher, receipts
 
 Report scalars use `offline_fill.fill_report_fields` in the same standalone
-standard-library patcher. Require exact taxonomy bindings or a unique unlocked
+standard-library patcher. Auditor-table inputs resolve only within their own
+PRIM block. Native licence numbers require exactly four ASCII digits; longer
+printed identifiers remain unresolved without truncation. Only a unique bounded
+AF-plus-four-digit source token may normalize to `AF0758`-style native encoding;
+retain the original `source_value` in diagnostics.
+Require exact taxonomy bindings or a unique unlocked
 input on a taxonomy marker row, verified native date/selection encoding, and
 typed read-back. Keep explicit human clears distinct from absent disclosures.
 Selected report narratives export independently of the financial-notes toggle.

@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from pydantic_ai.exceptions import UsageLimitExceeded
 
 import server
-from api.notes import _notes_template_index
+from api.notes import _notes_template_index as _financial_notes_template_index
 from db import repository as repo
 from model_settings import DEFAULT_MODEL_ID
 from notes.auto_format import PDF_FORMAT_CANDIDATE_SOURCES
@@ -28,6 +28,17 @@ from notes.auto_format import PDF_FORMAT_CANDIDATE_SOURCES
 logger = logging.getLogger("server")
 
 router = APIRouter()
+
+
+def _notes_template_index(standard: str, level: str) -> list[dict]:
+    """Formatting covers canonical report prose as well as financial notes."""
+    from reports.registry import REPORTS, template_path
+    from concept_model.parser import derive_template_id
+    return _financial_notes_template_index(standard, level) + [
+        {"template_type": report, "sheet": entry[2], "is_numeric": False,
+         "template_id": derive_template_id(template_path(report, standard, level))}
+        for report, entry in REPORTS.items()
+    ]
 
 
 class _NotesFormatLaunch(BaseModel):
@@ -395,7 +406,7 @@ async def revert_notes_formatter(run_id: int, body: _NotesFormatRevert):
             )
         cells = {
             c.row: c
-            for c in repo.list_notes_cells_for_run(conn, run_id)
+            for c in repo.list_notes_cells_for_run(conn, run_id, include_reports=True)
             if c.sheet == body.sheet
         }
         restored_rows: list[int] = []

@@ -1,4 +1,4 @@
-"""The two supported report roles, derived from the committed SSM taxonomy."""
+"""Supported report roles, derived from the committed SSM taxonomy."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,8 +9,16 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 REPORTS = {
     "DIRECTORS_REPORT": ("Directors' report", "120000", "Report-Directors"),
+    "STATEMENT_BY_DIRECTORS": ("Statement by directors", "120100", "Report-StatementByDirectors"),
     "AUDITORS_REPORT": ("Auditors' report", "130000", "Report-Auditors"),
 }
+# Report narratives share notes_cells storage; only report review owns them.
+REPORT_SHEETS = frozenset(entry[2] for entry in REPORTS.values())
+NOT_REPORT_SHEET_SQL = "sheet NOT IN (" + ", ".join(f"'{s}'" for s in sorted(REPORT_SHEETS)) + ")"
+
+
+def report_for_sheet(sheet: str) -> str | None:
+    return next((report for report, entry in REPORTS.items() if entry[2] == sheet), None)
 
 
 def template_path(report: str, standard: str, level: str) -> Path:
@@ -36,7 +44,7 @@ def _types() -> dict[str, tuple[str, ...]]:
             for t in root.iter(xs + "complexType")}
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=6)
 def fields(report: str, standard: str = "mfrs") -> tuple[ReportField, ...]:
     from concept_model.taxonomy_semantics import taxonomy_registry
     from scripts.generate_mpers_templates import walk_role_for_taxonomy

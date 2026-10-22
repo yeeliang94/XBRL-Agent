@@ -211,7 +211,8 @@ def run_agent(
                 print(f"  [stage] {data.get('stage')}")
             elif ev == "complete":
                 role = data.get("agent_role") or data.get("agent_id")
-                ok = "ok" if data.get("success") else f"FAILED ({data.get('error')})"
+                error = data.get("error") or data.get("message") or "Extraction did not finish"
+                ok = "ok" if data.get("success") else f"FAILED ({error})"
                 print(f"  [{role}] {ok}")
             elif ev == "error":
                 final["errors"].append(str(data.get("message", "")))
@@ -226,6 +227,10 @@ def run_agent(
                     final["errors"].append(f"{s}: extraction failed")
                 for s in data.get("notes_failed", []) or []:
                     final["errors"].append(f"NOTES {s}: failed")
+                for report in data.get("reports_failed", []) or []:
+                    final["errors"].append(f"REPORT {report}: extraction failed")
+                for report in data.get("reports_cancelled", []) or []:
+                    final["errors"].append(f"REPORT {report}: extraction cancelled")
 
     asyncio.run(_drive())
 
@@ -336,7 +341,8 @@ def build_parser():
                              "advisory only.")
     parser.add_argument("--first-financial-statements", action="store_true",
                         help="First statements after incorporation; extract only the current period.")
-    parser.add_argument("--reports", nargs="*", choices=["DIRECTORS_REPORT", "AUDITORS_REPORT"], default=[])
+    from reports.registry import REPORTS
+    parser.add_argument("--reports", nargs="*", choices=list(REPORTS), default=[])
     return parser
 
 

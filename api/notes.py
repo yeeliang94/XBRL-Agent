@@ -443,7 +443,8 @@ async def patch_notes_cell_endpoint(
     is the documented semantics of regenerate (see CLAUDE.md gotcha
     #16) — not a bug.
     """
-    if sheet in {"Report-Directors", "Report-Auditors"}:
+    from reports.registry import REPORT_SHEETS
+    if sheet in REPORT_SHEETS:
         raise HTTPException(409, "Edit this report in Reports so its revision is preserved.")
     from db import repository as repo
     from notes import lineage
