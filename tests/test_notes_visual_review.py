@@ -510,3 +510,18 @@ async def test_completed_chunk_usage_survives_a_stopped_sibling(review_harness, 
     with pytest.raises(asyncio.CancelledError):
         await vr.check_visual_rows(**kwargs)
     assert kwargs["usage"].requests == 2 and kwargs["usage"].input_tokens == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["structure", "unsupported_layout"])
+async def test_markup_only_quote_is_not_evidence(review_harness, kind):
+    """Greptile PR #41: a quote of only <br/> is empty as text and matched
+    every table."""
+    kwargs, decision, _ = review_harness
+    decision[0].update(issue_kind=kind, status="unresolved", reason="Claimed defect.",
+                       observed_text="<br/>")
+    errors, result = await vr.check_visual_rows(**kwargs)
+    assert result["limitation_rows"] == []
+    assert vr.structure_findings({"failed_rows": [112], "visual_review": result}) == {}
+    if kind == "unsupported_layout":
+        assert result["tables"][0]["issue_kind"] == "style"

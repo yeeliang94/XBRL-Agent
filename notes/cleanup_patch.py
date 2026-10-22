@@ -94,11 +94,13 @@ def partition_patch(cells, removals, viewed):
     kept = []
     for cid, cell in cells.items():
         _, nodes, blocks = enumerate_blocks(cell['html'])
-        removed = {op.block for _, op in grouped[cid]}
-        # Dropping an unsafe removal only shrinks `removed`, which cannot make
-        # another removal unsafe, so one pass is enough.
+        # A continuation's retained heading always precedes it, so judging
+        # removals in block order against only the removals already accepted
+        # is exact: a rejected heading deletion keeps its heading, and the
+        # continuation that relies on it is still accepted.
         safe = []
-        for index, op in grouped[cid]:
+        for index, op in sorted(grouped[cid], key=lambda item: item[1].block):
+            removed = {kept.block for kept in safe} | {op.block}
             errors = _removal_errors(index, op, cell, blocks, nodes, removed, viewed)
             if errors:
                 rejected.append((op, '; '.join(errors)))

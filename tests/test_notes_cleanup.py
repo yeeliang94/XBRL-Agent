@@ -358,3 +358,16 @@ async def test_a_failed_save_keeps_the_other_groups_saved(tmp_path, monkeypatch)
     with repo.db_session(db) as conn:
         saved = dict(conn.execute('SELECT sheet, html FROM notes_cells').fetchall())
         assert saved == {'Notes-CI': html, 'Notes-Listofnotes': '<p>Disclosure.</p>'}
+
+
+def test_a_rejected_heading_deletion_does_not_reject_its_continuation():
+    """Greptile PR #41: an unsafe deletion of the retained heading also
+    rejected the safe continuation deletion that keeps it."""
+    from notes.cleanup_patch import partition_patch
+    html = "<h3>2.8 Income taxes</h3><p>Current tax.</p><h3>2.8 Income taxes (cont'd)</h3><p>Deferred.</p>"
+    cells = {'x': {'html': html, 'source_pages': '[1]'}}
+    heading = op(block=0, text='2.8 Income taxes', page=2)
+    continuation = op(block=2, text="2.8 Income taxes (cont'd)", reason='continuation_heading', retained=0)
+    patch, rejected = partition_patch(cells, [heading, continuation], {1})
+    assert patch.removals == [continuation] and [r for r, _ in rejected] == [heading]
+    assert apply_patch(cells, patch, {1})['x']['html'] == '<h3>2.8 Income taxes</h3><p>Current tax.</p><p>Deferred.</p>'
