@@ -33,6 +33,14 @@ format. Report narratives are excluded from the financial-notes reviewer and
 financial-notes source-integrity assessment. Report workers receive the run's
 frozen global agent instructions, not figures-only or notes-only guidance.
 
+After extraction, report narratives join the same guarded page-banner and
+continuation-heading cleanup as financial notes, including report-only runs.
+The first report title, substantive sections, tables, opinions, signatories and
+signing details remain intact. Cleanup retains original HTML and source-page
+evidence, advances the report edit revision, and preserves human overrides.
+Review and mTool preparation read the cleaned canonical narrative. Incomplete
+cleanup remains visible and prevents a clean completion status.
+
 ## mTool preparation
 
 Use the existing Prepare mTool draft workflow and upload a fresh mTool workbook.

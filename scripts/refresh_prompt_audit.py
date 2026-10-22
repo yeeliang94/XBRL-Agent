@@ -113,8 +113,9 @@ def refresh(text: str) -> tuple[str, list[str]]:
         changed.append("reports extraction")
     cleanup_body = (PROMPTS / "notes_cleanup.md").read_text(encoding="utf-8").strip()
     cleanup_section = (
-        '<section id="notes-cleanup"><h2>Final notes cleanup</h2>'
-        '<p>Separate deletion-only author after formatting. Canonical receipts retain original HTML, '
+        '<section id="notes-cleanup"><h2>Final notes and reports cleanup</h2>'
+        '<p>Deletion-only pass for notes and report narratives after review, before source-integrity '
+        'repair and notes formatting. Canonical receipts retain original HTML, '
         'source-page evidence and approved omissions; tables and disclosure content stay unchanged.</p>'
         '<details><summary><span><code>notes_cleanup.md</code> (verbatim)</span><span class="meta">'
         + str(len(cleanup_body.splitlines())) + ' lines</span></summary><pre>'

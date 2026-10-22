@@ -7750,12 +7750,16 @@ async def run_multi_agent_stream(
         # Finalize content before source integrity and appearance verification.
         # Its receipts preserve original HTML and exact source-backed omissions.
         notes_cleanup_incomplete = False
-        if merge_result.success and notes_result is not None:
+        if merge_result.success:
             from notes_types import NOTES_REGISTRY as _CLEANUP_NOTES_REG
+            from reports.registry import REPORTS as _CLEANUP_REPORTS
             _cleanup_sheets = sorted({
                 _CLEANUP_NOTES_REG[r.template_type].sheet_name
-                for r in notes_result.agent_results
+                for r in (notes_result.agent_results if notes_result is not None else [])
                 if r.workbook_path and not _CLEANUP_NOTES_REG[r.template_type].is_numeric
+            } | {
+                _CLEANUP_REPORTS[r.report][2]
+                for r in report_results if r.workbook_path
             })
             if _cleanup_sheets:
                 from notes.cleanup_agent import run_notes_cleanup
@@ -7769,8 +7773,8 @@ async def run_multi_agent_stream(
                     output_dir=output_dir,
                     on_progress=lambda completed, total, removed: _emit_stage(
                         "cleaning_notes",
-                        message=(f"Notes cleanup complete: {removed} banners or repeated headings removed."
-                                 if removed is not None else f"Checking {total} note fields for page banners and repeated headings."),
+                        message=(f"Content cleanup complete: {removed} banners or repeated headings removed."
+                                 if removed is not None else f"Checking {total} note and report fields for page banners and repeated headings."),
                         completed=completed, total=total,
                     ),
                 ))
@@ -7786,7 +7790,7 @@ async def run_multi_agent_stream(
                     _cleanup_outcome = await _cleanup_task
                     notes_cleanup_incomplete = not _cleanup_outcome["ok"]
                     _emit_stage("cleaning_notes", status="failed" if notes_cleanup_incomplete else "succeeded",
-                        message=_cleanup_outcome.get("error") or "Note content finalized; original wording and cleanup evidence retained.")
+                        message=_cleanup_outcome.get("error") or "Content finalized; original wording and cleanup evidence retained.")
                     if _cleanup_outcome.get("changed_rows"):
                         try:
                             await asyncio.to_thread(
@@ -7796,29 +7800,29 @@ async def run_multi_agent_stream(
                             )
                         except Exception:
                             artifact_current = False
-                            logger.exception("Could not refresh workbook after notes cleanup for run %s", run_id)
+                            logger.exception("Could not refresh workbook after content cleanup for run %s", run_id)
                             _enqueue_system_error({
                                 "type": "canonical_notes_refresh_degraded", "phase": "cleaning_notes",
-                                "message": "Cleaned notes are saved, but the merged workbook could not be refreshed.",
+                                "message": "Cleaned content is saved, but the merged workbook could not be refreshed.",
                             })
                 except asyncio.CancelledError:
                     if _safe_mark_finished(db_conn, run_id, "aborted"):
                         terminal_status = "aborted"
                     if client_connected:
                         yield {"event": "error", "data": {
-                            "message": "Run cancelled during notes cleanup",
+                            "message": "Run cancelled during content cleanup",
                             "bucket": ERROR_BUCKET_FATAL,
                         }}
                     return
                 except Exception:
                     notes_cleanup_incomplete = True
-                    logger.exception("Final notes cleanup failed for run %s; saved notes retained", run_id)
+                    logger.exception("Final content cleanup failed for run %s; saved content retained", run_id)
                 finally:
                     task_registry.unregister(session_id, "NOTES_CLEANUP")
                 if notes_cleanup_incomplete:
                     _enqueue_system_error({
                         "type": "notes_cleanup_incomplete", "phase": "cleaning_notes",
-                        "message": "Notes cleanup did not finish. Saved notes are available for review.",
+                        "message": "Content cleanup did not finish. Saved notes and reports are available for review.",
                     })
 
         # Check the run against its frozen source reading, AFTER the notes

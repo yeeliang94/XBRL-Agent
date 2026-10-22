@@ -85,14 +85,19 @@ def save_cleanup(conn, *, run_id, cells, patch, viewed_pages, model):
                 continue
             before = cells[cid]
             current = conn.execute(
-                'SELECT html,content_revision,source_generation_id,content_origin FROM notes_cells '
-                'WHERE run_id=? AND sheet=? AND row=?',
+                "SELECT c.html,c.content_revision,c.source_generation_id,c.content_origin,c.concept_uuid, "
+                "rf.revision AS report_revision, rf.value_status AS report_value_status "
+                "FROM notes_cells c LEFT JOIN report_fields rf ON rf.run_id=c.run_id "
+                "AND rf.target_id=c.concept_uuid AND rf.value_kind='html' "
+                "WHERE c.run_id=? AND c.sheet=? AND c.row=?",
                 (run_id, before['sheet'], before['row']),
             ).fetchone()
             if (not current or current['html'] != before['html']
                 or current['content_revision'] != before['content_revision']
                 or current['source_generation_id'] != before['source_generation_id']
-                or current['content_origin'] == 'human_modified'):
+                or current['content_origin'] == 'human_modified'
+                or current['report_revision'] != before.get('report_revision')
+                or current['report_value_status'] in {'user_override', 'cleared'}):
                 skipped.append(cid)
                 continue
             local_patch = Patch(inspected_cells=[cid], removals=[o for o in patch.removals if o.cell == cid])
@@ -142,5 +147,13 @@ def save_cleanup(conn, *, run_id, cells, patch, viewed_pages, model):
                 'content_revision=COALESCE(content_revision,0)+1 WHERE run_id=? AND sheet=? AND row=?',
                 (cell['html'],now,digest,digest,run_id,before['sheet'],before['row']),
             )
+            if current['report_revision'] is not None:
+                # Report edits use their field revision, so approved content
+                # deletions must invalidate a previously loaded edit as well.
+                conn.execute(
+                    "UPDATE report_fields SET revision=revision+1,updated_at=? "
+                    "WHERE run_id=? AND target_id=? AND value_kind='html'",
+                    (now, run_id, current['concept_uuid']),
+                )
             changed += 1
     return {'changed_rows':changed,'skipped_cells':skipped,'removed_blocks':sum(len(c['removals']) for cid,c in result.items() if cid not in skipped)}

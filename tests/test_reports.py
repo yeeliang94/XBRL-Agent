@@ -80,6 +80,73 @@ def test_invalid_scalar_type_or_selection_never_reaches_canonical_values(report_
         format_value("0012")  # numeric patching keeps its original contract
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("report", list(REPORTS))
+async def test_report_cleanup_preserves_content_and_report_edit_revisions(
+    report_run, tmp_path, monkeypatch, report,
+):
+    from notes import cleanup_agent
+    from notes.cleanup_patch import Patch, Removal, enumerate_blocks
+    from reports.repository import report_view
+
+    db, rid = report_run
+    narrative = next(f for f in fields(report) if f.kind == "html")
+    title = REPORTS[report][0]
+    kept = (f"<h2>{title}</h2><h3>Report section</h3><p>Complete report wording.</p>"
+            "<table><tr><td>2024</td><td>34,970</td></tr></table>"
+            "<p>Signed by the director or auditor on 31 December 2024.</p>")
+    original = "<h1>COMPANY SDN. BHD.</h1><p>Registration No. 123456</p>" + kept
+    original += f"<h2>{title} (continued)</h2><p>Remaining report wording.</p>"
+    with repo.db_session(db) as conn:
+        save_field(conn, rid, report, narrative.concept, original, "observed", "Report pages", [1, 2])
+        before = snapshot(conn, rid)["digest"]
+    sheet = REPORTS[report][2]
+    cid = f"{sheet}:{narrative.row}"
+    pdf = tmp_path / "uploaded.pdf"
+    pdf.write_bytes(b"%PDF")
+
+    async def propose(**kwargs):
+        assert set(kwargs["cells"]) == {cid}
+        blocks = enumerate_blocks(kwargs["cells"][cid]["html"])[2]
+        index = {b["text"]: b["block"] for b in blocks}
+        removals = [Removal(
+            cell=cid, block=index[text], expected_text=text, reason="page_banner",
+            evidence_page=1, justification="Separate company identity page banner.",
+        ) for text in ("COMPANY SDN. BHD.", "Registration No. 123456")]
+        removals.append(Removal(
+            cell=cid, block=index[f"{title} (continued)"], expected_text=f"{title} (continued)",
+            reason="continuation_heading", retained_block=index[title], evidence_page=2,
+            justification="Continuation repeats the retained report title.",
+        ))
+        return Patch(inspected_cells=[cid], removals=removals), {1, 2}
+
+    monkeypatch.setattr(cleanup_agent, "propose_cleanup", propose)
+    result = await cleanup_agent.run_notes_cleanup(
+        run_id=rid, db_path=str(db), pdf_path=str(pdf), sheets=[sheet],
+        model_name="scripted", model_factory=lambda: "scripted", output_dir=str(tmp_path),
+        on_progress=lambda *args: None,
+    )
+    assert result["ok"] and result["removed_blocks"] == 3
+    with repo.db_session(db) as conn:
+        saved = next(f for f in report_view(conn, rid, report)["fields"] if f["kind"] == "html")
+        assert saved["value"] == kept + "<p>Remaining report wording.</p>"
+        assert saved["revision"] == 2
+        assert saved["value_status"] == "observed" and saved["source_pages"] == [1, 2]
+        assert snapshot(conn, rid)["digest"] != before
+        receipt = conn.execute("SELECT before_html, after_html FROM notes_cleanup_receipts WHERE run_id=?", (rid,)).fetchone()
+        assert receipt[:] == (original, saved["value"])
+        exported = next(f for f in build_notes_fill_doc(db, rid)["footnotes"] if f["source_sheet"] == sheet)
+        assert "COMPANY SDN. BHD." not in exported["html"]
+        assert "Registration No." not in exported["html"]
+        assert "Complete report wording." in exported["html"]
+        assert "Remaining report wording." in exported["html"]
+        with pytest.raises(StaleReportEdit):
+            save_field(conn, rid, report, narrative.concept, original, "user_override", "Edit", [1], expected_revision=1)
+        save_field(conn, rid, report, narrative.concept, original, "user_override", "Edit", [1], expected_revision=2)
+    # Human report overrides use report_fields status rather than notes lineage.
+    assert cleanup_agent.cleanup_cells(str(db), rid, [sheet]) == {}
+
+
 def _native_workbook(path, report, report_fields, *, protected=False):
     wb = Workbook(); ws = wb.active; ws.title = REPORTS[report][2]
     for row, field in enumerate(report_fields, 1):

@@ -279,7 +279,17 @@ def write_notes_workbook(
             refs: list[str] = []
             seen: set[str] = set()
             for p in row_payloads:
-                for r in p.source_note_refs:
+                payload_refs = p.source_note_refs
+                if p.numeric_values and not payload_refs:
+                    # Numeric writes already require a structured source
+                    # heading. Retain that identity when the agent omits the
+                    # separate citation list; never infer it from row labels
+                    # or evidence prose, or replace explicit citations.
+                    payload_refs = [
+                        heading["number"].strip()
+                        for heading in (p.parent_note, p.sub_note) if heading
+                    ]
+                for r in payload_refs:
                     if r not in seen:
                         seen.add(r)
                         refs.append(r)
