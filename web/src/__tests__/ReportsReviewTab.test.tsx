@@ -7,7 +7,16 @@ import { fetchNotesFormatStatus, launchNotesFormatter } from "../lib/notesCells"
 vi.mock("../lib/api", () => ({ apiFetch: vi.fn() }));
 vi.mock("../lib/notesCells", () => ({ fetchNotesFormatStatus: vi.fn(), launchNotesFormatter: vi.fn() }));
 vi.mock("../components/NotesReviewTab", () => ({ TIPTAP_EXTENSIONS: [] }));
-vi.mock("@tiptap/react", () => ({ useEditor: () => null, EditorContent: () => null }));
+vi.mock("@tiptap/react", () => ({
+  useEditor: (options: { content: string; editorProps: { attributes: { "aria-label": string } };
+    onUpdate: (event: { editor: { getHTML: () => string } }) => void }) => ({
+    getHTML: () => options.content, setEditable: () => {}, commands: { setContent: () => {} },
+    label: options.editorProps.attributes["aria-label"], value: options.content,
+    change: (value: string) => options.onUpdate({ editor: { getHTML: () => value } }),
+  }),
+  EditorContent: ({ editor }: { editor: { label: string; value: string; change: (value: string) => void } }) =>
+    <textarea aria-label={editor.label} value={editor.value} onChange={event => editor.change(event.target.value)} />,
+}));
 vi.mock("../components/NotesEditorToolbar", () => ({ NotesEditorToolbar: () => null }));
 vi.mock("../components/PdfSourcePane", () => ({ PdfSourcePane: ({ pages, selectionKey, hasSelection }: { pages: number[]; selectionKey: number; hasSelection: boolean }) => <div data-testid="source" data-selected={hasSelection}>{pages.join(",")}:{selectionKey}</div> }));
 
@@ -96,6 +105,33 @@ describe("report review", () => {
     // The finished pass's saved text is shown, not the pre-format copy.
     expect(screen.getByLabelText("Auditor licence number")).toHaveValue("0014");
     expect(apiFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers a formatting recheck after saving narrative changes without reopening the report", async () => {
+    const narrative = { ...field, concept: "ssmt_DisclosureOfAuditorsReportToMembersExplanatory",
+      label: "Report text", kind: "html", value: "<p>Original report.</p>" };
+    vi.mocked(apiFetch).mockResolvedValueOnce({ reports: [
+      { ...loaded.reports[0], fields: [narrative] },
+      { type: "STATEMENT_BY_DIRECTORS", label: "Statement by directors", sheet: "Report-StatementByDirectors", fields: [] },
+    ] }).mockResolvedValueOnce({ ...narrative, value: "<p>Corrected report.</p>", revision: 2 });
+    let saved = false;
+    vi.mocked(fetchNotesFormatStatus).mockImplementation(async (_run, sheet) => saved && sheet === "Report-Auditors"
+      ? { status: "done", sheet, error_type: "verification_stale", error: "Report changed after checking." }
+      : { status: "done", sheet });
+    vi.mocked(launchNotesFormatter).mockResolvedValue({ ok: true, status: "running", sheet: "Report-Auditors" });
+    render(<ReportsReviewTab runId={7} onPreparationBlocked={vi.fn()} />);
+    const input = await screen.findByRole("textbox", { name: "Report text" });
+    await waitFor(() => expect(fetchNotesFormatStatus).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("button", { name: /formatting/i })).toBeNull();
+    fireEvent.change(input, { target: { value: "<p>Corrected report.</p>" } });
+    saved = true;
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    const recheck = await screen.findByRole("button", { name: "Recheck formatting" });
+    expect(screen.getByRole("textbox", { name: "Report text" })).toHaveValue("<p>Corrected report.</p>");
+    expect(fetchNotesFormatStatus).toHaveBeenCalledTimes(3);
+    expect(fetchNotesFormatStatus).toHaveBeenLastCalledWith(7, "Report-Auditors");
+    fireEvent.click(recheck);
+    await waitFor(() => expect(launchNotesFormatter).toHaveBeenCalledWith(7, "Report-Auditors"));
   });
 
   it("navigates all three worksheets and keeps auditor details accessible without losing drafts", async () => {

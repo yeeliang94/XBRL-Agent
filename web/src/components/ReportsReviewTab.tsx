@@ -148,6 +148,7 @@ function ReportsReview({ runId, onPreparationBlocked }: ReportsReviewProps) {
   const [source, setSource] = useState<{ pages: number[]; key: number; selected: boolean }>({ pages: [], key: 0, selected: false });
   const [activeType, setActiveType] = useState<string | null>(null);
   const [formats, setFormats] = useState<Record<string, NotesFormatStatus>>({});
+  const [savedNarrative, setSavedNarrative] = useState<{ sheet: string; revision: number } | null>(null);
   const [formatError, setFormatError] = useState<string | null>(null);
   const [formatLaunching, setFormatLaunching] = useState(false);
   const [dirty, setDirty] = useState<Set<string>>(() => new Set());
@@ -194,6 +195,18 @@ function ReportsReview({ runId, onPreparationBlocked }: ReportsReviewProps) {
     const timer = formatting ? setInterval(() => { void refresh(); }, 2000) : undefined;
     return () => { cancelled = true; if (timer) clearInterval(timer); };
   }, [reportSheets, runId, formatting]);
+  useEffect(() => {
+    if (!savedNarrative) return;
+    let cancelled = false;
+    fetchNotesFormatStatus(runId, savedNarrative.sheet)
+      .then(state => {
+        if (cancelled) return;
+        setFormats(old => ({ ...old, [state.sheet]: state }));
+        setFormatError(null);
+      })
+      .catch(e => { if (!cancelled) setFormatError(userMessage(e)); });
+    return () => { cancelled = true; };
+  }, [runId, savedNarrative]);
   if (error) return <p role="alert">{error}</p>;
   if (!reports) return <p role="status">Loading reports…</p>;
   if (!reports.length) return <p>No reports were selected for this run.</p>;
@@ -210,8 +223,11 @@ function ReportsReview({ runId, onPreparationBlocked }: ReportsReviewProps) {
       setSource(s => ({ pages, key: s.key + 1, selected: true }));
       if (reveal) sourcePaneRef.current?.scrollIntoView?.({ block: "nearest" });
     }}
-    onSaved={saved => setReports(old => old?.map(r => r.type === activeReport.type
-      ? { ...r, fields: r.fields.map(f => f.concept === saved.concept ? saved : f) } : r) ?? [])} />;
+    onSaved={saved => {
+      setReports(old => old?.map(r => r.type === activeReport.type
+        ? { ...r, fields: r.fields.map(f => f.concept === saved.concept ? saved : f) } : r) ?? []);
+      if (saved.kind === "html") setSavedNarrative({ sheet: activeReport.sheet, revision: saved.revision });
+    }} />;
   return <div style={{ containerType: "inline-size", containerName: "reports-review", minWidth: 0 }}>
     <div className="reports-review-layout" style={{ display: "grid", gridTemplateColumns: "220px minmax(0, 1fr) minmax(300px, 35%)", gap: pwc.space.xl, alignItems: "start" }}>
     <aside aria-label="Report template navigator" style={{ minWidth: 0, position: "sticky", top: 116 }}>
