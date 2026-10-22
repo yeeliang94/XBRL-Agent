@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -69,6 +70,70 @@ def test_provenance_and_inventory_round_trip(db_path: Path) -> None:
     assert note3["subnote_refs"] == ["3.1", "3.2", "3.3", "(a)", "(b)"]
     assert note3["subnote_titles"] == {"3.1": "Lease accounting policy"}
     assert note3["subnote_pages"] == {"3.1": {"page_lo": 12, "page_hi": 12}}
+
+
+@pytest.mark.parametrize("template_type,sheet,label", [
+    ("RELATED_PARTY", "Notes-RelatedPartytran", "*Amounts payable"),
+    ("ISSUED_CAPITAL", "Notes-Issuedcapital", "*Number of shares issued and fully paid"),
+])
+@pytest.mark.parametrize("refs,sub_number,expected_refs,expected_states", [
+    ([], None, ["9"], ["not_verified", "not_verified"]),
+    ([], "9.1", ["9", "9.1"], ["cited", "not_verified"]),
+    (["9", "9.2"], "9.1", ["9", "9.2"], ["not_verified", "cited"]),
+])
+def test_numeric_heading_provenance_keeps_written_note_placed(
+    db_path: Path, tmp_path: Path, template_type: str, sheet: str, label: str,
+    refs: list[str], sub_number: str | None, expected_refs: list[str],
+    expected_states: list[str],
+) -> None:
+    """A numeric write must remain locatable after its provenance is saved.
+
+    Numeric agents can identify the source in parent_note/sub_note without
+    repeating it in source_note_refs. A parent citation does not prove every
+    child was captured, and explicit citations retain their own precision.
+    """
+    import openpyxl
+
+    from notes.coverage_checklist import build_draft_checklist
+    from notes.detectors import load_provenance_entries
+    from notes.payload import NotesPayload
+    from notes.writer import payload_sidecar_path, write_notes_workbook
+    from notes_types import NotesTemplateType, notes_template_path
+
+    run_id = _seed_run(db_path)
+    output = tmp_path / "numeric.xlsx"
+    result = write_notes_workbook(
+        template_path=str(notes_template_path(NotesTemplateType(template_type), level="company")),
+        payloads=[NotesPayload(
+            chosen_row_label=label, content="", evidence="PDF page 12, Note 9",
+            source_pages=[12], numeric_values={"company_cy": 123, "company_py": 100},
+            source_note_refs=refs,
+            parent_note={"number": "9", "title": "Source note"},
+            sub_note={"number": sub_number, "title": "Source section"} if sub_number else None,
+        )],
+        output_path=str(output), filing_level="company", sheet_name=sheet,
+    )
+    assert result.success, result.errors
+    assert len(result.numeric_cells) == 2
+    row = result.numeric_cells[0]["row"]
+    workbook = openpyxl.load_workbook(output)
+    try:
+        assert [workbook[sheet].cell(row, col).value for col in (2, 3)] == [123, 100]
+    finally:
+        workbook.close()
+
+    inventory = [{"note_num": 9, "title": "Source note", "subnote_refs": ["9.1", "9.2"]}]
+    persist_notes_review_inputs(
+        db_path=str(db_path), run_id=run_id,
+        sidecar_entries=json.loads(payload_sidecar_path(output).read_text()),
+        inventory=inventory,
+    )
+    entries = load_provenance_entries(run_id, str(db_path))
+    assert entries[0]["source_note_refs"] == expected_refs
+    coverage = build_draft_checklist(inventory_rows=inventory, provenance_entries=entries).rows[0]
+    assert coverage.status == "placed"
+    assert [(p.sheet, p.row) for p in coverage.placements] == [(sheet, row)]
+    assert [s.state for s in coverage.subnotes] == expected_states
 
 
 def test_detectors_identical_from_db_vs_sidecars(db_path: Path) -> None:

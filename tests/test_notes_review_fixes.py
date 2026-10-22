@@ -194,7 +194,7 @@ async def test_notes_agents_persisted_to_run_agents_and_events(
             "SELECT status, turn_count FROM run_agents WHERE statement_type='NOTES_CLEANUP'"
         ).fetchone()
         assert tuple(cleanup) == ("completed", 0)
-        assert "Notes cleanup complete: 0 banners or repeated headings removed." in resp.text
+        assert "Content cleanup complete: 0 banners or repeated headings removed." in resp.text
 
         events = conn.execute(
             "SELECT ae.event_type FROM agent_events ae "

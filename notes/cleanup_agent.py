@@ -1,4 +1,4 @@
-"""Finalize note content before source-integrity repair and appearance checking."""
+"""Finalize notes and report narratives with source-backed deletions only."""
 from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
@@ -30,10 +30,17 @@ class CleanupDeps:
 def cleanup_cells(db_path, run_id, sheets):
     requested = set(sheets)
     with repo.db_session(db_path) as conn:
-        rows = conn.execute('SELECT * FROM notes_cells WHERE run_id=? ORDER BY sheet,row', (run_id,)).fetchall()
+        rows = conn.execute(
+            "SELECT c.*, rf.revision AS report_revision, rf.value_status AS report_value_status "
+            "FROM notes_cells c LEFT JOIN report_fields rf ON rf.run_id=c.run_id "
+            "AND rf.target_id=c.concept_uuid AND rf.value_kind='html' "
+            "WHERE c.run_id=? ORDER BY c.sheet,c.row", (run_id,),
+        ).fetchall()
         cells = {}
         for row in rows:
             if row['sheet'] not in requested or not (row['html'] or '').strip() or row['content_origin'] == 'human_modified':
+                continue
+            if row['report_value_status'] in {'user_override', 'cleared'}:
                 continue
             # Re-entering a finished stage does not apply a second cleanup to
             # the same unchanged cell. A new extraction may replace its receipt.

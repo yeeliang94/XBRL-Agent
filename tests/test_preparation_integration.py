@@ -262,6 +262,85 @@ def test_final_appearance_check_receives_content_after_cleanup_and_integrity_rep
     assert '"stage": "checking_notes"' in response.text
 
 
+@pytest.mark.parametrize("report_only", [True, False])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_report_narratives_receive_final_cleanup_without_requiring_notes(
+    document, pipeline, monkeypatch, report_only, cleanup_fails,
+):
+    import notes.cleanup_agent
+    import notes.coordinator
+    import notes.auto_format
+    import reports.agent
+    from notes.cleanup_patch import Patch, Removal
+    from reports.registry import REPORTS, fields, import_templates
+    from reports.repository import save_field, report_view
+
+    directory, db, _ = document
+    client, _, _, _ = pipeline
+    import_templates(db)
+    report_bodies = {}
+    report_ids = []
+
+    async def extract_reports(config, requested, models, agent_ids, *args):
+        results = []
+        with repo.db_session(db) as conn:
+            for report in requested:
+                narrative = next(f for f in fields(report) if f.kind == "html")
+                body = f"<h2>{REPORTS[report][0]}</h2><p>Complete report wording.</p>"
+                save_field(conn, config.run_id, report, narrative.concept,
+                           "<h1>COMPANY SDN. BHD.</h1>" + body, "observed", "Report page", [1])
+                report_bodies[report] = body
+                report_ids.append(f"{REPORTS[report][2]}:{narrative.row}")
+                path = str(directory / f"{report}.xlsx")
+                repo.finish_run_agent(conn, agent_ids[report], "succeeded", workbook_path=path)
+                results.append(reports.agent.ReportResult(report, "succeeded", path))
+        return results
+
+    async def extract_notes(config, **kwargs):
+        if report_only:
+            return notes.coordinator.NotesCoordinatorResult(agent_results=[])
+        from notes_types import NotesTemplateType
+        with repo.db_session(db) as conn:
+            repo.upsert_notes_cell(conn, run_id=config.run_id, sheet="Notes-CI", row=10,
+                                   label="Company", html="<h1>COMPANY SDN. BHD.</h1><p>Corporate disclosure.</p>", source_pages=[1])
+        return notes.coordinator.NotesCoordinatorResult(agent_results=[
+            notes.coordinator.NotesAgentResult(template_type=NotesTemplateType.CORP_INFO,
+                status="succeeded", workbook_path=str(directory / "notes.xlsx"))])
+
+    async def propose_cleanup(**kwargs):
+        expected = set(report_ids) | (set() if report_only else {"Notes-CI:10"})
+        assert set(kwargs["cells"]) == expected
+        if cleanup_fails:
+            raise ValueError("Synthetic cleanup failure")
+        return Patch(inspected_cells=sorted(expected), removals=[Removal(
+            cell=cid, block=0, expected_text="COMPANY SDN. BHD.", reason="page_banner",
+            evidence_page=1, justification="Separate company name page banner.",
+        ) for cid in sorted(expected)]), {1}
+
+    monkeypatch.setattr(reports.agent, "run_reports", extract_reports)
+    monkeypatch.setattr(notes.coordinator, "run_notes_extraction", extract_notes)
+    monkeypatch.setattr(notes.cleanup_agent, "propose_cleanup", propose_cleanup)
+    monkeypatch.setattr(server, "_run_notes_reviewer_pass", AsyncMock(return_value={"adjustments": [], "flags": []}))
+    monkeypatch.setattr(server, "_run_notes_integrity_check", lambda *a, **k: {"tips_status": False})
+    monkeypatch.setattr(server, "_refresh_merged_notes_workbook", lambda **kwargs: None)
+    monkeypatch.setattr(notes.auto_format, "run_pdf_auto_format", AsyncMock(return_value={"formatted": 0}))
+    response = client.post(f"/api/run/{directory.name}", json={
+        "statements": [] if report_only else ["SOFP"], "variants": {"SOFP": "CuNonCu"},
+        "use_scout": True, "denomination": "thousands",
+        "notes_to_run": [] if report_only else ["CORP_INFO"], "reports_to_run": list(REPORTS),
+    })
+    assert response.status_code == 200, response.text[-2000:]
+    assert '"stage": "cleaning_notes"' in response.text
+    with repo.db_session(db) as conn:
+        run = conn.execute("SELECT id,status FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+        assert run["status"] == ("completed_with_errors" if cleanup_fails else "completed"), response.text[-2000:]
+        for report, body in report_bodies.items():
+            saved = next(f for f in report_view(conn, run["id"], report)["fields"] if f["kind"] == "html")
+            assert saved["value"] == ("<h1>COMPANY SDN. BHD.</h1>" + body if cleanup_fails else body)
+    if cleanup_fails:
+        assert '"type": "notes_cleanup_incomplete"' in response.text
+
+
 @pytest.mark.asyncio
 async def test_configuration_changed_while_waiting_revalidates_before_return(document, monkeypatch):
     import ingest.document_preparation as capture

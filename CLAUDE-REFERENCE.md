@@ -906,6 +906,10 @@ financial-note inventory entries. `reports/registry.py` owns roles 120000 and
 130000 across both standards and filing levels. Their canonical narratives
 share `notes_cells`; typed scalars and assessments live in `report_fields`.
 Financial-notes review and integrity checks exclude these report sheets.
+The shared final cleanup includes their narratives even on report-only runs;
+source-backed deletions preserve substantive report sections and signing details,
+advance report field revisions, and skip human overrides. Pinned by
+`tests/test_reports.py` and `tests/test_preparation_integration.py`.
 Report-only runs do not trigger the prepared financial-note template expansion.
 The report workers use the shared bounded agent loop, cancellation registry and
 frozen global team guidance. See `docs/REPORTS.md`; pinned by
@@ -1033,6 +1037,13 @@ Key invariants:
   `tests/test_notes_structured_table_reproduction.py`, and
   `tests/test_server_notes_cells_api.py`, plus the shared-write regression in
   `tests/test_phase7_notes_unified.py`.
+- **Numeric placement retains structured source identity.** After a successful
+  numeric row write, an empty `source_note_refs` list falls back to the payload's
+  `parent_note.number` and optional `sub_note.number` in writer provenance.
+  Explicit references remain authoritative. A parent citation does not establish
+  coverage of uncited sub-notes. Never infer note identity from labels or evidence
+  prose. The same provenance feeds sidecars and durable review inputs. Pinned by
+  `tests/test_notes_review_provenance.py::test_numeric_heading_provenance_keeps_written_note_placed`.
 - **Scanned-PDF fallback:** if the PyMuPDF-regex inventory pass returns empty,
   `scout.notes_discoverer_vision._vision_inventory` renders the notes section
   in 8-page batches and runs up to 5 vision batches in parallel.
@@ -1574,7 +1585,7 @@ Key invariants:
     tests remain readable; Word source HTML is unchanged.
     Every eligible unstyled/floor prose sheet uses the existing guarded claim,
     content/number/geometry verifier, CAS writes, snapshots and bounded formatter.
-  - **Final notes cleanup** is a content-finalization pass after review and before
+  - **Final notes and reports cleanup** is a content-finalization pass after review and before
     source-integrity assessment, bounded source repair, and appearance formatting, never
     a formatter permission. It may delete source-backed page banners and repeated
     continuation headings only. Canonical receipts retain before/after HTML,
