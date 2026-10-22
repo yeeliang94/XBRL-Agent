@@ -1459,7 +1459,7 @@ Key invariants:
     have a separate eight-request allowance, aggregated into the same token telemetry
     only after correction finishes. A check covering more than
     `visual_review.VISUAL_TABLES_PER_CHECK` tables runs as concurrent chunks, each
-    with only its notes' source pages and its own share of that allowance; a chunk
+    with only its notes' source pages and the whole remaining allowance; a chunk
     that fails leaves only its own notes unresolved. Checker packets omit the
     geometry JSON the canonical HTML already states, send paragraph coordinates
     only for multi-paragraph or hard-break cells, and list prepared declarations

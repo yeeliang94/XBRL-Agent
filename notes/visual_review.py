@@ -102,6 +102,13 @@ def _quote_text(quote: str) -> str:
     return _plain(BeautifulSoup(quote, "html.parser").get_text(" "))
 
 
+def _quotes_table(quote: str, table_text: str) -> bool:
+    """A quote identifies a table only if it has text and that text is there;
+    markup alone (``<br/>``) is empty and would match every table."""
+    text = _quote_text(quote)
+    return bool(text) and text in table_text
+
+
 def _family(prop: str) -> str:
     return prop.split("-", 1)[0]
 
@@ -392,7 +399,9 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
                                (layouts or {}).get(row), {t for r, t in chunk if r == row})
                    for row in chunk_rows]
         # One chunk spends the caller's budget as before. Concurrent chunks
-        # each get what remains of it, then report their usage back.
+        # each get the whole remaining allowance, so a large note's check
+        # costs at most that allowance per chunk; splitting it more thinly
+        # would leave chunks unresolved for lack of requests.
         own_usage = usage if len(chunks) == 1 else RunUsage()
         own_limits = limits if len(chunks) == 1 else UsageLimits(
             request_limit=limits.request_limit - usage.requests)
@@ -504,8 +513,7 @@ def _judge_assessments(decision, reviewable, viewed_pages, by_row, table_text,
             issue = ("Source correction or human review required: "
                      + assessment.content_defect.strip() + "." + also)
         elif (assessment.issue_kind == "structure"
-              and (not assessment.observed_text.strip()
-                   or _quote_text(assessment.observed_text) not in table_text.get(key, ""))):
+              and not _quotes_table(assessment.observed_text, table_text.get(key, ""))):
             # A structure claim that names no text in this table is not
             # evidence about this table; it must not trigger a re-copy.
             assessment.status = "unresolved"
@@ -517,8 +525,7 @@ def _judge_assessments(decision, reviewable, viewed_pages, by_row, table_text,
             assessment.status = "unresolved"
             issue = "Source correction or human review required: " + assessment.reason
         elif (assessment.issue_kind == "unsupported_layout"
-              and (not assessment.observed_text.strip()
-                   or _quote_text(assessment.observed_text) not in table_text.get(key, ""))):
+              and not _quotes_table(assessment.observed_text, table_text.get(key, ""))):
             # An unquoted "cannot be drawn" claim is not evidence about this
             # table: give it one ordinary correction instead of giving up.
             assessment.issue_kind = "style"
