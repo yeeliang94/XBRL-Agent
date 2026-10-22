@@ -9,6 +9,7 @@ import { RunDetailPage } from "../components/RunDetailPage";
 import type { RunTabKey } from "../components/RunDetailView";
 import { fetchRuns, fetchRunDetail, deleteRun, forceAbortRun, restartRun } from "../lib/api";
 import type { RunDetailJson, RunSummaryJson, RunsFilterParams, RunConfigPayload, StatementType, NotesTemplateType } from "../lib/types";
+import { isReportType } from "../lib/types";
 import { createMultiAgentSSE } from "../lib/sse";
 import { TERMS } from "../lib/vocabulary";
 import { fetchNotesFormatStatus } from "../lib/notesCells";
@@ -112,7 +113,7 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
   const handleRetryAgent = (statementType: string): Promise<void> => {
     if (!detail?.config || !detail.session_id) return Promise.reject(new Error("Saved extraction settings are unavailable."));
     const isNotes = statementType.startsWith("NOTES_");
-    const isReport = statementType === "DIRECTORS_REPORT" || statementType === "AUDITORS_REPORT";
+    const isReport = isReportType(statementType);
     const role = isNotes ? statementType.slice(6) : statementType;
     const saved = detail.config as unknown as RunConfigPayload;
     const config: RunConfigPayload = {

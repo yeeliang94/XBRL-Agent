@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import closing
-from dataclasses import dataclass, field
+from copy import deepcopy
+from dataclasses import dataclass, field, replace
 import json
 import logging
 from pathlib import Path
@@ -12,7 +13,9 @@ import sqlite3
 import fitz
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, BinaryContent, RunContext
-from agent_runner import AgentLoopSpec, make_emitter, run_agent_loop, resolve_token_budget
+from pydantic_ai.tools import ToolDefinition
+from agent_runner import (AgentLoopSpec, RetryPolicy, make_emitter, run_agent_loop,
+                          run_agent_with_retries, resolve_token_budget)
 from agent_tracing import MAX_AGENT_ITERATIONS, agent_usage_limits
 from model_settings import build_model_settings
 from db import repository as repo
@@ -22,6 +25,53 @@ from tools.pdf_viewer import render_page_png, count_pdf_pages
 import task_registry
 
 logger = logging.getLogger(__name__)
+
+
+def _retryable_provider_error(exc: BaseException) -> bool:
+    """Retry provider failures, preserving local validation failures as terminal."""
+    from coordinator import _is_transient_error
+    from openai import APIError
+    from pydantic_ai.exceptions import ModelAPIError
+
+    current = exc
+    seen = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if _is_transient_error(current):
+            return True
+        if isinstance(current, (APIError, ModelAPIError)):
+            if getattr(current, "status_code", None) in {429, 500, 502, 503, 504, 529}:
+                return True
+            if isinstance(current, APIError) and "overloaded" in str(current).lower():
+                return True
+        current = current.__cause__ or (None if current.__suppress_context__ else current.__context__)
+    return False
+
+
+def _attempt_usage(agent_run, turns, model) -> dict:
+    """Keep paid usage even when a provider stream fails between recorded turns."""
+    from usage_metrics import split_usage
+    from pricing import estimate_cost_cache_adjusted
+
+    totals = {key: sum(t.get(key, 0) or 0 for t in turns) for key in (
+        "total_tokens", "prompt_tokens", "completion_tokens", "thinking_tokens",
+        "cache_read_tokens", "cache_write_tokens")}
+    try:
+        usage = agent_run.usage
+        metrics = split_usage(usage)
+        for key in ("total_tokens", "prompt_tokens", "completion_tokens", "thinking_tokens"):
+            totals[key] = max(totals[key], getattr(metrics, key))
+        for key in ("cache_read_tokens", "cache_write_tokens"):
+            totals[key] = max(totals[key], int(getattr(usage, key, 0) or 0))
+    except Exception:
+        logger.debug("Report usage aggregate unavailable; retained turn deltas", exc_info=True)
+    try:
+        totals["cost_estimate"] = estimate_cost_cache_adjusted(
+            totals["prompt_tokens"], totals["completion_tokens"], totals["thinking_tokens"],
+            model, totals["cache_read_tokens"], totals["cache_write_tokens"])
+    except Exception:
+        totals["cost_estimate"] = sum(t.get("cost_estimate", 0) or 0 for t in turns)
+    return totals
 
 
 class CapturedField(BaseModel):
@@ -54,6 +104,7 @@ class ReportResult:
 def create_report_agent(model, deps: ReportDeps):
     catalogue = [{"concept": f.concept, "label": f.label, "kind": f.kind, "choices": f.choices}
                  for f in fields(deps.report, deps.standard)]
+    permitted_concepts = [f["concept"] for f in catalogue]
     from agent_instructions import guidance_for_run
     agent = Agent(model=model, deps_type=ReportDeps, end_strategy="early",
                   system_prompt=(ROOT / "prompts/reports.md").read_text(encoding="utf-8")
@@ -97,11 +148,24 @@ def create_report_agent(model, deps: ReportDeps):
         ctx.deps.viewed.update(pages)
         return images
 
-    @agent.tool
+    def prepare_save_fields(ctx: RunContext[ReportDeps], tool_def: ToolDefinition) -> ToolDefinition:
+        # The provider sees only this report's exact taxonomy IDs. Keep runtime
+        # validation too: providers may still return arguments outside the schema.
+        schema = deepcopy(tool_def.parameters_json_schema)
+        schema["$defs"]["CapturedField"]["properties"]["concept"]["enum"] = permitted_concepts
+        return replace(tool_def, parameters_json_schema=schema)
+
+    @agent.tool(retries=2, prepare=prepare_save_fields)
     async def save_report_fields(ctx: RunContext[ReportDeps], captured: list[CapturedField]) -> str:
         """Save report narrative or scalar assessments into the canonical store."""
         from pydantic_ai import ModelRetry
         try:
+            invalid = sorted({f.concept for f in captured} - set(permitted_concepts))
+            if invalid:
+                raise ValueError(
+                    f"Unknown report fields for {ctx.deps.report}: {json.dumps(invalid)}. "
+                    "Nothing in this batch was saved. Correct these IDs and resubmit the complete batch. "
+                    f"Permitted concept IDs (copy exactly): {json.dumps(permitted_concepts)}")
             if len({f.concept for f in captured}) != len(captured):
                 raise ValueError("Assess each field once within a call")
             with closing(sqlite3.connect(ctx.deps.db_path)) as conn, conn:
@@ -128,33 +192,74 @@ async def run_reports(config, requested, models, run_agent_ids, event_queue, ses
         error_type = None
         turns = []
         model = models.get(report, config.model)
+        attempt_usages = []
+        retry_error = None
+
+        async def attempt(retry_index):
+            nonlocal error_type, retry_error
+            try:
+                attempt_turns = []
+                await emit("status", {"phase": "reading_template", "message": f"Reading {REPORTS[report][0]}"})
+                deps = ReportDeps(config.pdf_path, config.db_path, config.run_id, report, config.filing_standard,
+                                  await asyncio.to_thread(count_pdf_pages, config.pdf_path))
+                agent = create_report_agent(model, deps)
+                spec = AgentLoopSpec(agent_role=role, model=model, turn_timeout=180,
+                                     phase_map={"read_pdf_pages": "viewing_pdf", "view_pdf_pages": "viewing_pdf", "save_report_fields": "writing_notes"},
+                                     phase_message=lambda _, phase: f"{REPORTS[report][0]}: {phase.replace('_', ' ')}",
+                                     wallclock_timeout=1800, token_budget=resolve_token_budget())
+                from agent_tracing import save_messages_trace
+                from model_settings import describe_model_runtime
+                async with agent.iter("Locate and extract the requested report and assess every catalogue field.",
+                                      deps=deps, usage_limits=agent_usage_limits(MAX_AGENT_ITERATIONS)) as agent_run:
+                    try:
+                        await run_agent_loop(agent_run, deps, spec, emit, attempt_turns)
+                    finally:
+                        turns.extend(attempt_turns)
+                        attempt_usages.append(_attempt_usage(agent_run, attempt_turns, model))
+                        messages = list(agent_run.ctx.state.message_history)
+                        runtime = describe_model_runtime(model, role=report)
+                        save_messages_trace(messages, config.output_dir, f"{report}_attempt{retry_index}",
+                                            turns=attempt_turns, runtime_metadata=runtime)
+                        save_messages_trace(messages, config.output_dir, report,
+                                            turns=attempt_turns, runtime_metadata=runtime)
+                with closing(sqlite3.connect(config.db_path)) as conn:
+                    view = report_view(conn, config.run_id, report)
+                    incomplete = [f for f in view["fields"] if f["value_status"] == "unresolved" or (f["kind"] == "html" and not f["value"])]
+                    output = str(Path(config.output_dir) / f"{report}_filled.xlsx")
+                    export_internal(conn, config.run_id, report, output)
+                result.workbook_path = output
+                result.status = "failed" if incomplete else "succeeded"
+                result.error = "Report assessment incomplete. Review missing or uncertain fields." if incomplete else None
+                error_type = "report_incomplete" if incomplete else None
+                return result
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if _retryable_provider_error(exc):
+                    retry_error = exc
+                    raise
+                return await terminal(exc, str(exc))
+
+        async def terminal(exc, _last_error):
+            nonlocal error_type
+            logger.error("Report extraction failed for %s", report, exc_info=exc)
+            error_type = "transient_exhausted" if _retryable_provider_error(exc) else None
+            result.status = "failed"
+            result.error = "Report extraction failed. Captured values are retained for review."
+            return result
+
+        async def on_retry(total_attempts, _last_error):
+            from notes._rate_limit import compute_backoff_delay
+            await emit("status", {"phase": "retrying", "message":
+                f"{REPORTS[report][0]}: provider interrupted extraction. Retrying ({total_attempts}/2); captured values are retained."})
+            await asyncio.sleep(compute_backoff_delay(retry_error, 0))
+
         try:
-            await emit("status", {"phase": "reading_template", "message": f"Reading {REPORTS[report][0]}"})
-            deps = ReportDeps(config.pdf_path, config.db_path, config.run_id, report, config.filing_standard,
-                              await asyncio.to_thread(count_pdf_pages, config.pdf_path))
-            agent = create_report_agent(model, deps)
-            spec = AgentLoopSpec(agent_role=role, model=model, turn_timeout=180,
-                                 phase_map={"read_pdf_pages": "viewing_pdf", "view_pdf_pages": "viewing_pdf", "save_report_fields": "writing_notes"},
-                                 phase_message=lambda _, phase: f"{REPORTS[report][0]}: {phase.replace('_', ' ')}",
-                                 wallclock_timeout=1800, token_budget=resolve_token_budget())
-            from agent_tracing import save_messages_trace
-            from model_settings import describe_model_runtime
-            async with agent.iter("Locate and extract the requested report and assess every catalogue field.",
-                                  deps=deps, usage_limits=agent_usage_limits(MAX_AGENT_ITERATIONS)) as agent_run:
-                try:
-                    await run_agent_loop(agent_run, deps, spec, emit, turns)
-                finally:
-                    save_messages_trace(list(agent_run.ctx.state.message_history), config.output_dir, report,
-                                        turns=turns, runtime_metadata=describe_model_runtime(model, role=report))
-            with closing(sqlite3.connect(config.db_path)) as conn:
-                view = report_view(conn, config.run_id, report)
-                incomplete = [f for f in view["fields"] if f["value_status"] == "unresolved" or (f["kind"] == "html" and not f["value"])]
-                output = str(Path(config.output_dir) / f"{report}_filled.xlsx")
-                export_internal(conn, config.run_id, report, output)
-            result.workbook_path = output
-            result.status = "failed" if incomplete else "succeeded"
-            result.error = "Report assessment incomplete. Review missing or uncertain fields." if incomplete else None
-            error_type = "report_incomplete" if incomplete else None
+            result = await run_agent_with_retries(
+                attempt=attempt,
+                policy=RetryPolicy(rate_limit_retries=0, generic_retries=1,
+                                   is_rate_limit=lambda _: False),
+                make_terminal=terminal, on_retry=on_retry, label=f"Report {report}")
         except asyncio.CancelledError:
             result.status, result.error = "cancelled", "Report extraction stopped. Captured values are retained."
             error_type = "cancelled"
@@ -166,13 +271,13 @@ async def run_reports(config, requested, models, run_agent_ids, event_queue, ses
                 rai = run_agent_ids[report]
                 repo.insert_agent_turns(conn, rai, turns)
                 repo.finish_run_agent(conn, rai, result.status, workbook_path=result.workbook_path,
-                                      total_tokens=sum(t.get("total_tokens", 0) for t in turns),
-                                      total_cost=sum(t.get("cost_estimate", 0) for t in turns),
-                                      prompt_tokens=sum(t.get("prompt_tokens", 0) for t in turns),
-                                      completion_tokens=sum(t.get("completion_tokens", 0) for t in turns),
-                                      reasoning_tokens=sum(t.get("thinking_tokens", 0) for t in turns),
-                                      cache_read_tokens=sum(t.get("cache_read_tokens", 0) for t in turns),
-                                      cache_write_tokens=sum(t.get("cache_write_tokens", 0) for t in turns),
+                                      total_tokens=sum(u["total_tokens"] for u in attempt_usages),
+                                      total_cost=sum(u["cost_estimate"] for u in attempt_usages),
+                                      prompt_tokens=sum(u["prompt_tokens"] for u in attempt_usages),
+                                      completion_tokens=sum(u["completion_tokens"] for u in attempt_usages),
+                                      reasoning_tokens=sum(u["thinking_tokens"] for u in attempt_usages),
+                                      cache_read_tokens=sum(u["cache_read_tokens"] for u in attempt_usages),
+                                      cache_write_tokens=sum(u["cache_write_tokens"] for u in attempt_usages),
                                       tool_call_count=sum(t.get("_n_tool_calls", 0) for t in turns),
                                       turn_count=len(turns), error_message=result.error,
                                       error_type=error_type)

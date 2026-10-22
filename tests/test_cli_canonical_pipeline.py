@@ -184,3 +184,27 @@ def test_cli_notes_bootstrap_failure_ends_run_before_extraction(cli_env):
     with sqlite3.connect(out / "xbrl_agent.db") as conn:
         runs = conn.execute("SELECT status FROM runs").fetchall()
     assert runs == [("failed",)]
+
+
+def test_cli_report_failure_is_returned_with_retained_output(cli_env, monkeypatch, capsys):
+    out, pdf = cli_env
+
+    async def failed_report(**kwargs):
+        assert kwargs["run_config"].reports_to_run == ["STATEMENT_BY_DIRECTORS"]
+        yield {"event": "complete", "data": {"agent_role": "STATEMENT_BY_DIRECTORS",
+            "success": False, "message": "Report extraction failed. Captured values are retained for review."}}
+        yield {"event": "run_complete", "data": {"success": False, "run_id": 7,
+            "merged_workbook": str(out / "retained.xlsx"),
+            "reports_failed": ["STATEMENT_BY_DIRECTORS"]}}
+
+    monkeypatch.setattr(server, "run_multi_agent_stream", failed_report)
+    with patch("concept_model.bootstrap.import_all_face_templates", return_value=[]), \
+         patch("concept_model.bootstrap.import_all_notes_templates", return_value=[]):
+        result = run.run_agent(pdf_path=pdf, model="test-model", output_dir=str(out),
+                               statements=set(), reports={"STATEMENT_BY_DIRECTORS"},
+                               denomination="units", use_scout=False)
+    assert not result.success
+    assert result.errors == ["REPORT STATEMENT_BY_DIRECTORS: extraction failed"]
+    assert result.run_id == 7
+    assert result.output_excel_path == str(out / "retained.xlsx")
+    assert "FAILED (Report extraction failed." in capsys.readouterr().out

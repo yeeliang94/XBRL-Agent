@@ -3,7 +3,7 @@
   "missing_required_mappings": [],
   "numeric_slots": 9314,
   "prose_slots": 688,
-  "report_slots": 176,
+  "report_slots": 292,
   "reviewed_exceptions": [
     {
       "code": "PRESENTATION_TITLE_WITHOUT_TAXONOMY_SLOT",
@@ -301,6 +301,18 @@
       "writable_slots": 22
     },
     {
+      "filename": "Report-StatementByDirectors.xlsx",
+      "fingerprint": "839734d92fcee43e7eec003618c8b1d09b4d056718bc5e1d1e88e84cdee3de97",
+      "manifest_version": "2022-v1-slot-semantics-3",
+      "mapped_writable_slots": 27,
+      "path": "XBRL-template-MFRS/Company/Report-StatementByDirectors.xlsx",
+      "semantic_coverage": "complete",
+      "slots": 29,
+      "template_id": "mfrs-company-report-statementbydirectors-v1",
+      "worksheets": 1,
+      "writable_slots": 27
+    },
+    {
       "filename": "01-SOFP-CuNonCu.xlsx",
       "fingerprint": "7ac28009d6221d97be4e6b6ef01ce66d388287c9e9cd767064708a3fc305d5fe",
       "manifest_version": "2022-v1-slot-semantics-3",
@@ -491,6 +503,18 @@
       "template_id": "mfrs-group-report-directors-v1",
       "worksheets": 1,
       "writable_slots": 22
+    },
+    {
+      "filename": "Report-StatementByDirectors.xlsx",
+      "fingerprint": "839734d92fcee43e7eec003618c8b1d09b4d056718bc5e1d1e88e84cdee3de97",
+      "manifest_version": "2022-v1-slot-semantics-3",
+      "mapped_writable_slots": 27,
+      "path": "XBRL-template-MFRS/Group/Report-StatementByDirectors.xlsx",
+      "semantic_coverage": "complete",
+      "slots": 29,
+      "template_id": "mfrs-group-report-statementbydirectors-v1",
+      "worksheets": 1,
+      "writable_slots": 27
     },
     {
       "filename": "01-SOFP-CuNonCu.xlsx",
@@ -697,6 +721,18 @@
       "writable_slots": 22
     },
     {
+      "filename": "Report-StatementByDirectors.xlsx",
+      "fingerprint": "839734d92fcee43e7eec003618c8b1d09b4d056718bc5e1d1e88e84cdee3de97",
+      "manifest_version": "2022-v1-slot-semantics-3",
+      "mapped_writable_slots": 27,
+      "path": "XBRL-template-MPERS/Company/Report-StatementByDirectors.xlsx",
+      "semantic_coverage": "complete",
+      "slots": 29,
+      "template_id": "mpers-company-report-statementbydirectors-v1",
+      "worksheets": 1,
+      "writable_slots": 27
+    },
+    {
       "filename": "01-SOFP-CuNonCu.xlsx",
       "fingerprint": "3bdcd2200adfc0de43e71b478d917442fc654534e986cf19330172cd80d07b98",
       "manifest_version": "2022-v1-slot-semantics-3",
@@ -899,9 +935,21 @@
       "template_id": "mpers-group-report-directors-v1",
       "worksheets": 1,
       "writable_slots": 22
+    },
+    {
+      "filename": "Report-StatementByDirectors.xlsx",
+      "fingerprint": "839734d92fcee43e7eec003618c8b1d09b4d056718bc5e1d1e88e84cdee3de97",
+      "manifest_version": "2022-v1-slot-semantics-3",
+      "mapped_writable_slots": 27,
+      "path": "XBRL-template-MPERS/Group/Report-StatementByDirectors.xlsx",
+      "semantic_coverage": "complete",
+      "slots": 29,
+      "template_id": "mpers-group-report-statementbydirectors-v1",
+      "worksheets": 1,
+      "writable_slots": 27
     }
   ],
-  "templates": 66,
+  "templates": 70,
   "unclassified_slots": 0,
-  "worksheets": 82
+  "worksheets": 86
 }

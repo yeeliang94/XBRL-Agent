@@ -13,7 +13,7 @@ import { errorGuidance } from "../lib/errorGuidance";
 import { StatusIcon } from "./StatusIcon";
 import { ArrowForward } from "./iconGlyphs";
 import type { RunDetailJson, RunAgentJson, CrossCheckResult, ErrorData } from "../lib/types";
-import { STATEMENT_LABELS, STATEMENT_TYPES, NOTES_TEMPLATE_TYPES } from "../lib/types";
+import { STATEMENT_LABELS, STATEMENT_TYPES, NOTES_TEMPLATE_TYPES, REPORT_TYPES, isReportType } from "../lib/types";
 import { userMessage } from "../lib/errors";
 import { AgentTelemetryPanel } from "./AgentTelemetryPanel";
 import { DiagnosticsExport } from "./DiagnosticsExport";
@@ -376,7 +376,7 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
               codes or format keys. */}
           <span style={styles.agentStatement}>{workstreamTitle(agent.statement_type, filingStandard) ?? displayName}</span>
           {onRetry && ["failed", "cancelled", "aborted"].includes(agent.status) &&
-            ([...STATEMENT_TYPES, "DIRECTORS_REPORT", "AUDITORS_REPORT", ...NOTES_TEMPLATE_TYPES.map((type) => `NOTES_${type}`)] as string[]).includes(agent.statement_type) &&
+            ([...STATEMENT_TYPES, ...REPORT_TYPES, ...NOTES_TEMPLATE_TYPES.map((type) => `NOTES_${type}`)] as string[]).includes(agent.statement_type) &&
             <button type="button" style={ui.buttonSecondary} disabled={retryPending}
               onClick={() => onRetry(agent.statement_type)}>Retry {displayName}</button>}
           {agent.error_type && (
@@ -453,7 +453,6 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
   );
 }
 
-const isReportType = (type: string) => type === "DIRECTORS_REPORT" || type === "AUDITORS_REPORT";
 
 function recordedAgentStatus(agent: RunAgentJson): string {
   // Older reviews recorded a completed human escalation as a tool exception.
@@ -938,7 +937,7 @@ export function RunDetailView({
     { key: "overview", label: "Overview" },
     ...(canonicalEnabled ? [{ key: "values" as RunTabKey, label: "Figures" }] : []),
     { key: "notes", label: "Notes" },
-    ...(((detail.config?.reports_to_run as string[] | undefined)?.length || detail.agents.some(a => a.statement_type === "DIRECTORS_REPORT" || a.statement_type === "AUDITORS_REPORT")) ? [{ key: "reports" as RunTabKey, label: "Reports" }] : []),
+    ...(((detail.config?.reports_to_run as string[] | undefined)?.length || detail.agents.some(a => isReportType(a.statement_type))) ? [{ key: "reports" as RunTabKey, label: "Reports" }] : []),
     { key: "checks", label: "Cross-checks" },
     { key: "agents", label: "Activity" },
     ...(canonicalEnabled ? [{ key: "review" as RunTabKey, label: "AI review" }] : []),
@@ -960,7 +959,7 @@ export function RunDetailView({
     replaceRunTabInUrl(activeTab);
     announceRunTabChange(activeTab);
   }, [activeTab, isRunning, tab]);
-  const reviewWorkspaceActive = activeTab === "values" || activeTab === "notes";
+  const reviewWorkspaceActive = activeTab === "values" || activeTab === "notes" || activeTab === "reports";
   const rollup = detail.telemetry_rollup;
   const sidecarNotice = detail.pdf_sidecar ? describePdfSidecar(detail.pdf_sidecar) : null;
   const sidecarIssue = detail.pdf_sidecar?.partial
@@ -1076,7 +1075,7 @@ export function RunDetailView({
       <ConfirmDialog isOpen={retryAgent != null} title="Retry extraction?"
         message={retryAgent?.startsWith("NOTES_")
           ? "This replaces extracted results and any edits for the selected notes template. For prepared documents, it also reruns Corporate Information, Accounting Policies and List of Notes, replacing results and edits in every retried template."
-          : retryAgent === "DIRECTORS_REPORT" || retryAgent === "AUDITORS_REPORT"
+          : retryAgent != null && isReportType(retryAgent)
             ? "This extracts the selected report again in a new run. Your current report and edits remain saved."
             : "This replaces extracted results and any edits for the selected statement."}
         confirmLabel="Retry extraction" onCancel={() => setRetryAgent(null)}
@@ -1125,7 +1124,7 @@ export function RunDetailView({
             style={isInvestigationOutcome ? ui.buttonSecondary : ui.buttonPrimary}
             title={
               notesPreparationBlocked
-                ? tab === "reports" ? "Save or discard report changes before preparing mTool" : "Wait for notes to finish saving or formatting before preparing mTool"
+                ? tab === "reports" ? "Finish report edits or formatting before preparing mTool" : "Wait for notes to finish saving or formatting before preparing mTool"
                 : canFillMtool
                 ? isInvestigationOutcome
                   ? "Prepare an investigation draft using your mTool template"
@@ -1148,7 +1147,7 @@ export function RunDetailView({
               Compare with human file
             </button>
           )}
-          {notesPreparationBlocked && <span role="status" style={styles.dim}>{tab === "reports" ? "Save or discard report changes before preparing." : "Notes have unsaved changes or active formatting. Resolve any save errors in Notes before preparing."}</span>}
+          {notesPreparationBlocked && <span role="status" style={styles.dim}>{tab === "reports" ? "Finish report edits or formatting before preparing." : "Notes have unsaved changes or active formatting. Resolve any save errors in Notes before preparing."}</span>}
           {/* The "Figures" tab is the single door to reviewing values — the
               old duplicate "Review values" button was removed (Phase 2). */}
           {/* Keep routine preparation in the header. Run management sits at
