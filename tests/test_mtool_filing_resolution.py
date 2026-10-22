@@ -308,7 +308,11 @@ def test_real_native_category_note_fields_round_trip_independent_xml(tmp_path, s
     assert result['outcomes'].get('mapped_correctly',0) >= minimum_inputs, result
     assert not any(result['outcomes'].get(k,0) for k in (
         'stored','wrong_native_destination','numeric_readback_failed','public_write_rejected')), result
-    assert result['unresolved_reason_counts'] == {'template_period_section_missing':minimum_inputs}, result
+    # Comparatives with no prior-year section: unresolved on SOCIE, not filed on
+    # the current-year-only numeric notes sheets.
+    reasons = {**result['unresolved_reason_counts'], **result['excluded_reason_counts']}
+    assert set(reasons) <= {'template_period_section_missing', 'comparative_not_filed_on_sheet'}, result
+    assert sum(reasons.values()) == minimum_inputs, result
     assert result['source_unchanged']
     assert not result['style_changes'] and not result['formula_changes']
     assert not result['reverse_issues'] and result['reverse_error'] is None, result

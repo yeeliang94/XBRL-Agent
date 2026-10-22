@@ -26,6 +26,28 @@ def test_prepared_group_prompt_explains_numeric_entity_columns(kind):
     assert "omit undisclosed scopes" in prompt
 
 
+@pytest.mark.parametrize("prepared", [False, True])
+@pytest.mark.parametrize("denomination", ["thousands", "units"])
+@pytest.mark.parametrize("kind, rules", [
+    (NotesTemplateType.ISSUED_CAPITAL, "=== ISSUED-CAPITAL NUMERIC RULES ==="),
+    (NotesTemplateType.RELATED_PARTY, "=== RELATED-PARTY NUMERIC RULES ==="),
+])
+def test_both_workflows_carry_the_numeric_sheet_rules(kind, rules, prepared, denomination):
+    # Runs 197-203: the prepared path dropped the dedicated sheet rules and
+    # told agents to keep the source table's signs.
+    prompt = notes_agent.render_notes_prompt(kind, "company", [], denomination=denomination,
+                                            prepared_source_required=prepared)
+    assert prompt.count(rules) == 1
+    assert "income/expense sign convention" not in prompt
+    # The shared denomination block must not override whole-share conversion.
+    assert "Transcribe each monetary figure EXACTLY as printed" in prompt
+    assert "divide monetary amounts" in prompt
+    assert "Transcribe each figure EXACTLY as printed" not in prompt
+    assert "divide values" not in prompt
+    if kind == NotesTemplateType.ISSUED_CAPITAL:
+        assert "multiply the printed figure by 1,000" in prompt
+
+
 @pytest.mark.parametrize("level", ["company", "group"])
 @pytest.mark.parametrize("standard", ["mfrs", "mpers"])
 @pytest.mark.parametrize("kind", [NotesTemplateType.ISSUED_CAPITAL, NotesTemplateType.RELATED_PARTY])

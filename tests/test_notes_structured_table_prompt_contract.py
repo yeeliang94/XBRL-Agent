@@ -38,7 +38,7 @@ def test_issued_capital_prompt_requires_table_reproduction() -> None:
 
 
 def test_issued_capital_prompt_disambiguates_repeated_balance_labels() -> None:
-    body = _flat("notes_issued_capital.md")
+    body = _flat("_numeric_issued_capital.md")
     assert "shares issued and fully paid > amount of shares issued and fully paid" in body
     assert "shares outstanding > number of shares outstanding" in body
     assert "monetary amount" in body
@@ -49,7 +49,8 @@ def test_structured_prompts_carry_no_standard_literal() -> None:
     # Mirrors test_notes_prompts_no_mfrs_leak — the table-reproduction
     # wording must not reintroduce an "MFRS" literal that leaks into an
     # MPERS rendering.
-    for name in ("notes_issued_capital.md", "notes_related_party.md"):
+    for name in ("notes_issued_capital.md", "notes_related_party.md",
+                 "_numeric_issued_capital.md", "_numeric_related_party.md"):
         assert "mfrs" not in _read(name).lower(), f"{name} leaks an MFRS literal"
 
 
@@ -66,6 +67,6 @@ def test_related_party_prompt_requires_table_reproduction() -> None:
 
 
 def test_related_party_prompt_forbids_subtraction_only_residuals() -> None:
-    body = _flat("notes_related_party.md")
+    body = _flat("_numeric_related_party.md")
     assert "subtraction-only residual" in body
     assert "leave the row blank" in body

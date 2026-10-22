@@ -450,8 +450,8 @@ def _render_denomination_block(
     thousands when it is thousands costs nothing and thousands is the
     overwhelmingly common Malaysian case; distinguishing it from the untouched
     default would need a "was-touched" flag threaded through the whole config,
-    which isn't worth it. Either way the system transcribes figures verbatim
-    (no scaling math anywhere) — the scale is interpretive context only.
+    which isn't worth it. Monetary figures are transcribed verbatim; share
+    counts follow their own unit rules.
 
     When the scout's independently-detected ``scout_scale_unit`` DISAGREES
     with the declared denomination, a loud reconciliation warning is appended
@@ -466,10 +466,10 @@ def _render_denomination_block(
             "=== PRESENTATION DENOMINATION (DEFAULT — VERIFY) ===",
             (
                 f"The run is using the default scale of {label}. VERIFY this "
-                f"against the statement header before writing any number — a "
-                f"wrong unit produces a 1000× error. Transcribe each figure "
+                f"against the statement header before writing any monetary amount — a "
+                f"wrong unit produces a 1000× error. Transcribe each monetary figure "
                 f"EXACTLY as printed in the PDF; do NOT rescale, multiply, or "
-                f"divide values."
+                f"divide monetary amounts."
             ),
         ]
     else:
@@ -480,8 +480,8 @@ def _render_denomination_block(
             (
                 f"The source statements are presented in {label}. This is the "
                 f"filer's declared scale — treat it as AUTHORITATIVE; do not guess "
-                f"the unit. Transcribe each figure EXACTLY as printed in the PDF; "
-                f"do NOT rescale, multiply, or divide values."
+                f"the monetary unit. Transcribe each monetary figure EXACTLY as printed in the PDF; "
+                f"do NOT rescale, multiply, or divide monetary amounts."
             ),
         ]
     if scout_scale_unit in _SCALE_UNIT_LABELS and scout_scale_unit != denomination:
@@ -489,7 +489,7 @@ def _render_denomination_block(
             f"WARNING: the scout read the statement header as "
             f"{_SCALE_UNIT_LABELS[scout_scale_unit]}, which DISAGREES with the "
             f"declared {label}. Re-read the statement header to confirm the "
-            f"scale before writing any number — a wrong unit produces a 1000× error."
+            f"scale before writing any monetary amount — a wrong unit produces a 1000× error."
         )
     return "\n".join(lines)
 

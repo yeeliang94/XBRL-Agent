@@ -98,6 +98,9 @@ class NotesWriteResult:
     # run_concept_facts via cell_resolver so numeric notes are captured the
     # same way face statements are. Empty on prose-only sheets.
     numeric_cells: list[dict] = field(default_factory=list)
+    # Filled by the agent after merging: earlier numeric values this call
+    # replaced with a different value (same row, column and category).
+    replaced_numeric: list[str] = field(default_factory=list)
 
 
 # Scores below this threshold are logged at WARNING as "borderline". The
@@ -186,6 +189,35 @@ def write_notes_workbook(
                 sheet_name, payload.chosen_row_label, chosen_label, score,
             )
         rows_consumed.setdefault(row, []).append(payload)
+
+    # Two different figures for the same row/category/column in one call are
+    # distinct source items, not a correction. Keeping either would silently
+    # drop the other (run 203: 5,887 lost behind 3,266), so reject the row and
+    # ask for one combined figure. Identical repeats stay harmless.
+    from concept_model.dimensions import dimension_key
+    for row, row_payloads in list(rows_consumed.items()):
+        seen_values: dict[tuple, object] = {}
+        clashes: list[str] = []
+        for p in row_payloads:
+            for col, val in _numeric_write_cols(p.numeric_values or {}, filing_level):
+                if val is None or val == "":
+                    continue
+                key = (dimension_key(p.dimensions), col)
+                if key in seen_values and seen_values[key] != val:
+                    clashes.append(
+                        f"{key[0] or 'no category'} column {col}: "
+                        f"{seen_values[key]} and {val}"
+                    )
+                seen_values.setdefault(key, val)
+        if clashes:
+            del rows_consumed[row]
+            errors.append(
+                f"Row '{row_payloads[0].chosen_row_label}' not written: one call sent "
+                f"different values for the same category and period ({'; '.join(clashes)}). "
+                "If these are distinct source items, add them and resubmit one combined "
+                "figure naming each component in evidence; if one is a misreading, "
+                "resubmit only the correct value."
+            )
 
     evidence_col = _evidence_col(filing_level)
 

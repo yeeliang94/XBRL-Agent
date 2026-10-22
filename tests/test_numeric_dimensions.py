@@ -50,6 +50,8 @@ def test_numeric_note_payloads_reach_distinct_native_categories(tmp_path, separa
     for batch in batches:
         result = _write_payloads_through_writer_impl(deps, batch)
         assert result.success, result.errors
+    # A later reading replaces the earlier one, and the agent is told so.
+    assert len(result.replaced_numeric) == (2 if separate_calls else 0)
     projected = project_writes(db, run, tid, deps.numeric_cells)
     assert projected.projected == 4
     from api.notes import _numeric_sheet_rows
@@ -73,7 +75,9 @@ def test_numeric_note_payloads_reach_distinct_native_categories(tmp_path, separa
     ws['D7'] = payloads[0].chosen_row_label
     native = tmp_path / 'native.xlsx'; wb.save(native); wb.close()
     ready, coverage = resolve_filing_doc(str(native), doc)
-    assert coverage['unmapped'] == 2  # Comparatives persist; no PY section.
+    # Comparatives persist in the run; a current-year-only sheet does not file them.
+    assert (coverage['unmapped'], coverage['excluded']) == (0, 2)
+    assert coverage['status'] != 'partial', coverage
     assert all(w['period'] == 'CY' for w in ready['writes'])
     output = tmp_path / 'filled.xlsx'
     assert fill_workbook(str(native), ready, str(output))['status'] == 'ok'
@@ -113,23 +117,32 @@ def test_dimension_order_is_not_identity():
         dimension_key({'': 'unknown'})
 
 
-def test_numeric_category_replacement_uses_submission_order_in_both_outputs(tmp_path):
+def test_conflicting_values_for_one_category_in_one_call_are_rejected(tmp_path):
+    # Run 203: two distinct related-party expenses in one call shared a row and
+    # category, and the later value silently replaced the earlier one.
     from notes.payload import NotesPayload
     from notes.writer import write_notes_workbook
     from notes_types import NotesTemplateType, notes_template_path
     from openpyxl import load_workbook
-    payloads = [NotesPayload(
-        chosen_row_label='*Number of shares issued and fully paid', content='',
-        parent_note={'number': '4', 'title': 'Share capital'}, source_pages=[page],
-        evidence=f'Page {page}: synthetic share count',
-        numeric_values={'cy': value, **({'py': 40} if page == 9 else {})},
-        dimensions={'ifrs-full_ClassesOfShareCapitalAxis': 'ifrs-full_OrdinarySharesMember'},
-    ) for page, value in [(9, 50), (3, 60)]]
+    def payload(cy, py=None):
+        return NotesPayload(
+            chosen_row_label='*Number of shares issued and fully paid', content='',
+            parent_note={'number': '4', 'title': 'Share capital'}, source_pages=[3],
+            evidence='Page 3: synthetic share count',
+            numeric_values={'cy': cy, **({'py': py} if py is not None else {})},
+            dimensions={'ifrs-full_ClassesOfShareCapitalAxis': 'ifrs-full_OrdinarySharesMember'},
+        )
+    template = str(notes_template_path(NotesTemplateType.ISSUED_CAPITAL, level='company'))
     path = tmp_path / 'diagnostic.xlsx'
-    result = write_notes_workbook(str(notes_template_path(NotesTemplateType.ISSUED_CAPITAL, level='company')),
-                                 payloads, str(path), 'company', 'Notes-Issuedcapital')
-    assert len(result.numeric_cells) == 2
-    assert sorted(c['value'] for c in result.numeric_cells) == [40, 60]
+    result = write_notes_workbook(template, [payload(50, 40), payload(60)], str(path),
+                                  'company', 'Notes-Issuedcapital')
+    assert result.numeric_cells == []
+    assert any('one combined figure' in e for e in result.errors)
+    # An identical repeat is not a conflict.
+    result = write_notes_workbook(template, [payload(50, 40), payload(50)], str(path),
+                                  'company', 'Notes-Issuedcapital')
+    assert not result.errors
+    assert sorted(c['value'] for c in result.numeric_cells) == [40, 50]
     book = load_workbook(path)
     for cell in result.numeric_cells:
         assert book[cell['sheet']].cell(cell['row'], cell['col']).value == cell['value']
