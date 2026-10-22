@@ -27,6 +27,8 @@ export interface FilingCoverage {
   coverage_percent: number;
   unresolved_writes: FilingCoverageIssue[];
   ambiguous_writes: FilingCoverageIssue[];
+  excluded?: number;
+  excluded_writes?: FilingCoverageIssue[];
   operator_resolutions?: (FilingCoverageIssue & { cell: string })[];
 }
 
@@ -55,6 +57,8 @@ export function normaliseFilingCoverage(body: unknown): FilingCoverage | null {
     ambiguous_writes: Array.isArray(raw.ambiguous_writes)
       ? raw.ambiguous_writes
       : [],
+    excluded: typeof raw.excluded === "number" ? raw.excluded : 0,
+    excluded_writes: Array.isArray(raw.excluded_writes) ? raw.excluded_writes : [],
   };
 }
 

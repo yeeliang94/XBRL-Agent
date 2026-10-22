@@ -1670,6 +1670,54 @@ describe("mTool filing gates", () => {
     expect(screen.getByRole("button", { name: /download draft for review/i })).toBeEnabled();
   });
 
+  test.each([false, true])("lists excluded comparatives separately from unfinished figures (unresolved: %s)", async (hasUnresolved) => {
+    await openWith((url) => {
+      if (url.includes("/mtool-fill/patch")) {
+        return patchResponse({
+          ...CLEAN_REPORT,
+          status: hasUnresolved ? "degraded" : "ok",
+          filing_coverage: {
+            status: hasUnresolved ? "partial" : "ready",
+            requested: hasUnresolved ? 8 : 7, mapped: 7,
+            unmapped: hasUnresolved ? 1 : 0, ambiguous: 0,
+            coverage_percent: hasUnresolved ? 87.5 : 100,
+            unresolved_writes: hasUnresolved ? [{ sheet: "SOCIE", label: "Closing equity", detail: "No destination." }] : [],
+            ambiguous_writes: [], excluded: 2,
+            excluded_writes: [
+              { sheet: "Notes-Issuedcapital", label: "Opening shares", period: "PY", entity_scope: "Group", value: 12000,
+                detail: "This native sheet files current-year figures only. The prior-year figure is kept in the run, not filed." },
+              { sheet: "Notes-RelatedPartytran", label: "Amounts payable", period: "PY", entity_scope: "Company", value: 0,
+                detail: "This native sheet files current-year figures only. The prior-year figure is kept in the run, not filed." },
+            ],
+          },
+        });
+      }
+      if (url.includes("/mtool-fill")) return Response.json(FILL_DOC);
+      return Response.json({});
+    });
+
+    chooseTemplate();
+    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    const summary = await screen.findByText("Prior-year figures not filed");
+    expect(summary.parentElement).toHaveTextContent("(2)");
+    // Informational exclusions are reachable without opening the fill receipt.
+    expect(summary.closest("details")?.parentElement?.closest("details")).toBeNull();
+    fireEvent.click(summary);
+    expect(screen.getByText(/Issued capital · Opening shares · Prior year · Group · Value: 12,000/)).toBeVisible();
+    expect(screen.getByText(/Related party transactions · Amounts payable · Prior year · Company · Value: 0/)).toBeVisible();
+    if (hasUnresolved) {
+      expect(screen.getByText("not filled")).toBeVisible();
+      fireEvent.click(screen.getByText(/View 1 unfinished items and fill receipt/i));
+      fireEvent.click(screen.getByText(/Couldn't be placed \(not written\)/i));
+      expect(screen.getByText(/Closing equity/)).toBeVisible();
+    } else {
+      expect(screen.queryByText("not filled")).toBeNull();
+      expect(screen.queryByText(/Couldn't be placed \(not written\)/i)).toBeNull();
+      expect(screen.queryByText(/Finish the items below in mTool before filing/i)).toBeNull();
+    }
+    expect(screen.getByRole("button", { name: hasUnresolved ? /download draft for review/i : /^download draft$/i })).toBeEnabled();
+  });
+
   test("keeps confirmed operator destinations available in the result", async () => {
     await openWith((url) => {
       if (url.includes("/mtool-fill/patch")) {
