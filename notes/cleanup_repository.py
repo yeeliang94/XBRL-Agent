@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from notes.cleanup_patch import Patch, apply_patch, enumerate_blocks
 from notes.format_verify import verify_format_only
 from notes.lineage import content_sha256
+from reports.repository import bump_html_revision
 
 
 def source_evidence(conn, run_id, cell):
@@ -142,5 +143,6 @@ def save_cleanup(conn, *, run_id, cells, patch, viewed_pages, model):
                 'content_revision=COALESCE(content_revision,0)+1 WHERE run_id=? AND sheet=? AND row=?',
                 (cell['html'],now,digest,digest,run_id,before['sheet'],before['row']),
             )
+            bump_html_revision(conn, run_id, before['sheet'], before['row'])
             changed += 1
     return {'changed_rows':changed,'skipped_cells':skipped,'removed_blocks':sum(len(c['removals']) for cid,c in result.items() if cid not in skipped)}

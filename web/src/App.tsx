@@ -1,6 +1,6 @@
 import { useReducer, useCallback, useState, useRef, useEffect } from "react";
 import type { RunConfigPayload, NotesTemplateType, RunSummaryJson } from "./lib/types";
-import { NOTES_TEMPLATE_TYPES, STATEMENT_TYPES } from "./lib/types";
+import { NOTES_TEMPLATE_TYPES, STATEMENT_TYPES, isReportType } from "./lib/types";
 import { pwc, tokens } from "./lib/theme";
 import { ui, uiClass } from "./lib/uiStyles";
 import { appReducer, bootState, parseRouteFromPath } from "./lib/appReducer";
@@ -626,7 +626,7 @@ export default function App() {
     // Auto-detect button, validator is a pipeline phase, not an agent. The
     // UI hides the rerun button for those tabs; this guard is a belt-and-
     // braces check so a stray call can't POST a malformed payload.
-    const isReport = role === "DIRECTORS_REPORT" || role === "AUDITORS_REPORT";
+    const isReport = isReportType(role);
     if (!isFaceStatement && !isNotes && !isReport) return;
 
     dispatch({ type: "RERUN_STARTED", payload: { agentId } });

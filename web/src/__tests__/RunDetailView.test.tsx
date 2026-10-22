@@ -226,11 +226,11 @@ test("an incomplete report needs review while a crashed report stays failed and 
   cleanup();
   window.history.replaceState({}, "", "/");
   render(<RunDetailView detail={makeDetail({ agents: [makeAgent({
-    statement_type: "DIRECTORS_REPORT", status: "failed", error_type: null,
+    statement_type: "STATEMENT_BY_DIRECTORS", status: "failed", error_type: null,
     error_message: "Report extraction failed. Captured values are retained for review.",
   })] })} onDelete={() => {}} onDownload={() => {}} onRetryAgent={async () => {}} />);
   clickRunTab(/^activity$/i);
-  expect(within(screen.getByRole("tablist", { name: "Run workstreams" })).getByRole("tab", { name: /Directors’ report/ })).toHaveTextContent("Failed");
+  expect(within(screen.getByRole("tablist", { name: "Run workstreams" })).getByRole("tab", { name: /Statement by directors/ })).toHaveTextContent("Failed");
   expect(screen.getByRole("button", { name: /^Retry/ })).toBeVisible();
   cleanup();
 });

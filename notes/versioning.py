@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from reports.registry import NOT_REPORT_SHEET_SQL
+
 logger = logging.getLogger(__name__)
 
 
@@ -54,7 +56,7 @@ _SNAPSHOT_COLS = (
     "sheet, row, label, html, evidence, source_pages, concept_uuid, style_source"
 )
 # Report narratives share storage, but only report review owns their revisions.
-_FINANCIAL_NOTES = "sheet NOT IN ('Report-Directors', 'Report-Auditors')"
+_FINANCIAL_NOTES = NOT_REPORT_SHEET_SQL
 
 
 def snapshot_notes_cells(db_path: str | Path, run_id: int) -> int:

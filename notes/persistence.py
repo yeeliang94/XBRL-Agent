@@ -23,6 +23,7 @@ from typing import Iterable, Mapping
 from db import repository as repo
 from notes.fingerprint import content_fingerprint, freshness_mode
 from notes.html_to_text import html_to_excel_text
+from reports.registry import REPORT_SHEETS
 from notes.writer import evidence_col_for, truncate_with_footer
 
 logger = logging.getLogger(__name__)
@@ -372,7 +373,7 @@ def overlay_notes_cells_into_workbook(
     # Same db_session-based path as persist_notes_cells — read-only,
     # but still benefits from the shared pragmas (WAL + busy_timeout).
     with repo.db_session(db_path) as conn:
-        cells = repo.list_notes_cells_for_run(conn, run_id)
+        cells = repo.list_notes_cells_for_run(conn, run_id, include_reports=True)
         tombstones = repo.fetch_notes_tombstones(conn, run_id)
 
     if not cells and not tombstones:
@@ -399,13 +400,16 @@ def overlay_notes_cells_into_workbook(
     def _set_cell(ws, row: int, column: int, value) -> None:
         """Write a cell unless it carries a formula (never clobber one)."""
         ws_cell = ws.cell(row=row, column=column)
-        if isinstance(ws_cell.value, str) and ws_cell.value.startswith("="):
+        # Only a real formula is protected; literal text beginning "=" is data.
+        if ws_cell.data_type == "f":
             logger.warning(
                 "overlay skipping formula cell at %s!R%dC%d (run_id=%s)",
                 ws.title, row, column, run_id,
             )
             return
         ws_cell.value = value
+        if isinstance(value, str):
+            ws_cell.data_type = "s"
 
     # Coords with live prose — a tombstone must NEVER blank one of these (a
     # rerun-after-review can leave a stale tombstone on a now-repopulated row;
@@ -442,7 +446,8 @@ def overlay_notes_cells_into_workbook(
             _set_cell(ws, cell.row, 2, html_to_excel_text(truncated))
             # Evidence (audit trail) — reviewer writes update it, so refresh the
             # filing-level evidence column rather than leaving it stale / blank.
-            _set_cell(ws, cell.row, ev_col, cell.evidence or None)
+            _set_cell(ws, cell.row, 4 if cell.sheet in REPORT_SHEETS else ev_col,
+                      cell.evidence or None)
 
         # Blank every coordinate the reviewer emptied (clear / move-out /
         # authored-then-reverted) so a deletion actually reaches the export —

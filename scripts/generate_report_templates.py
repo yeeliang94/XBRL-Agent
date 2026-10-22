@@ -1,4 +1,4 @@
-"""Generate the two report templates from SSM presentation roles; no formulas."""
+"""Generate report templates from SSM presentation roles; no formulas."""
 from __future__ import annotations
 
 import argparse

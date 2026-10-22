@@ -23,7 +23,7 @@ from concept_model.bootstrap import import_all_notes_templates
 # 3 prose + 2 numeric note types, each across 2 standards × 2 levels.
 _PROSE_TEMPLATES = 3 * 2 * 2   # → notes_nodes
 _NUMERIC_TEMPLATES = 2 * 2 * 2  # → concept_nodes
-_REPORT_TEMPLATES = 2 * 2 * 2  # report narratives share notes_nodes
+_REPORT_TEMPLATES = 3 * 2 * 2  # all three report narratives share notes_nodes
 
 
 @pytest.fixture()

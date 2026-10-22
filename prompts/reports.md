@@ -12,6 +12,17 @@ declaration, directors' business review and financial notes. Auditors' report
 includes its opinion, basis, qualifications, emphasis, responsibilities and
 other report sections actually printed. Do not stop after the opinion paragraph.
 Reports apply to this filing. Do not manufacture prior-year or entity copies.
+Statement by directors is its own report. Capture its complete statement and
+its own signing directors and date. Exclude the separate statutory declaration
+and directors' report. Never substitute the directors' report for this statement.
+Author semantic HTML without source fonts, colours or inline styles. Preserve
+all substantive headings, wording and table structure. Omit running company
+banners, page numbers and repeated continuation headings; keep the first
+substantive heading. Source-backed cleanup and style-only checks follow capture.
+For tables, inspect the source image before saving. Retain empty leading
+header cells and the exact heading spans: a heading over amount columns must
+not shift left over the description column. Preserve every row, column,
+rowspan and colspan. The formatter cannot repair incorrectly copied structure.
 
 The supplied field catalogue is authoritative. Store identifiers as strings,
 dates as YYYY-MM-DD and selections as the exact permitted taxonomy value.
