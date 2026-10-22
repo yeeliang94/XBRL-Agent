@@ -3398,7 +3398,7 @@ class RunConfigRequest(BaseModel):
     # Unspecified templates fall back to the run's default model. Mirrors
     # ``models`` for face statements.
     notes_models: Dict[str, str] = {}
-    reports_to_run: List[Literal["DIRECTORS_REPORT", "AUDITORS_REPORT"]] = []
+    reports_to_run: List[Literal["DIRECTORS_REPORT", "STATEMENT_BY_DIRECTORS", "AUDITORS_REPORT"]] = []
     reports_models: Dict[str, str] = {}
     # v10 audit column (kept for schema compatibility). The monolith
     # experiment that this flag once selected has been removed; only
@@ -3453,7 +3453,7 @@ class RunConfigPatchRequest(BaseModel):
     denomination_user_selected: Optional[bool] = None
     notes_to_run: Optional[List[str]] = None
     notes_models: Optional[Dict[str, str]] = None
-    reports_to_run: Optional[List[Literal["DIRECTORS_REPORT", "AUDITORS_REPORT"]]] = None
+    reports_to_run: Optional[List[Literal["DIRECTORS_REPORT", "STATEMENT_BY_DIRECTORS", "AUDITORS_REPORT"]]] = None
     reports_models: Optional[Dict[str, str]] = None
     # Only `split` exists (monolith removed). Unset (None) stays None so a
     # partial PATCH that doesn't touch orchestration won't clobber it; any
@@ -3626,6 +3626,17 @@ def _should_auto_format_pdf_notes(
         and (session_dir / "uploaded.pdf").exists()
         and not (session_dir / "uploaded.docx").exists()
     )
+
+
+def _auto_format_prose_sheets(session_dir: Path, *, merge_succeeded: bool,
+                             note_sheets: set[str], report_sheets: set[str]) -> list[str]:
+    """Reports always use PDF capture; Word financial notes retain source styles."""
+    if not merge_succeeded or not (session_dir / "uploaded.pdf").exists():
+        return []
+    notes = note_sheets if _should_auto_format_pdf_notes(
+        session_dir, merge_succeeded=merge_succeeded, has_notes_result=bool(note_sheets),
+    ) else set()
+    return sorted(notes | report_sheets)
 
 
 def _notes_coverage_tips_status(coverage: Optional[dict]) -> bool:
@@ -7750,13 +7761,17 @@ async def run_multi_agent_stream(
         # Finalize content before source integrity and appearance verification.
         # Its receipts preserve original HTML and exact source-backed omissions.
         notes_cleanup_incomplete = False
-        if merge_result.success and notes_result is not None:
+        from reports.registry import REPORTS as _REPORT_REGISTRY
+        _report_prose_sheets = {_REPORT_REGISTRY[r.report][2]
+                                for r in report_results if r.workbook_path}
+        _prose_label = ("Reports and notes" if notes_result is not None else "Reports") if _report_prose_sheets else "Notes"
+        if merge_result.success and (notes_result is not None or _report_prose_sheets):
             from notes_types import NOTES_REGISTRY as _CLEANUP_NOTES_REG
             _cleanup_sheets = sorted({
                 _CLEANUP_NOTES_REG[r.template_type].sheet_name
-                for r in notes_result.agent_results
+                for r in (notes_result.agent_results if notes_result else [])
                 if r.workbook_path and not _CLEANUP_NOTES_REG[r.template_type].is_numeric
-            })
+            } | _report_prose_sheets)
             if _cleanup_sheets:
                 from notes.cleanup_agent import run_notes_cleanup
                 import task_registry
@@ -7769,8 +7784,8 @@ async def run_multi_agent_stream(
                     output_dir=output_dir,
                     on_progress=lambda completed, total, removed: _emit_stage(
                         "cleaning_notes",
-                        message=(f"Notes cleanup complete: {removed} banners or repeated headings removed."
-                                 if removed is not None else f"Checking {total} note fields for page banners and repeated headings."),
+                        message=(f"{_prose_label} cleanup complete: {removed} banners or repeated headings removed."
+                                 if removed is not None else f"Checking {total} fields for page banners and repeated headings."),
                         completed=completed, total=total,
                     ),
                 ))
@@ -7786,7 +7801,7 @@ async def run_multi_agent_stream(
                     _cleanup_outcome = await _cleanup_task
                     notes_cleanup_incomplete = not _cleanup_outcome["ok"]
                     _emit_stage("cleaning_notes", status="failed" if notes_cleanup_incomplete else "succeeded",
-                        message=_cleanup_outcome.get("error") or "Note content finalized; original wording and cleanup evidence retained.")
+                        message=_cleanup_outcome.get("error") or f"{_prose_label} content finalized; original wording and cleanup evidence retained.")
                     if _cleanup_outcome.get("changed_rows"):
                         try:
                             await asyncio.to_thread(
@@ -7818,7 +7833,7 @@ async def run_multi_agent_stream(
                 if notes_cleanup_incomplete:
                     _enqueue_system_error({
                         "type": "notes_cleanup_incomplete", "phase": "cleaning_notes",
-                        "message": "Notes cleanup did not finish. Saved notes are available for review.",
+                        "message": f"{_prose_label} cleanup did not finish. Saved content is available for review.",
                     })
 
         # Check the run against its frozen source reading, AFTER the notes
@@ -7884,23 +7899,19 @@ async def run_multi_agent_stream(
 
         notes_formatting_incomplete = False
         # PDF styling checks final content/table geometry against the source.
-        # Word uploads retain their source styling and skip this formatter.
-        if _should_auto_format_pdf_notes(
-            session_dir,
-            merge_succeeded=merge_result.success,
-            has_notes_result=notes_result is not None,
-        ):
+        # Word financial notes retain source styles; reports use converted PDF capture.
+        if merge_result.success and (notes_result is not None or _report_prose_sheets):
             from notes_types import NOTES_REGISTRY as _FORMAT_NOTES_REG
 
-            _format_sheets = sorted({
+            _format_sheets = _auto_format_prose_sheets(session_dir, merge_succeeded=merge_result.success, note_sheets={
                 _FORMAT_NOTES_REG[r.template_type].sheet_name
-                for r in notes_result.agent_results
+                for r in (notes_result.agent_results if notes_result else [])
                 if r.workbook_path
-            })
+            }, report_sheets=_report_prose_sheets)
             if _format_sheets:
                 _emit_stage(
                     "formatting_notes",
-                    message="Preparing note formatting.",
+                    message=f"Preparing {_prose_label.lower()} formatting.",
                 )
 
                 # One live tab for every formatter sub-agent; each event
@@ -7934,10 +7945,10 @@ async def run_multi_agent_stream(
                         on_progress=lambda completed, total, sheet: _emit_stage(
                             "formatting_notes",
                             message=(
-                                f"Formatting notes: {completed} of {total} "
+                                f"Formatting {_prose_label.lower()}: {completed} of {total} "
                                 f"sections complete."
                                 if completed
-                                else f"Formatting {total} note sections."
+                                else f"Formatting {total} sections."
                             ),
                             completed=completed,
                             total=total,
@@ -7967,7 +7978,7 @@ async def run_multi_agent_stream(
                         _enqueue_system_error({
                             "type": "notes_formatting_incomplete",
                             "phase": "formatting_notes",
-                            "message": "Extracted content is saved. Notes needing appearance review: " + "; ".join(
+                            "message": f"Extracted content is saved. {_prose_label} needing appearance review: " + "; ".join(
                                 f"{sheet}: {outcome.get('error') or outcome.get('summary') or 'assessment incomplete'}"
                                 for sheet, outcome in _format_outcome.get("sheets", {}).items()
                                 if not outcome.get("ok")
@@ -7975,7 +7986,7 @@ async def run_multi_agent_stream(
                             "sheets": _format_outcome.get("sheets", {}),
                         })
                     _emit_stage("formatting_notes", status="failed" if notes_formatting_incomplete else "succeeded",
-                        message="Appearance checking finished; review the affected notes." if notes_formatting_incomplete else "Notes appearance verified.")
+                        message="Appearance checking finished; review the affected content." if notes_formatting_incomplete else f"{_prose_label} appearance verified.")
                     logger.info(
                         "automatic PDF notes formatting completed run=%s "
                         "formatted=%s partial=%s failed=%s skipped=%s",
@@ -8002,7 +8013,7 @@ async def run_multi_agent_stream(
                     _enqueue_system_error({
                         "type": "notes_formatting_incomplete",
                         "phase": "formatting_notes",
-                        "message": "Notes formatting did not finish. Saved content is available in Notes for review and retry.",
+                        "message": f"{_prose_label} formatting did not finish. Saved content is available for review and retry.",
                     })
                     logger.exception(
                         "Automatic PDF notes formatting failed for run %s; "
@@ -8323,6 +8334,9 @@ async def run_multi_agent_stream(
                 "statements_flagged": flagged_statements,
                 "notes_completed": notes_completed,
                 "notes_failed": notes_failed,
+                "reports_completed": [r.report for r in report_results if r.status == "succeeded"],
+                "reports_failed": [r.report for r in report_results if r.status == "failed"],
+                "reports_cancelled": [r.report for r in report_results if r.status == "cancelled"],
                 # Peer-review follow-up for regenerate-flow: surface the
                 # run_id here (not just in `status: starting`) so a client
                 # that connected mid-stream and missed the starting event

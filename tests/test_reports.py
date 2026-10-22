@@ -21,6 +21,109 @@ from mtool.offline_fill import fill_report_fields, load_workbook_entries, format
 from mtool.notes_exporter import build_notes_fill_doc
 
 
+@pytest.mark.parametrize("family", ["MFRS_Company", "MFRS_Group", "MPERS_Company"])
+def test_native_report_narratives_keep_labels_and_fill_input_cells_and_auditor_details(tmp_path, family):
+    """Native reports combine narrative and auditor tables with different markers.
+
+    Synthetic single-table fixtures miss the metadata-density bug that put a
+    popup into the visible label column. Read the saved native package back.
+    """
+    from mtool.offline_fill import (
+        fill_footnotes, get_sheet_paths, get_shared_strings, read_sheet_cells,
+        inspect_footnotes, resolve_sheet_name,
+    )
+
+    source = next((Path(__file__).resolve().parents[1] / "data").glob(f"mTool_{family}_*.xlsx"), None)
+    if source is None:
+        pytest.skip(f"Native {family} mTool fixture is not installed")
+    _, before, _ = load_workbook_entries(str(source))
+    paths = get_sheet_paths(before)
+    shared = get_shared_strings(before)
+    cells = {s: read_sheet_cells(before[p], shared) for s, p in paths.items()}
+    narratives = [
+        ("Report-Directors", "ssmt_DisclosureOfDirectorsReportExplanatory"),
+        ("Report-StatementByDirectors", "ssmt_DisclosureOfStatementByDirectorsExplanatory"),
+        ("Report-Auditors", "ssmt_DisclosureOfAuditorsReportToMembersExplanatory"),
+    ]
+    footnotes = [{"source_sheet": sheet, "primary_concept": concept,
+                  "label": sheet, "html": f"<h3>Opinion</h3><p>Verification {sheet}.</p>"}
+                 for sheet, concept in narratives]
+    labels_only = [{"source_sheet": sheet,
+                    "label": cells[resolve_sheet_name(sheet, cells)][15]["D"][1],
+                    "html": "<p>Label placement verification.</p>"} for sheet, _ in narratives]
+    preview = fill_footnotes(str(source), {"footnotes": labels_only, "strict": True},
+                             dry_run=True, create_missing=True)
+    assert not preview["unresolved"], preview
+    assert len(preview["footnotes_written"]) == 3
+    assert {w["visible_cell"].rsplit("!", 1)[1] for w in preview["footnotes_written"]} == {"E15"}
+    notes_out = tmp_path / "narratives.xlsx"
+    prose = fill_footnotes(str(source), {"footnotes": footnotes, "strict": True},
+                          str(notes_out), create_missing=True)
+    assert not prose["unresolved"], prose
+    assert not prose["footnote_mismatches"], prose
+    assert not prose["errors"], prose
+    assert len(prose["footnotes_written"]) == 3
+
+    scalar_values = {
+        "ssmt_LicenseNumberOfAuditor": "0012",
+        "ssmt_NameOfAuditorSigningReport": "Verification Auditor",
+        "ssmt_RegistrationNumberOfAuditFirm": "LLP0010081-LCA & AF 0758",
+        "ssmt_NameOfAuditFirm": "Verification & Co.",
+        "ssmt_AddressOne": "1 Example Street",
+        "ssmt_AddressTwo": "Suite 2",
+        "ssmt_AddressThree": "Example Building",
+        "ssmt_PostcodeOfAuditFirm": "00100",
+        "ssmt_TownWhereAuditFirmIsLocated": "Kuala Lumpur",
+        "ssmt_StateWhereAuditFirmIsLocated": "Wilayah Persekutuan",
+        "ssmt_DateOfSigningAuditorsReport": "2026-10-17",
+        "ssmt_TypeOfAuditorsOpinion": "Unqualified opinion",
+    }
+    report = {"sheet": "Report-Auditors", "fields": [
+        {"concept": concept, "label": concept, "value": value, "value_status": "observed",
+         "kind": "date" if "DateOf" in concept else "choice" if "StateWhere" in concept or "TypeOf" in concept else "text"}
+        for concept, value in scalar_values.items()]}
+    _, note_data, _ = load_workbook_entries(str(notes_out))
+    # The unique narrative marker scopes shared address concepts to this report.
+    report["fields"].append({"concept": narratives[-1][1], "kind": "html",
+                             "value": footnotes[-1]["html"], "value_status": "observed"})
+    resolved = resolve_reports(note_data, {"reports": [report], "digest": "verification"})
+    assert {w["cell"] for w in resolved["writes"]} == {f"{col}32" for col in "EFGHIJKLM"}
+    firm_number = next(w for w in resolved["writes"] if w["concept"] == "ssmt_RegistrationNumberOfAuditFirm")
+    assert firm_number["value"] == "AF0758"
+    assert firm_number["source_value"] == scalar_values["ssmt_RegistrationNumberOfAuditFirm"]
+    assert next(f["value"] for f in report["fields"] if f["concept"] == firm_number["concept"]) == firm_number["source_value"]
+    # Native picker/date cells are protected and have no verified encoding.
+    assert {u["concept"] for u in resolved["unresolved"]} == {
+        "ssmt_StateWhereAuditFirmIsLocated", "ssmt_DateOfSigningAuditorsReport", "ssmt_TypeOfAuditorsOpinion"}
+    output = tmp_path / "filled.xlsx"
+    scalars = fill_report_fields(str(notes_out), resolved, str(output))
+    assert not scalars["mismatches"]
+    assert len(scalars["written"]) == 9
+    _, after, _ = load_workbook_entries(str(output))
+    after_shared = get_shared_strings(after)
+    after_cells = {s: read_sheet_cells(after[p], after_shared) for s, p in get_sheet_paths(after).items()}
+    for sheet, _ in narratives:
+        native = resolve_sheet_name(sheet, cells)
+        assert after_cells[native][15]["D"] == cells[native][15]["D"]
+        assert after_cells[native][15]["E"] == ("S", "[Text block added]")
+    targets = inspect_footnotes(after)["targets"]
+    for sheet, _ in narratives:
+        native = resolve_sheet_name(sheet, cells)
+        assert any(t["sheet"] == native and t["cell"] == "E15" and t["payload_populated"] for t in targets)
+    audit_sheet = resolve_sheet_name("Report-Auditors", cells)
+    assert after_cells[audit_sheet][32]["E"] == ("S", "0012")
+    assert after_cells[audit_sheet][32]["G"] == ("S", "AF0758")
+    assert after_cells[audit_sheet][32]["L"] == ("S", "00100")
+    for row, col in ((16, "E"), (17, "E"), (32, "N")):
+        assert after_cells[audit_sheet][row][col] == cells[audit_sheet][row][col]
+    # Protection, formulas and every unrelated worksheet retain their original XML.
+    modified = {paths[resolve_sheet_name(sheet, cells)] for sheet, _ in narratives}
+    modified.add(paths["+FootnoteTexts"])
+    for path in paths.values():
+        if path not in modified:
+            assert after[path] == before[path]
+
+
 @pytest.fixture
 def report_run(tmp_path):
     db = tmp_path / "audit.db"
@@ -37,7 +140,7 @@ def report_run(tmp_path):
 @pytest.mark.parametrize("level", ["company", "group"])
 def test_report_catalogue_is_writable_in_each_exact_filing_family(report_run, standard, level):
     from concept_model.filing_targets import targets_for_template
-    for report, count in (("DIRECTORS_REPORT", 22), ("AUDITORS_REPORT", 13)):
+    for report, count in (("DIRECTORS_REPORT", 22), ("STATEMENT_BY_DIRECTORS", 27), ("AUDITORS_REPORT", 13)):
         _, targets = targets_for_template(template_path(report, standard, level))
         writable = {t.taxonomy_element_id: t for t in targets if t.writable}
         assert len(writable) == count
@@ -66,6 +169,95 @@ def test_report_values_round_trip_edits_clear_and_stale_saves(report_run):
     exported = build_notes_fill_doc(db, rid, decorate=False)
     assert len(exported["footnotes"]) == 1
     assert exported["footnotes"][0]["html"] == "<h3>Opinion</h3><p>Full report.</p>"
+
+
+@pytest.mark.parametrize("report", list(REPORTS))
+def test_report_prose_reuses_cleanup_and_formatter_without_entering_financial_notes(report_run, report):
+    from notes.auto_format import candidate_sheets
+    from notes.cleanup_agent import cleanup_cells
+    from notes.cleanup_patch import Patch, Removal
+    from notes.cleanup_repository import save_cleanup
+    from reports.repository import report_view
+
+    db, rid = report_run
+    narrative = next(f for f in fields(report) if f.kind == "html")
+    sheet = REPORTS[report][2]
+    html = "<h3>EXAMPLE SDN BHD</h3><h3>Report</h3><p>Complete substantive wording.</p>"
+    with repo.db_session(db) as conn:
+        save_field(conn, rid, report, narrative.concept, html, "observed", "Report", [1])
+        assert repo.list_notes_cells_for_run(conn, rid) == []
+    assert candidate_sheets(str(db), rid, [sheet]) == [sheet]
+    cells = cleanup_cells(str(db), rid, [sheet])
+    cid = f"{sheet}:{narrative.row}"
+    patch = Patch(inspected_cells=[cid], removals=[Removal(cell=cid, block=0,
+        expected_text="EXAMPLE SDN BHD", reason="page_banner", evidence_page=1,
+        justification="Company banner repeated at the top of the source page")])
+    with repo.db_session(db) as conn:
+        saved = save_cleanup(conn, run_id=rid, cells=cells, patch=patch, viewed_pages={1}, model="test")
+        assert saved["changed_rows"] == 1
+        view = report_view(conn, rid, report)
+        value = next(f["value"] for f in view["fields"] if f["kind"] == "html")
+        assert "EXAMPLE SDN BHD" not in value
+        assert "Complete substantive wording." in value
+        # Cleanup changed the saved text, so an edit made against it is stale.
+        assert next(f["revision"] for f in view["fields"] if f["kind"] == "html") == 2
+        with pytest.raises(StaleReportEdit):
+            save_field(conn, rid, report, narrative.concept, "<p>Human revision.</p>",
+                       "user_override", "Correction", [1], expected_revision=1)
+        save_field(conn, rid, report, narrative.concept, "<p>Human revision.</p>",
+                   "user_override", "Correction", [1], expected_revision=2)
+    assert cleanup_cells(str(db), rid, [sheet]) == {}
+    with repo.db_session(db) as conn:
+        conn.execute("UPDATE notes_cells SET concept_uuid='wrong-family' WHERE run_id=? AND sheet=?", (rid, sheet))
+    assert candidate_sheets(str(db), rid, [sheet]) == []
+
+
+def test_formatter_write_makes_earlier_report_edit_stale_and_unchanged_saves_keep_style(report_run):
+    from reports.repository import report_view
+
+    db, rid = report_run
+    report = "STATEMENT_BY_DIRECTORS"
+    narrative = next(f for f in fields(report) if f.kind == "html")
+    sheet = REPORTS[report][2]
+    with repo.db_session(db) as conn:
+        save_field(conn, rid, report, narrative.concept, "<p>Statement.</p>", "observed", "Source", [1])
+        assert repo.cas_update_notes_cell_html(conn, run_id=rid, sheet=sheet, row=narrative.row,
+            expected_html="<p>Statement.</p>", new_html="<p><strong>Statement.</strong></p>",
+            style_source="formatter")
+        field = next(f for f in report_view(conn, rid, report)["fields"] if f["kind"] == "html")
+        assert field["revision"] == 2
+        with pytest.raises(StaleReportEdit):
+            save_field(conn, rid, report, narrative.concept, "<p>Old text edit.</p>",
+                       "user_override", "Correction", [1], expected_revision=1)
+        # Re-saving identical text (new evidence only) keeps the verified style.
+        save_field(conn, rid, report, narrative.concept, field["value"], "observed", "Recaptured", [1, 2])
+        style = conn.execute("SELECT style_source FROM notes_cells WHERE run_id=? AND sheet=?",
+                             (rid, sheet)).fetchone()[0]
+        assert style == "formatter"
+
+
+def test_overlay_keeps_updating_report_text_that_begins_with_equals(report_run, tmp_path):
+    import shutil
+    import openpyxl
+    from notes.persistence import overlay_notes_cells_into_workbook
+
+    db, rid = report_run
+    report = "STATEMENT_BY_DIRECTORS"
+    narrative = next(f for f in fields(report) if f.kind == "html")
+    sheet = REPORTS[report][2]
+    workbook = tmp_path / "merged.xlsx"
+    shutil.copy(template_path(report, "mfrs", "company"), workbook)
+    wb = openpyxl.load_workbook(workbook)
+    wb[sheet]["C1"] = "=1+1"
+    wb.save(workbook)
+    for text in ("= RM1.2m restated", "= RM1.3m restated"):
+        with repo.db_session(db) as conn:
+            save_field(conn, rid, report, narrative.concept, f"<p>{text}</p>", "observed", "Source", [1])
+        out = overlay_notes_cells_into_workbook(xlsx_path=workbook, run_id=rid, db_path=str(db))
+        shutil.copy(out, workbook)
+        ws = openpyxl.load_workbook(workbook)[sheet]
+        assert ws.cell(narrative.row, 2).value == text
+        assert ws["C1"].value == "=1+1"
 
 
 @pytest.mark.parametrize("kind,value", [("date", "17/10/2026"), ("choice", "clean")])
@@ -182,7 +374,7 @@ def test_column_tagged_report_table_fills_its_single_typing_row(report_run, tmp_
     wb = load_workbook(out)
     try:
         ws = wb[REPORTS[report][2]]
-        assert (ws["E6"].value, ws["F6"].value, ws["E9"].value) == ("Example & Co.", "AF 0001", None)
+        assert (ws["E6"].value, ws["F6"].value, ws["E9"].value) == ("Example & Co.", "AF0001", None)
     finally:
         wb.close()
 
@@ -196,7 +388,7 @@ def test_column_tagged_report_table_fills_its_single_typing_row(report_run, tmp_
 def test_protected_or_unknown_report_destination_is_never_guessed(report_run, tmp_path):
     db, rid = report_run
     report = "AUDITORS_REPORT"
-    field = next(f for f in fields(report) if f.kind == "text")
+    field = next(f for f in fields(report) if f.concept == "ssmt_NameOfAuditorSigningReport")
     with repo.db_session(db) as conn:
         save_field(conn, rid, report, field.concept, "Source auditor", "observed", "Source", [1])
         snap = snapshot(conn, rid)
@@ -228,6 +420,38 @@ def test_protected_or_unknown_report_destination_is_never_guessed(report_run, tm
     assert not unrelated["writes"]
 
 
+@pytest.mark.parametrize("concept,value", [
+    ("ssmt_LicenseNumberOfAuditor", "03339/12/2025 J"),
+    ("ssmt_RegistrationNumberOfAuditFirm", "AF0001 & AF0002"),
+    ("ssmt_RegistrationNumberOfAuditFirm", "AF0001 & AF00022"),
+    ("ssmt_RegistrationNumberOfAuditFirm", "AF07589"),
+    ("ssmt_RegistrationNumberOfAuditFirm", "LLP0010081-LCA"),
+])
+def test_report_identifiers_without_one_verified_native_encoding_stay_unwritten(report_run, tmp_path, concept, value):
+    db, rid = report_run
+    field = next(f for f in fields("AUDITORS_REPORT") if f.concept == concept)
+    with repo.db_session(db) as conn:
+        save_field(conn, rid, "AUDITORS_REPORT", concept, value, "observed", "Source identifier", [1])
+        snap = snapshot(conn, rid)
+    source, output = tmp_path / "identifiers.xlsx", tmp_path / "filled.xlsx"
+    _native_workbook(source, "AUDITORS_REPORT", [field])
+    _, data, _ = load_workbook_entries(str(source))
+    resolved = resolve_reports(data, snap)
+    assert not resolved["writes"]
+    assert any(u.get("concept") == concept and u["reason"] == "native_identifier_encoding_unverified"
+               for u in resolved["unresolved"])
+    result = fill_report_fields(str(source), resolved, str(output))
+    assert not result["written"]
+    wb = load_workbook(output)
+    try:
+        assert wb["Report-Auditors"]["C1"].value == "old"
+    finally:
+        wb.close()
+    with repo.db_session(db) as conn:
+        saved = next(r for r in snapshot(conn, rid)["reports"] if r["type"] == "AUDITORS_REPORT")
+        assert next(f["value"] for f in saved["fields"] if f["concept"] == concept) == value
+
+
 def test_report_review_api_rejects_stale_edits_and_edits_during_extraction(report_run, monkeypatch):
     import server
     db, rid = report_run
@@ -240,6 +464,11 @@ def test_report_review_api_rejects_stale_edits_and_edits_during_extraction(repor
     assert response.json()["value"] == "0012"
     assert client.patch(url, json={"value": "0001", "revision": 0}).status_code == 409
     assert client.patch(url, json={"value": None, "revision": 1}).json()["value"] is None
+    with repo.db_session(db) as conn:
+        repo.upsert_notes_format_task(conn, rid, REPORTS["AUDITORS_REPORT"][2], "running", model="test")
+    assert client.patch(url, json={"value": "0012", "revision": 2}).status_code == 409
+    with repo.db_session(db) as conn:
+        repo.upsert_notes_format_task(conn, rid, REPORTS["AUDITORS_REPORT"][2], "done", model="test")
     with repo.db_session(db) as conn:
         conn.execute("UPDATE runs SET status='running' WHERE id=?", (rid,))
     assert client.patch(url, json={"value": "0012", "revision": 2}).status_code == 409
@@ -386,6 +615,139 @@ async def test_report_tasks_cancelled_before_start_still_finish_audit_rows(repor
     monkeypatch.setattr(task_registry, "register", lambda session, role, task: task.cancel(task_registry.USER_ABORT_REASON))
     config = SimpleNamespace(db_path=str(db), run_id=rid, pdf_path="unused.pdf", output_dir=str(tmp_path), model="unused", filing_standard="mfrs")
     results = await run_reports(config, set(REPORTS), {}, ids, asyncio.Queue(), "cancelled-report-test")
-    assert [r.status for r in results] == ["cancelled", "cancelled"]
+    assert [r.status for r in results] == ["cancelled"] * len(REPORTS)
     with repo.db_session(db) as conn:
         assert {r[0] for r in conn.execute("SELECT status FROM run_agents WHERE run_id=?", (rid,))} == {"cancelled"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["recovered", "exhausted", "cancelled"])
+async def test_report_provider_retry_retains_values_usage_and_cancellation(report_run, monkeypatch, tmp_path, outcome):
+    import asyncio
+    import httpx
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from openai import APIError
+    from reports import agent
+    from reports.repository import report_view
+    import task_registry
+
+    db, rid = report_run
+    report = "AUDITORS_REPORT"
+    identifier = next(f for f in fields(report) if f.kind == "text")
+    with repo.db_session(db) as conn:
+        rai = repo.create_run_agent(conn, rid, statement_type=report)
+    deps_seen, events = [], []
+
+    def create(_model, deps):
+        deps_seen.append(deps)
+        @asynccontextmanager
+        async def iterate(*args, **kwargs):
+            yield SimpleNamespace(ctx=SimpleNamespace(state=SimpleNamespace(message_history=[])),
+                usage=SimpleNamespace(input_tokens=7, output_tokens=5, total_tokens=12,
+                    cache_read_tokens=2, cache_write_tokens=0, details={"reasoning_tokens": 1}))
+        return SimpleNamespace(iter=iterate)
+
+    async def loop(_run, deps, _spec, _emit, turns):
+        assert deps.viewed == set()  # A retry must inspect its own evidence.
+        deps.viewed.add(1)
+        turns.append({"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5,
+                      "_n_tool_calls": 1})
+        with repo.db_session(db) as conn:
+            if len(deps_seen) == 1:
+                save_field(conn, rid, report, identifier.concept, "0012", "observed", "Licence", [1])
+            else:
+                view = report_view(conn, rid, report)
+                assert next(f["value"] for f in view["fields"] if f["concept"] == identifier.concept) == "0012"
+                if outcome == "recovered":
+                    for f in fields(report):
+                        if f.concept == identifier.concept:
+                            continue
+                        save_field(conn, rid, report, f.concept, "<p>Complete report.</p>" if f.kind == "html" else None,
+                                   "observed" if f.kind == "html" else "not_disclosed", "Source assessed", [1])
+        if len(deps_seen) == 1 or outcome == "exhausted":
+            raise APIError("Our servers are currently overloaded. Please try again later.",
+                           request=httpx.Request("POST", "https://provider.invalid/v1/responses"), body=None)
+
+    async def emit(kind, payload):
+        events.append((kind, payload))
+        if outcome == "cancelled" and payload.get("phase") == "retrying":
+            raise asyncio.CancelledError(task_registry.USER_ABORT_REASON)
+
+    monkeypatch.setattr(agent, "create_report_agent", create)
+    monkeypatch.setattr(agent, "run_agent_loop", loop)
+    monkeypatch.setattr(agent, "count_pdf_pages", lambda _: 1)
+    monkeypatch.setattr(agent, "make_emitter", lambda *args: (emit, None))
+    monkeypatch.setattr("notes._rate_limit.compute_backoff_delay", lambda *_: 0)
+    config = SimpleNamespace(db_path=str(db), run_id=rid, pdf_path="unused.pdf", output_dir=str(tmp_path),
+                             model="test-model", filing_standard="mfrs")
+    results = await agent.run_reports(config, {report}, {}, {report: rai}, asyncio.Queue(), "report-retry-test")
+    attempts = 1 if outcome == "cancelled" else 2
+    expected_status = {"recovered": "succeeded", "exhausted": "failed", "cancelled": "cancelled"}[outcome]
+    assert results[0].status == expected_status
+    assert len(deps_seen) == attempts
+    assert sum(payload.get("phase") == "retrying" for _, payload in events) == 1
+    assert sum(kind == "complete" for kind, _ in events) == 1
+    with repo.db_session(db) as conn:
+        saved = conn.execute("SELECT status,error_type,total_tokens,prompt_tokens,completion_tokens,reasoning_tokens,turn_count,cache_read_tokens FROM run_agents WHERE id=?", (rai,)).fetchone()
+        assert tuple(saved) == (expected_status, {"recovered": None, "exhausted": "transient_exhausted", "cancelled": "cancelled"}[outcome],
+                                12 * attempts, 7 * attempts, 4 * attempts, attempts, attempts, 2 * attempts)
+        assert conn.execute("SELECT count(*) FROM run_agent_turns WHERE run_agent_id=?", (rai,)).fetchone()[0] == attempts
+        view = report_view(conn, rid, report)
+        assert next(f["value"] for f in view["fields"] if f["concept"] == identifier.concept) == "0012"
+
+
+@pytest.mark.asyncio
+async def test_report_tool_rejects_unknown_batch_with_exact_catalogue_and_recovers(report_run):
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.messages import ModelResponse, RetryPromptPart, TextPart, ToolCallPart
+    from reports.agent import ReportDeps, create_report_agent
+    from reports.repository import report_view
+
+    db, rid = report_run
+    report = "STATEMENT_BY_DIRECTORS"
+    narrative = "ssmt_DisclosureOfStatementByDirectorsExplanatory"
+    prefix = "ssmt_DisclosureWhether"
+    correct = [f"{prefix}{slot}DirectorIsAlsoPrimarilyResponsibleForFinancialManagementOfCompany"
+               for slot in ("Fourth", "Fifth")]
+    invalid = [concept.replace("OfCompany", "OfTheCompany") for concept in correct]
+    permitted = [f.concept for f in fields(report)]
+    step = 0
+
+    def respond(messages, info):
+        nonlocal step
+        tool = next(t for t in info.function_tools if t.name == "save_report_fields")
+        enum = tool.parameters_json_schema["$defs"]["CapturedField"]["properties"]["concept"]["enum"]
+        assert enum == permitted
+        if step in {1, 2}:
+            retry = next(p for p in messages[-1].parts if isinstance(p, RetryPromptPart))
+            feedback = str(retry.content)
+            for concept in invalid[step - 1:]:
+                assert concept in feedback
+            for concept in permitted:
+                assert concept in feedback
+            assert "Nothing in this batch was saved" in feedback
+            with repo.db_session(db) as conn:
+                assert conn.execute("SELECT count(*) FROM report_fields WHERE run_id=?", (rid,)).fetchone()[0] == 0
+                assert conn.execute("SELECT count(*) FROM notes_cells WHERE run_id=?", (rid,)).fetchone()[0] == 0
+        if step == 3:
+            return ModelResponse(parts=[TextPart("Report fields saved after correcting taxonomy IDs.")])
+        concepts = invalid if step == 0 else [correct[0], invalid[1]] if step == 1 else correct
+        step += 1
+        return ModelResponse(parts=[ToolCallPart("save_report_fields", {"captured": [
+            {"concept": narrative, "value": "<p>Complete statement.</p>", "status": "observed",
+             "evidence": "Statement source", "pages": [1]},
+            *[{"concept": c, "status": "not_disclosed", "evidence": "No additional signer", "pages": []}
+              for c in concepts],
+        ]})])
+
+    deps = ReportDeps("unused.pdf", str(db), rid, report, "mfrs", 1, viewed={1})
+    agent = create_report_agent(FunctionModel(respond), deps)
+    await agent.run("Capture the statement.", deps=deps)
+    assert step == 3
+    with repo.db_session(db) as conn:
+        saved = report_view(conn, rid, report)
+        by_concept = {f["concept"]: f for f in saved["fields"]}
+        assert by_concept[narrative]["value"] == "<p>Complete statement.</p>"
+        assert all(by_concept[c]["value_status"] == "not_disclosed" for c in correct)
+        assert conn.execute("SELECT count(*) FROM report_fields WHERE run_id=?", (rid,)).fetchone()[0] == 3

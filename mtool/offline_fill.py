@@ -58,6 +58,15 @@ _MPERS_SHEET_NAMES = {
 _TAXONOMY_ID = re.compile(r'[A-Za-z0-9_.-]+\.xsd#([A-Za-z_][A-Za-z0-9_.-]*)')
 
 
+# Native report sheets are identified by their narrative concept. Kept local:
+# this patcher stays standard-library only (see reports.registry for the roles).
+_REPORT_NARRATIVE_CONCEPTS = {
+    "Report-Directors": "ssmt_DisclosureOfDirectorsReportExplanatory",
+    "Report-StatementByDirectors": "ssmt_DisclosureOfStatementByDirectorsExplanatory",
+    "Report-Auditors": "ssmt_DisclosureOfAuditorsReportToMembersExplanatory",
+}
+
+
 def resolve_sheet_name(source_sheet: str, cells_by_sheet: dict) -> str | None:
     """Resolve a sheet by exact identity or a taxonomy-verified native name."""
     exact = [s for s in cells_by_sheet if s.casefold() == source_sheet.casefold()]
@@ -72,12 +81,8 @@ def resolve_sheet_name(source_sheet: str, cells_by_sheet: dict) -> str | None:
                    for i in _TAXONOMY_ID.findall(raw or '')}
             if marker in ids:
                 candidates.append(sheet)
-    report_concepts = {
-        "Report-Directors": "ssmt_DisclosureOfDirectorsReportExplanatory",
-        "Report-Auditors": "ssmt_DisclosureOfAuditorsReportToMembersExplanatory",
-    }
-    if not candidates and source_sheet in report_concepts:
-        concept = report_concepts[source_sheet]
+    if not candidates and source_sheet in _REPORT_NARRATIVE_CONCEPTS:
+        concept = _REPORT_NARRATIVE_CONCEPTS[source_sheet]
         candidates = [sheet for sheet, rows in cells_by_sheet.items()
                       if any(concept in _TAXONOMY_ID.findall(raw or "")
                              for cols in rows.values() for _, raw in cols.values())]
@@ -961,11 +966,11 @@ def resolve_label_to_note_cell(
                 ((sheet, info) for sheet, info in note_sheets.items()
                  if _same_sheet(sheet, source_sheet)))
     for sheet, info in eligible:
-        label_col = info.get("label_col")
-        if not label_col:
-            continue
-        trigger_col = idx_to_col(col_to_idx(label_col) + 1)
         for row_num, cols in info["cells"].items():
+            label_col = info.get("label_columns", {}).get(row_num, info.get("label_col"))
+            if not label_col:
+                continue
+            trigger_col = idx_to_col(col_to_idx(label_col) + 1)
             ids = {i for _, raw in cols.values() for i in _TAXONOMY_ID.findall(raw or '')}
             if ids and all(i.endswith(('Abstract', 'Table', 'Axis', 'Member', 'LineItems')) for i in ids):
                 continue
@@ -1064,7 +1069,7 @@ def _collect_note_sheet_cells(data: dict, sheet_paths: dict, sst: list,
         if sheet == footnote_sheet:
             continue
         cells = read_sheet_cells(data[entry], sst)
-        report_markers = {"ssmt_DisclosureOfDirectorsReportExplanatory", "ssmt_DisclosureOfAuditorsReportToMembersExplanatory"}
+        report_markers = set(_REPORT_NARRATIVE_CONCEPTS.values())
         has_report = any(report_markers.intersection(_TAXONOMY_ID.findall(raw or ""))
                          for cols in cells.values() for _, raw in cols.values())
         if not (sheet.lower().startswith("notes") or sheet in fn_sheets or has_report):
@@ -1072,7 +1077,21 @@ def _collect_note_sheet_cells(data: dict, sheet_paths: dict, sst: list,
         cols_hist = trig_cols.get(sheet)
         trigger_col = (max(cols_hist, key=lambda c: (cols_hist[c], -col_to_idx(c)))
                        if cols_hist else None)
+        # Native report sheets contain several tables. Each table's #PRIM#
+        # marker identifies its label column; technical metadata can otherwise
+        # outnumber visible labels and make the density fallback select C.
+        # Keep this binding per row because the auditor-details table changes
+        # the marker column after the narrative table.
+        label_columns = {}
+        active_label = None
+        for row in sorted(cells):
+            markers = [col for col, (_, raw) in cells[row].items() if raw == "#PRIM#"]
+            if markers:
+                active_label = markers[0] if len(markers) == 1 else None
+            if markers or label_columns:
+                label_columns[row] = active_label
         out[sheet] = {"label_col": _note_label_column(cells, trigger_col),
+                      "label_columns": label_columns,
                       "cells": cells}
     return out
 
@@ -1436,10 +1455,10 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
             for sheet, info in note_cells.items():
                 if not _same_sheet(sheet, it.get('source_sheet', '')):
                     continue
-                label_col = info.get('label_col')
-                if not label_col:
-                    continue
                 for row, cols in info['cells'].items():
+                    label_col = info.get('label_columns', {}).get(row, info.get('label_col'))
+                    if not label_col:
+                        continue
                     ids = {x for _, raw in cols.values() for x in _TAXONOMY_ID.findall(raw or '')}
                     if it['primary_concept'] in ids:
                         candidates.append({'sheet': sheet,
