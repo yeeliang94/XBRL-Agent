@@ -441,6 +441,7 @@ def run_workbook(source, output_dir, include_primary=False):
     summary = {'filename':source.name,'standard':standard,'level':level,'first_time':first_time,
                'native_instances':len(fields),'outcomes':dict(Counter(f['outcome'] for f in fields)),
                'unresolved_reason_counts':dict(Counter(w['reason_code'] for w in coverage['unresolved_writes'])),
+               'excluded_reason_counts':dict(Counter(w['reason_code'] for w in coverage.get('excluded_writes', []))),
                'mapped':coverage['mapped'],'unmapped':coverage['unmapped'],'ambiguous':coverage['ambiguous'],
                'numeric_written':len(report['written']),'formula_mismatches':len(report['mismatches']),
                'source_sha256':source_hash, 'source_unchanged':source_hash == hashlib.sha256(source.read_bytes()).hexdigest(),

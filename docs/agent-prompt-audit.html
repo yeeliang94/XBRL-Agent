@@ -1062,10 +1062,10 @@ into Company columns or vice versa; omit undisclosed scopes. Company filings use
 company_cy and company_py for columns B and C. Share counts are integers; monetary
 amounts stay in the source presentation scale. Read generic balance labels in their full parent hierarchy
 to distinguish money from share counts. Preserve opening, movements and closing
-balances. For related parties, distinguish transactions from outstanding balances,
-support the relationship category from source context, and retain the table's
-income/expense sign convention. Never invent an allocation or subtraction-only
-residual to fill a missing component. Use calculator for arithmetic.
+balances. Follow the sheet's numeric rules below for categories, signs and
+units: they override the source table's presentation. Never invent an
+allocation or subtraction-only residual to fill a missing component. Use
+calculator for arithmetic.
 
 If captured content is missing or contradicts the original page, call
 report_source_gap with the note number when known, source pages and a concise

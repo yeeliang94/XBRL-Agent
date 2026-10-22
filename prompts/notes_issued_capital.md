@@ -3,7 +3,8 @@
 Sheet: `Notes-Issuedcapital`. This is a structured numeric movement
 table. Each row is a specific line in the share-capital reconciliation
 (opening balance → movements → closing balance), split into NUMBER of
-shares and AMOUNT columns.
+shares and AMOUNT columns. The ISSUED-CAPITAL NUMERIC RULES below govern
+labels, share classes, units and movements.
 
 === STRATEGY ===
 
@@ -13,31 +14,16 @@ shares and AMOUNT columns.
    - Amount of shares issued and fully paid (opening + movements + closing)
    - *Number of shares outstanding at beginning / end of period
    - *Amount of shares outstanding at beginning / end of period
-   Read generic leaf labels in their full section hierarchy. In particular:
-   - `Shares issued and fully paid > Amount of shares issued and fully paid >
-     Balance at the beginning/end of period` is a **monetary amount**, not a
-     share count.
-   - `Shares outstanding > Number of shares outstanding > Number of shares
-     outstanding at beginning/end of period` is a **share count**, not money.
-   - `Shares outstanding > Amount of shares outstanding > Amount of shares
-     outstanding at beginning/end of period` is a monetary amount.
-   Never target a generic `Balance at ...` label without first naming which of
-   these parent paths it belongs to. The same leaf wording can mean a different
-   unit under a different parent.
 2. Find every note that discloses issued capital (usually labelled "Share
    capital" or "Issued and paid-up share capital", typically Note 14-18
-   range). Preference, redeemable or convertible shares are often disclosed
-   in a separate note; check the notes list and the face equity section
-   before deciding the ordinary-share note is the whole disclosure.
-3. Each note contains a movement table. Extract the numeric values by line,
-   one payload set per share class.
-4. Emit one `NotesPayload` per matched row with `numeric_values` set.
+   range).
+3. Emit one `NotesPayload` per matched row with `numeric_values` set.
    For company filings provide `company_cy` and `company_py` (or
    generic `cy` / `py`). For group filings provide only the disclosed keys
    among `group_cy`, `group_py`, `company_cy`, `company_py`. Never copy Group
    amounts into Company fields or vice versa; omit an entity/period scope the
    note does not disclose.
-5. **ALSO reproduce the disclosed table.** In addition to the numeric
+4. **ALSO reproduce the disclosed table.** In addition to the numeric
    rows above, emit ONE prose `NotesPayload` whose `content` is the
    share-capital movement table reproduced verbatim as an HTML
    `<table>` (follow the SCHEDULES VS PROSE and CELL FORMAT rules in
@@ -51,22 +37,5 @@ shares and AMOUNT columns.
    actually shows a table; if the note is a single line with no
    schedule, skip the reproduction. The numeric grid above still fills
    exactly as before — this is an addition, not a replacement.
-6. Call `write_notes` with the batch, then `submit_share_classes` listing
+5. Call `write_notes` with the batch, then `submit_share_classes` listing
    every disclosed class as written or not_written, then `save_result`.
-
-=== NOTES ===
-
-- Number-of-shares rows take integer counts. Amount rows preserve the PDF's
-  presentation scale exactly. If the note shows 2,500 in RM '000, write 2,500
-  — never convert it to 2,500,000 RM. Do not multiply or divide any amount.
-- "Issued for cash under ESOS" and "Private placement" rows are only
-  filled when the PDF specifically mentions these as movement causes.
-  If the PDF shows a generic "Issue of shares" line, put it in
-  "Shares issued during financial year" instead.
-- If the company didn't issue / repurchase shares during the year the
-  opening and closing balances will be equal — fill both rows.
-- Use the writable fields supplied by `read_template`. A leading `*` is not
-  permission to write a heading or formula. When heading and leaf labels repeat,
-  target the writable leaf in its full hierarchy. The numeric writer rejects
-  headings and formulas; never treat a scratch-workbook write as proof that the
-  value was saved to the filing data.

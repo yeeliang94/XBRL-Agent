@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { FilingCoverageFailurePanel, type FilingCoverage } from "../components/FilingCoverageFailurePanel";
+import { FilingCoverageFailurePanel, normaliseFilingCoverage, type FilingCoverage } from "../components/FilingCoverageFailurePanel";
 
 afterEach(cleanup);
 const coverage: FilingCoverage = {
@@ -12,6 +12,17 @@ const coverage: FilingCoverage = {
       label: "Notes-Issuedcapital!E5 · Ordinary shares", dimensions: { axis: "ordinary" }}]}],
   ambiguous_writes: [],
 };
+
+test.each([false, true])("normalises filing exclusions without changing unfinished counts (exclusions: %s)", (hasExclusions) => {
+  const excluded = [{ sheet: "Notes-Issuedcapital", label: "Shares", period: "PY", value: 100 }];
+  const result = normaliseFilingCoverage({ ...coverage,
+    ...(hasExclusions ? { excluded: 1, excluded_writes: excluded } : {}),
+  });
+  expect(result).toMatchObject({
+    unmapped: coverage.unmapped, ambiguous: coverage.ambiguous,
+    excluded: hasExclusions ? 1 : 0, excluded_writes: hasExclusions ? excluded : [],
+  });
+});
 
 test("stacks the failure report and contains the wide detail table", () => {
   render(<FilingCoverageFailurePanel coverage={coverage} />);

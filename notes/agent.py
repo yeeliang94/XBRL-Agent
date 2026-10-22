@@ -101,6 +101,14 @@ _TEMPLATE_PROMPT_FILES: dict[NotesTemplateType, str] = {
     NotesTemplateType.RELATED_PARTY: "notes_related_party.md",
 }
 
+# Accounting rules for the numeric sheets. Both the legacy and the prepared-
+# document prompts render these, so the prepared path can't silently lose the
+# category, sign and unit rules again (runs 197-203).
+_NUMERIC_RULE_FILES: dict[NotesTemplateType, str] = {
+    NotesTemplateType.ISSUED_CAPITAL: "_numeric_issued_capital.md",
+    NotesTemplateType.RELATED_PARTY: "_numeric_related_party.md",
+}
+
 
 # Allowed filing-standard axis values. Used by render_notes_prompt and any
 # other prompt-side helpers that need to branch on the standard. Kept
@@ -740,6 +748,8 @@ def render_notes_prompt(
                     else _load_prompt(_TEMPLATE_PROMPT_FILES[template_type]))
     except FileNotFoundError:
         specific = f"=== TASK: {template_type.value} ===\nNo per-template prompt defined yet."
+    if template_type in _NUMERIC_RULE_FILES:
+        specific += "\n\n" + _load_prompt(_NUMERIC_RULE_FILES[template_type])
 
     # Resolve {{CROSS_SHEET:<topic>}} tokens inside the per-template body
     # so "belongs on Sheet N" hints carry the right number per standard.
@@ -3175,8 +3185,13 @@ async def _emit_payload_through_writer(ctx, payloads: list) -> str:
     return ""
 
 
-def _merge_writer_result(deps: NotesDeps, result) -> None:
-    """Merge one writer result into the per-agent canonical projection state."""
+def _merge_writer_result(deps: NotesDeps, result) -> list[str]:
+    """Merge one writer result into the per-agent canonical projection state.
+
+    Returns one notice per numeric value a later call replaced with a different
+    one, so the agent can tell a correction from a lost distinct item.
+    """
+    replaced: list[str] = []
     if result.errors:
         deps.write_skip_errors.extend(result.errors)
     if result.fuzzy_matches:
@@ -3198,8 +3213,16 @@ def _merge_writer_result(deps: NotesDeps, result) -> None:
             for c in deps.numeric_cells
         }
         for cell in result.numeric_cells:
-            by_cell[(cell["sheet"], cell["row"], cell["col"], dimension_key(cell.get("dimensions")))] = cell
+            key = (cell["sheet"], cell["row"], cell["col"], dimension_key(cell.get("dimensions")))
+            earlier = by_cell.get(key)
+            if earlier is not None and earlier["value"] != cell["value"]:
+                replaced.append(
+                    f"row {cell['row']} column {cell['col']} "
+                    f"({key[3] or 'no category'}): {earlier['value']} -> {cell['value']}"
+                )
+            by_cell[key] = cell
         deps.numeric_cells = list(by_cell.values())
+    return replaced
 
 
 def _write_payloads_through_writer_impl(deps: NotesDeps, payloads: list):
@@ -3223,7 +3246,7 @@ def _write_payloads_through_writer_impl(deps: NotesDeps, payloads: list):
         if result.success:
             deps.filled_path = output_path
             deps.wrote_once = True
-        _merge_writer_result(deps, result)
+        result.replaced_numeric = _merge_writer_result(deps, result)
         return result
 
 
@@ -3950,6 +3973,13 @@ def create_notes_agent(
             msg += "\nParse errors: " + "; ".join(errors)
         if result.errors:
             msg += "\nWriter errors: " + "; ".join(result.errors)
+        if result.replaced_numeric:
+            msg += (
+                "\nReplaced earlier values: " + "; ".join(result.replaced_numeric)
+                + ". Correct only if the new value is a corrected reading of the same "
+                "source item. If the earlier value was a distinct source item, resubmit "
+                "one combined figure naming each component in evidence."
+            )
         if result.fuzzy_matches:
             preview = "; ".join(
                 f"'{req}'->'{chosen}' ({score:.2f})"

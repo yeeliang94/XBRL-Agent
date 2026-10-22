@@ -602,6 +602,18 @@ def _resolve_taxonomy_target(
     return None, None, None
 
 
+# Native numeric-notes sheets that file current-year figures only. The run
+# keeps comparatives; with no prior-year section they are intentionally not
+# filed rather than unresolved. Other sheets (e.g. SOCIE) keep the warning.
+_CURRENT_YEAR_ONLY_SHEETS = frozenset({"Notes-Issuedcapital", "Notes-RelatedPartytran"})
+
+
+def _comparative_not_filed(write: dict[str, Any], issue: dict[str, Any]) -> bool:
+    return (issue.get("reason_code") == "template_period_section_missing"
+            and _write_period_role(write) == "prior_year"
+            and write.get("canonical_sheet", write.get("sheet")) in _CURRENT_YEAR_ONLY_SHEETS)
+
+
 def resolve_filing_doc(
     template_path: str,
     doc: dict[str, Any],
@@ -704,6 +716,7 @@ def resolve_filing_doc(
     resolution_contexts: dict[int, dict[str, Any]] = {}
     unresolved: list[dict[str, Any]] = []
     ambiguous: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
     legacy: list[dict[str, Any]] = []
     for write in doc.get("writes", []):
         hint = write.get("target_hint") or {}
@@ -794,6 +807,12 @@ def resolve_filing_doc(
                         "destination_label": option["label"], "resolution_key": key,
                     })
                 elif issue is not None:
+                    if _comparative_not_filed(write, issue):
+                        excluded.append({**issue,
+                            "reason_code": "comparative_not_filed_on_sheet",
+                            "detail": "This native sheet files current-year figures only. "
+                                      "The prior-year figure is kept in the run, not filed."})
+                        continue
                     (unresolved if unresolved_issue else ambiguous).append(issue)
                     continue
 
@@ -885,7 +904,7 @@ def resolve_filing_doc(
     out_meta["columns_unresolved"] = False
     out["meta"] = out_meta
 
-    requested = len(doc.get("writes", []))
+    requested = len(doc.get("writes", [])) - len(excluded)
     mapped = requested - len(unresolved) - len(ambiguous)
     status = "ready"
     if unresolved or ambiguous:
@@ -903,6 +922,8 @@ def resolve_filing_doc(
         "coverage_percent": round(mapped * 100 / requested, 1) if requested else 100.0,
         "unresolved_writes": unresolved,
         "ambiguous_writes": ambiguous,
+        "excluded": len(excluded),
+        "excluded_writes": excluded,
         "inspection": inspection,
         "operator_resolutions": operator_resolutions,
     }
