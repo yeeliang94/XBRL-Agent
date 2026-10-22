@@ -15,6 +15,8 @@ const prototype = readReference("../../../docs/prototype-ui-overhaul.html");
 
 describe("XBRL design system is the production authority", () => {
   test("keeps guidance contextual and long prompt sources behind a disclosure", () => {
+    expect(designSystem).toContain("Prior-year figures not filed list outside the fill receipt");
+    expect(designSystem).toContain("informational exclusions remain separate from unfinished items and do not block download");
     expect(designSystem).toContain("Place shared team guidance in Settings, immediately after General");
     expect(designSystem).toContain("View application instructions");
     expect(designSystem).toContain("Team guidance used");

@@ -448,7 +448,7 @@ function RowDetail({ title, rows, defaultOpen = false }: { title: string; rows: 
       <summary style={{ cursor: "pointer" }}>
         {title} <span style={{ color: pwc.grey500 }}>({rows.length})</span>
       </summary>
-      <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: pwc.grey700 }}>
+      <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: pwc.grey700, overflowWrap: "anywhere" }}>
         {rows.map((r, i) => (
           <li key={i}>{r}</li>
         ))}
@@ -1535,6 +1535,16 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
               </p>
             )}
             <p style={{ ...ui.supportingText, margin: `0 0 ${pwc.space.md}px` }}>After downloading, run Validate &amp; Generate in mTool.</p>
+            <RowDetail
+              title="Prior-year figures not filed"
+              rows={(report.filing_coverage?.excluded_writes ?? []).map((item) => [
+                friendlyMtoolSheetName(item.sheet ?? "Template"),
+                item.label ?? "Figure",
+                item.period === "PY" ? "Prior year" : item.period,
+                item.entity_scope,
+                item.value != null ? `Value: ${item.value.toLocaleString()}` : null,
+              ].filter(Boolean).join(" · ") + (item.detail ? ` — ${item.detail}` : ""))}
+            />
             {(report.unit_scale_warnings?.length ?? 0) > 0 && (
               <div role="alert" style={{ ...ui.alertWarning, marginBottom: pwc.space.md, fontSize: 12 }}>
                 This template says its figures are in {report.unit_scale_warnings![0].template_declares}, but this run&apos;s figures are in {report.unit_scale_warnings![0].run_denomination}. Check the amounts before filing.
