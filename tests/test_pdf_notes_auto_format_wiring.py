@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import pytest
 
 import server
 
@@ -35,6 +36,20 @@ def test_pdf_auto_format_gate_never_touches_word_uploads(tmp_path, monkeypatch):
     assert server._should_auto_format_pdf_notes(
         tmp_path, merge_succeeded=True, has_notes_result=True,
     ) is False
+
+
+@pytest.mark.parametrize("word", [False, True])
+def test_report_formatting_uses_converted_pdf_while_word_notes_keep_source_styles(tmp_path, word):
+    reports = {"Report-Directors", "Report-StatementByDirectors", "Report-Auditors"}
+    notes = {"Notes-CI"}
+    kwargs = {"merge_succeeded": True, "note_sheets": notes, "report_sheets": reports}
+    assert server._auto_format_prose_sheets(tmp_path, **kwargs) == []
+    (tmp_path / "uploaded.pdf").write_bytes(b"%PDF")
+    if word:
+        (tmp_path / "uploaded.docx").write_bytes(b"PK")
+    assert server._auto_format_prose_sheets(tmp_path, **kwargs) == sorted(reports if word else reports | notes)
+    assert server._auto_format_prose_sheets(tmp_path, merge_succeeded=False,
+        note_sheets=notes, report_sheets=reports) == []
 
 
 def test_pdf_auto_format_stage_is_after_notes_review_and_before_recalc():

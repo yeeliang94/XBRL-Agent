@@ -20,6 +20,7 @@ import openpyxl
 from concept_model.notes_parser import parse_notes_template
 from concept_model.parser import ConceptNode, derive_template_id, parse_template
 from concept_model.taxonomy_semantics import taxonomy_concept
+from reports.registry import REPORT_SHEETS
 
 
 MANIFEST_VERSION = "2022-v1-slot-semantics-3"
@@ -35,7 +36,7 @@ SLOT_ROLES = frozenset({
 })
 
 _PROSE_FILENAMES = frozenset({
-    "Report-Directors.xlsx", "Report-Auditors.xlsx",
+    *(f"{sheet}.xlsx" for sheet in REPORT_SHEETS),
     "10-Notes-CorporateInfo.xlsx",
     "11-Notes-CorporateInfo.xlsx",
     "11-Notes-AccountingPolicies.xlsx",

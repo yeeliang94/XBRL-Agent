@@ -291,6 +291,12 @@ describe("Direction A shell and responsive composition", () => {
 
 
 describe("Simplified template-oriented review", () => {
+  test("pins worksheet-oriented report review and source context", () => {
+    for (const requirement of ["Reports review uses the same worksheet composition as Notes", "Statement by directors", "Auditor details", "Pending or failed report saves prevent worksheet changes", "Move report worksheet navigation above the fields and source before stacking the source pane", "Check formatting for a report that has never been checked"]) {
+      expect(designSystem).toContain(requirement);
+    }
+  });
+
   test("pins the minimal Notes review contract", () => {
     expect(designSystem).toContain("current worksheet’s displayed concepts, periods, category members and entities");
     expect(designSystem).toContain("Notes formatting rechecks use one compact notice beside the action, without internal row numbers");

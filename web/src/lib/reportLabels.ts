@@ -5,6 +5,13 @@ const ORDINALS = ["First", "Second", "Third", "Fourth", "Fifth"];
 
 const LABELS: Record<string, string> = {
   ssmt_DisclosureOfDirectorsReportExplanatory: "Report text",
+  ssmt_DisclosureOfStatementByDirectorsExplanatory: "Statement text",
+  ssmt_NumberOfDirectorsSigningStatementByDirectors: "Directors signing",
+  ssmt_DateOfSigningStatementByDirectors: "Date signed",
+  ssmt_DisclosureOfDirectorsOpinionThatFinancialStatementsOrConsolidatedFinancialStatementsAreDrawnInAccordanceWithAccountingStandards: "Directors’ opinion",
+  ssmt_NameOfOtherPersonPrimarilyResponsibleForFinancialStatementsOfCompany: "Other person responsible for finance",
+  ssmt_TypeOfIdentificationOfOtherPersonPrimarilyResponsibleForFinancialStatementsOfCompany: "Other responsible person ID type",
+  ssmt_IdentificationNumberOfOtherPersonPrimarilyResponsibleForFinancialManagementOfCompany: "Other responsible person ID number",
   ssmt_NumberOfDirectorsSigningDirectorsReport: "Directors signing",
   ssmt_DisclosureOfStatusOfDividend: "Final dividend",
   ssmt_DisclosureOfContingentOrOtherLiabilityBeingEnforceableWithinTwelveMonthsAfterEndOfFinancialYear:
@@ -29,22 +36,27 @@ const LABELS: Record<string, string> = {
   ssmt_StateWhereAuditFirmIsLocated: "State",
 };
 
-const DIRECTOR_FIELD = /^ssmt_(Name|TypeOfIdentification|IdentificationNumber)Of(?:the)?(First|Second|Third|Fourth|Fifth)DirectorWhoSignedDirectorsReport$/;
-const DIRECTOR_PART: Record<string, string> = { Name: "name", TypeOfIdentification: "ID type", IdentificationNumber: "ID number" };
+const DIRECTOR_FIELD = /^ssmt_(Name|TypeOfIdentification|TypeOfIdentificationNumber|IdentificationNumber)Of(?:the)?(First|Second|Third|Fourth|Fifth)DirectorWhoSigned(?:DirectorsReport|StatementByDirectors)$/;
+const FINANCE_DIRECTOR = /^ssmt_DisclosureWhether(First|Second|Third|Fourth|Fifth)DirectorIsAlsoPrimarilyResponsibleForFinancialManagementOf(?:The)?Company$/;
+const DIRECTOR_PART: Record<string, string> = { Name: "name", TypeOfIdentification: "ID type", TypeOfIdentificationNumber: "ID type", IdentificationNumber: "ID number" };
 
 /** 1-based signing-director slot for a director field, else null. */
 export function directorSlot(concept: string): number | null {
   const match = DIRECTOR_FIELD.exec(concept);
-  return match ? ORDINALS.indexOf(match[2]) + 1 : null;
+  const finance = FINANCE_DIRECTOR.exec(concept);
+  return match ? ORDINALS.indexOf(match[2]) + 1 : finance ? ORDINALS.indexOf(finance[1]) + 1 : null;
 }
 
 export function reportFieldLabel(concept: string, fallback: string): string {
   const match = DIRECTOR_FIELD.exec(concept);
   if (match) return `Director ${ORDINALS.indexOf(match[2]) + 1} ${DIRECTOR_PART[match[1]]}`;
+  const finance = FINANCE_DIRECTOR.exec(concept);
+  if (finance) return `Director ${ORDINALS.indexOf(finance[1]) + 1} responsible for finance`;
   return LABELS[concept] ?? fallback;
 }
 
 export const REPORT_SHEET_LABELS: Record<string, string> = {
   "Report-Directors": "Directors’ report",
+  "Report-StatementByDirectors": "Statement by directors",
   "Report-Auditors": "Auditors’ report",
 };

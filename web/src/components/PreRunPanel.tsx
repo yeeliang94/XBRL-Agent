@@ -20,6 +20,8 @@ import {
   NOTES_TEMPLATE_TYPES,
   variantsFor,
   DENOMINATION_LABELS,
+  REPORT_TYPES,
+  isReportType,
 } from "../lib/types";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
@@ -577,6 +579,7 @@ function NotesInventoryEditor({
 
 const REPORT_CHOICES = [
   ["DIRECTORS_REPORT", "Directors’ report"],
+  ["STATEMENT_BY_DIRECTORS", "Statement by directors"],
   ["AUDITORS_REPORT", "Auditors’ report"],
 ] as const;
 
@@ -724,7 +727,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   const [reportsEnabled, setReportsEnabled] = useState<string[]>(() => {
     const saved = initialConfig?.reports_to_run;
     return Array.isArray(saved) ? saved.filter((r): r is string => typeof r === "string")
-      : initialConfig ? [] : ["DIRECTORS_REPORT", "AUDITORS_REPORT"];
+      : initialConfig ? [] : [...REPORT_TYPES];
   });
   const [reportsModels, setReportsModels] = useState<Record<string, string>>(() => {
     const saved = initialConfig?.reports_models;
@@ -1229,7 +1232,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       filing_standard: filingStandard,
       denomination,
       denomination_user_selected: denominationUserSelected,
-      reports_to_run: reportsEnabled.filter((r): r is "DIRECTORS_REPORT" | "AUDITORS_REPORT" => r === "DIRECTORS_REPORT" || r === "AUDITORS_REPORT"),
+      reports_to_run: reportsEnabled.filter(isReportType),
       reports_models: reportsModels,
       notes_to_run,
       notes_models,
