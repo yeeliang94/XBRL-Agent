@@ -34,6 +34,40 @@ class SourceSection:
     parent_title: str = ""
 
 
+_NEXT_ROMAN = {"i": "ii", "ii": "iii", "iii": "iv", "iv": "v", "v": "vi",
+               "vi": "vii", "vii": "viii", "viii": "ix", "ix": "x"}
+
+
+def _continues_letter_sequence(
+    ref: str, active: list, note_blocks: Sequence[SourceBlock],
+    block: SourceBlock,
+) -> bool:
+    """Decide an ambiguous "(i)", "(v)" or "(x)" from the printed sequence.
+
+    Heading levels are assigned page by page, so a repeated parent heading at
+    a page break can push the next lettered item one level deeper. When the
+    open letter is this item's predecessor, the item continues the letters
+    unless it continues an open roman list or the next lettered heading,
+    ignoring repeated "(continued)" headings, is its roman successor.
+    """
+    if len(ref) != 1:
+        return False
+    refs = {depth: section.section_id.split(":")[2] for depth, section, _ in active}
+    if refs.get(1) != chr(ord(ref) - 1):
+        return False
+    if refs.get(2) and _NEXT_ROMAN.get(refs[2]) == ref:
+        return False
+    for later in note_blocks:
+        if later.reading_order <= block.reading_order or later.block_kind != "heading":
+            continue
+        text = BeautifulSoup(later.canonical_html or "", "html.parser").get_text(" ", strip=True)
+        if _CONTINUATION.search(text):
+            continue  # a repeated page heading is not the next printed item
+        if match := (_ROMAN.match(text) or _LETTER.match(text)):
+            return match.group(1).lower() != _NEXT_ROMAN.get(ref)
+    return True
+
+
 def sections_for_note(
     blocks: Sequence[SourceBlock], source_note_id: str,
     top_note_num: str = "", title: str = "",
@@ -90,6 +124,8 @@ def sections_for_note(
                 ))
                 is_roman_child = bool(_ROMAN.match(heading)) and (
                     has_letter_parent or deeper_markup
+                ) and not _continues_letter_sequence(
+                    letter.group(1).lower(), active, note_blocks, block,
                 )
                 ref = letter.group(1).lower()
                 depth = 2 if is_roman_child else 1
