@@ -18,7 +18,8 @@ _SUBNOTE = re.compile(r"^\s*(\d+(?:\.\d+)+)(?=\s|[.:)]|$)")
 _LETTER = re.compile(r"^\s*\(([a-z])\)(?=\s|$)", re.IGNORECASE)
 _ROMAN = re.compile(r"^\s*\((i|ii|iii|iv|v|vi|vii|viii|ix|x)\)(?=\s|$)", re.IGNORECASE)
 _CONTINUATION = re.compile(
-    r"\s*(?:\(\s*(?:continued|continuation)\s*\)|\b(?:continued|continuation))\s*[.:]?\s*$",
+    r"\s*[-–—:,]?\s*(?:\(\s*(?:continued|continuation|cont[’']?d\.?)\s*\)"
+    r"|\b(?:continued|continuation|cont[’']?d)\b)\s*[.:]?\s*$",
     re.IGNORECASE,
 )
 

@@ -722,12 +722,12 @@ def test_parent_sections_include_nested_numbered_and_roman_disclosures(seeded):
     assert expand_section_ids(numbered, notes, ["section:n3:3.1"]) == ["parent", "child", "text"]
 
     # Repeated page headings must not split a complete subsection or its child.
-    for marker in ("continued", "continuation"):
+    for marker in ("(continued)", "(continuation)", "- continued", "\u2013 cont'd"):
         continued = [*numbered[:3],
             SourceBlock("parent-repeat", "heading", 4,
-                        f"<h3>3.1 Basis of preparation ({marker})</h3>", source_note_id="n3", page=2),
+                        f"<h3>3.1 Basis of preparation {marker}</h3>", source_note_id="n3", page=2),
             SourceBlock("child-repeat", "heading", 5,
-                        f"<h4>3.1.1 Statement of compliance ({marker})</h4>", source_note_id="n3", page=2),
+                        f"<h4>3.1.1 Statement of compliance {marker}</h4>", source_note_id="n3", page=2),
             SourceBlock("tail", "paragraph", 6, "<p>Additional compliance disclosure.</p>",
                         source_note_id="n3", page=2),
             SourceBlock("next", "heading", 7, "<h3>3.2 Other policy</h3>", source_note_id="n3"),
