@@ -47,8 +47,8 @@ def _continues_letter_sequence(
     Heading levels are assigned page by page, so a repeated parent heading at
     a page break can push the next lettered item one level deeper. When the
     open letter is this item's predecessor, the item continues the letters
-    unless it continues an open roman list or the next lettered heading is
-    its roman successor.
+    unless it continues an open roman list or the next lettered heading,
+    ignoring repeated "(continued)" headings, is its roman successor.
     """
     if len(ref) != 1:
         return False
@@ -61,6 +61,8 @@ def _continues_letter_sequence(
         if later.reading_order <= block.reading_order or later.block_kind != "heading":
             continue
         text = BeautifulSoup(later.canonical_html or "", "html.parser").get_text(" ", strip=True)
+        if _CONTINUATION.search(text):
+            continue  # a repeated page heading is not the next printed item
         if match := (_ROMAN.match(text) or _LETTER.match(text)):
             return match.group(1).lower() != _NEXT_ROMAN.get(ref)
     return True

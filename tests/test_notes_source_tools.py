@@ -797,6 +797,14 @@ def test_next_letter_after_page_break_is_not_a_roman_child():
     roman = [*blocks[:5], SourceBlock("ii", "heading", 6, "<h4>(ii) Other</h4>", source_note_id="n3")]
     assert expand_section_ids(roman, notes, ["section:n3:h"]) == ["h", "cash", "repeat", "i", "prov", "ii"]
 
+    # A repeated "(h) ... (continued)" before "(ii)" must not hide the successor.
+    repeated = [*blocks[:5],
+        SourceBlock("h-repeat", "heading", 6, "<h3>(h) Cash and cash equivalents (continued)</h3>",
+                    source_note_id="n3", page=25),
+        SourceBlock("ii", "heading", 7, "<h4>(ii) Other</h4>", source_note_id="n3", page=25)]
+    assert expand_section_ids(repeated, notes, ["section:n3:h"]) == [
+        "h", "cash", "repeat", "i", "prov", "h-repeat", "ii"]
+
 
 @pytest.mark.parametrize("selection", ["section:n5:root", "n5:root"])
 def test_section_id_reaches_sheet12_payload_builder_as_source_pieces(seeded, selection):
