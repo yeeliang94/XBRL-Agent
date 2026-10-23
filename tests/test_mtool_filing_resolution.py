@@ -16,7 +16,9 @@ def test_native_group_scope_and_periods_remain_distinct(tmp_path, first_time):
     from mtool.template_map import index_workbook
     root = Path(__file__).resolve().parents[1]
     source = next((root / 'data').glob(
-        '*Group_FirstTime*.xlsx' if first_time else '*Group_SOFP*.xlsx'))
+        '*Group_FirstTime*.xlsx' if first_time else '*Group_SOFP*.xlsx'), None)
+    if source is None:
+        pytest.skip('optional native Group workbook not present')
     writes = []
     for period in ('CY', 'PY'):
         for scope in ('Group', 'Company'):
