@@ -17,6 +17,10 @@ from notes.source_models import SourceBlock
 _SUBNOTE = re.compile(r"^\s*(\d+(?:\.\d+)+)(?=\s|[.:)]|$)")
 _LETTER = re.compile(r"^\s*\(([a-z])\)(?=\s|$)", re.IGNORECASE)
 _ROMAN = re.compile(r"^\s*\((i|ii|iii|iv|v|vi|vii|viii|ix|x)\)(?=\s|$)", re.IGNORECASE)
+_CONTINUATION = re.compile(
+    r"\s*(?:\(\s*(?:continued|continuation)\s*\)|\b(?:continued|continuation))\s*[.:]?\s*$",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -88,6 +92,17 @@ def sections_for_note(
                 )
                 ref = letter.group(1).lower()
                 depth = 2 if is_roman_child else 1
+        # A repeated page heading keeps the open section and its descendants.
+        # Require the same printed reference/title and an explicit marker;
+        # genuinely repeated subsection references still start separate sections.
+        continuation = _CONTINUATION.search(heading)
+        if ref and continuation and any(
+            level == depth
+            and _CONTINUATION.sub("", section.title).strip().casefold()
+            == heading[:continuation.start()].strip().casefold()
+            for level, section, _ in active
+        ):
+            ref = None
         section_id = f"section:{source_note_id}:{ref or 'root'}"
         if ref:
             if active and active[0][0] == 0:
