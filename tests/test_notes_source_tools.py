@@ -776,6 +776,28 @@ def test_parent_sections_include_nested_numbered_and_roman_disclosures(seeded):
     assert "under (b) Revenue" in second
 
 
+def test_next_letter_after_page_break_is_not_a_roman_child():
+    """A repeated parent heading can push "(i)" one level deeper on a new page."""
+    from notes.source_sections import expand_section_ids
+
+    blocks = [
+        SourceBlock("h", "heading", 1, "<h3>(h) Cash and cash equivalents</h3>", source_note_id="n3", page=23),
+        SourceBlock("cash", "paragraph", 2, "<p>Cash at banks.</p>", source_note_id="n3", page=23),
+        SourceBlock("repeat", "heading", 3, "<h3>3. Material accounting policies (continued)</h3>",
+                    source_note_id="n3", page=24),
+        SourceBlock("i", "heading", 4, "<h4>(i) Provisions</h4>", source_note_id="n3", page=24),
+        SourceBlock("prov", "paragraph", 5, "<p>Provisions are recognised.</p>", source_note_id="n3", page=24),
+        SourceBlock("j", "heading", 6, "<h4>(j) Revenue</h4>", source_note_id="n3", page=24),
+    ]
+    notes = [{"source_note_id": "n3", "top_note_num": "3", "title": "Policies"}]
+    assert expand_section_ids(blocks, notes, ["section:n3:h"]) == ["h", "cash", "repeat"]
+    assert expand_section_ids(blocks, notes, ["section:n3:i"]) == ["i", "prov"]
+
+    # The same markup with a following "(ii)" is a genuine roman list.
+    roman = [*blocks[:5], SourceBlock("ii", "heading", 6, "<h4>(ii) Other</h4>", source_note_id="n3")]
+    assert expand_section_ids(roman, notes, ["section:n3:h"]) == ["h", "cash", "repeat", "i", "prov", "ii"]
+
+
 @pytest.mark.parametrize("selection", ["section:n5:root", "n5:root"])
 def test_section_id_reaches_sheet12_payload_builder_as_source_pieces(seeded, selection):
     from types import SimpleNamespace
