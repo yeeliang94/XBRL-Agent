@@ -1455,9 +1455,16 @@ Key invariants:
     checked once. Only passed rows reach existing CAS writes
     and snapshots; grouped task results retain each part's visual assessment
     and evidence hashes. No-op proposals also require the check. Formatting and
-    correction share the formatter request cap. Initial checking and one recheck share a separate
-    eight-request allowance, aggregated into the same token telemetry only after
-    correction finishes. Budget exhaustion leaves affected rows unresolved and
+    correction share the formatter request cap. Initial checking and one recheck each
+    have a separate eight-request allowance, aggregated into the same token telemetry
+    only after correction finishes. A check covering more than
+    `visual_review.VISUAL_TABLES_PER_CHECK` tables runs as concurrent chunks, each
+    with only its notes' source pages and the whole remaining allowance; a chunk
+    that fails leaves only its own notes unresolved. Checker packets omit the
+    geometry JSON the canonical HTML already states, send paragraph coordinates
+    only for multi-paragraph or hard-break cells, and list prepared declarations
+    shared by every cell once (moved only where it cannot change any cell). Quotes
+    are compared as text, so copied markup such as `<br/>` still identifies a table. Budget exhaustion leaves affected rows unresolved and
     preserves unrelated rows that already passed. Duplicate/omitted assessments
     retain unresolved findings; rejected corrections are logged. Completed
     rechecks replace current errors with the latest outstanding findings while
@@ -1603,8 +1610,14 @@ Key invariants:
     a formatter permission. It may delete source-backed page banners and repeated
     continuation headings only. Canonical receipts retain before/after HTML,
     deletions and viewed-page evidence. Original source blocks and placement ids
-    remain intact. Invalid proposals receive output-validator feedback and at most
-    two correction retries within the existing request and wall-clock limits.
+    remain intact. Fields run as concurrent groups (`cleanup_agent.cleanup_groups`):
+    policy fields stay in one group for the cross-field banner rule; other sheets
+    split by `CLEANUP_CELLS_PER_GROUP`. Protected blocks are sent shortened as
+    context. Unsafe removals are rejected individually (`partition_patch`): safe
+    ones are kept, only the rejected ones go back for at most two correction
+    retries, and any still unsafe are dropped (their blocks kept) and reported as
+    `dropped_removals`. A failed group leaves its fields unchanged and marks the
+    pass incomplete without discarding other groups' saved work.
     Deletion evidence must match the exact frozen placed block's page, including
     inherited ancestor headings. Legacy cells use their recorded source pages.
     Blocks without page evidence remain intact; PDF viewing stays unrestricted.
@@ -1621,9 +1634,10 @@ Key invariants:
     `tests/test_notes_cleanup.py`, `tests/test_notes_integrity_false_greens.py`,
     `tests/test_db_schema_v51.py`, `tests/test_pdf_notes_auto_format_wiring.py`,
     `tests/test_run_status.py` and `web/src/__tests__/ExtractPage.test.tsx`.
-    Stop All cancels the group. A sheet with more than
-    `auto_format.FORMAT_ROWS_PER_PART` candidate cells is formatted as disjoint
-    row groups that run concurrently under the one sheet claim and task row;
+    Stop All cancels the group. A sheet whose candidates exceed one part's
+    `auto_format.FORMAT_ROWS_PER_PART` rows, `FORMAT_TABLES_PER_PART` tables or
+    `FORMAT_PAGES_PER_PART` source pages is formatted as disjoint ordered row
+    groups (a note is never split) that run concurrently under the one sheet claim and task row;
     `merge_part_results` reports saved rows from successful groups as a partial
     result when another group fails. Groups share one revert snapshot through
     `save_notes_format_snapshots(pass_started_at=...)`, which replaces only an

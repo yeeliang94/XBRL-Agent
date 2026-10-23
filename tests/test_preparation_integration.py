@@ -307,15 +307,21 @@ def test_report_narratives_receive_final_cleanup_without_requiring_notes(
             notes.coordinator.NotesAgentResult(template_type=NotesTemplateType.CORP_INFO,
                 status="succeeded", workbook_path=str(directory / "notes.xlsx"))])
 
+    def expected():
+        return set(report_ids) | (set() if report_only else {"Notes-CI:10"})
+    proposed = []
+
     async def propose_cleanup(**kwargs):
-        expected = set(report_ids) | (set() if report_only else {"Notes-CI:10"})
-        assert set(kwargs["cells"]) == expected
+        # Cleanup runs one request per sheet group; together they cover every field.
+        assert set(kwargs["cells"]) <= expected()
+        proposed.extend(kwargs["cells"])
         if cleanup_fails:
             raise ValueError("Synthetic cleanup failure")
-        return Patch(inspected_cells=sorted(expected), removals=[Removal(
+        cells = sorted(kwargs["cells"])
+        return Patch(inspected_cells=cells, removals=[Removal(
             cell=cid, block=0, expected_text="COMPANY SDN. BHD.", reason="page_banner",
             evidence_page=1, justification="Separate company name page banner.",
-        ) for cid in sorted(expected)]), {1}
+        ) for cid in cells]), {1}, []
 
     monkeypatch.setattr(reports.agent, "run_reports", extract_reports)
     monkeypatch.setattr(notes.coordinator, "run_notes_extraction", extract_notes)
@@ -331,6 +337,7 @@ def test_report_narratives_receive_final_cleanup_without_requiring_notes(
     })
     assert response.status_code == 200, response.text[-2000:]
     assert '"stage": "cleaning_notes"' in response.text
+    assert sorted(proposed) == sorted(expected())
     with repo.db_session(db) as conn:
         run = conn.execute("SELECT id,status FROM runs ORDER BY id DESC LIMIT 1").fetchone()
         assert run["status"] == ("completed_with_errors" if cleanup_fails else "completed"), response.text[-2000:]

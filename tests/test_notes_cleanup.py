@@ -86,7 +86,7 @@ async def test_cleanup_lifecycle_records_success_failure_and_cancellation(tmp_pa
         repo.upsert_notes_cell(conn,run_id=rid,sheet='Notes',row=10,label='Note',html='<h1>COMPANY SDN. BHD.</h1><p>Disclosure.</p>',source_pages=[1])
     async def proposed(**kwargs):
         assert list(kwargs['cells'])==['Notes:10']
-        return Patch(inspected_cells=['Notes:10'],removals=[op(cell='Notes:10')]),{1}
+        return Patch(inspected_cells=['Notes:10'],removals=[op(cell='Notes:10')]),{1},[]
     monkeypatch.setattr(cleanup_agent,'propose_cleanup',proposed)
     progress=[]
     args=dict(run_id=rid,db_path=str(db),pdf_path=str(pdf),sheets=['Notes'],model_name='test',
@@ -122,9 +122,9 @@ async def test_model_loop_returns_structured_assessment_and_saves_trace(tmp_path
     from notes.cleanup_agent import propose_cleanup
     model=TestModel(call_tools=[],custom_output_args={'inspected_cells':['Notes:10'],'removals':[]})
     usage=RunUsage()
-    patch,viewed=await propose_cleanup(cells={'Notes:10':{'html':'<p>Disclosure.</p>','label':'Note','source_pages':'[1]'}},
+    patch,viewed,dropped=await propose_cleanup(cells={'Notes:10':{'html':'<p>Disclosure.</p>','label':'Note','source_pages':'[1]'}},
                                        pdf_path=str(tmp_path/'unused.pdf'),model=model,usage=usage,output_dir=str(tmp_path))
-    assert patch.inspected_cells==['Notes:10'] and patch.removals==[] and viewed==set()
+    assert patch.inspected_cells==['Notes:10'] and patch.removals==[] and viewed==set() and dropped==[]
     assert usage.requests==1
     assert (tmp_path/'NOTES_CLEANUP_conversation_trace.json').is_file()
 
@@ -160,9 +160,10 @@ async def test_model_corrects_invalid_cleanup_with_validation_feedback(tmp_path,
     cells = {'Notes:10': {'html': '<h1>COMPANY SDN. BHD.</h1><p>Disclosure.</p>',
                          'label': 'Note', 'source_pages': '[1]'}}
     usage = RunUsage()
-    patch, viewed = await cleanup_agent.propose_cleanup(
+    patch, viewed, dropped = await cleanup_agent.propose_cleanup(
         cells=cells, pdf_path='unused.pdf', model=FunctionModel(respond),
         usage=usage, output_dir=str(tmp_path))
+    assert dropped == []
     assert calls == usage.requests == 3
     assert apply_patch(cells, patch, viewed)['Notes:10']['html'] == '<p>Disclosure.</p>'
     assert (tmp_path / 'NOTES_CLEANUP_conversation_trace.json').is_file()
@@ -222,3 +223,151 @@ def test_rejection_names_every_unsafe_removal_with_its_context():
     assert 'supported pages are [1]' in message
     assert 'removal 1 (cell x, block 2, cited page 1): Banner must not name a retained heading' in message
     assert cells['x']['html'] == html
+
+
+def test_one_unsafe_removal_does_not_discard_the_safe_ones():
+    from notes.cleanup_patch import partition_patch
+    html = '<h1>COMPANY SDN. BHD.</h1><p>Disclosure.</p><p>Page 7</p>'
+    cells = {'x': {'html': html, 'source_pages': '[1]'}}
+    good = op()
+    bad = op(block=2, text='Page 7', page=2)
+    patch, rejected = partition_patch(cells, [good, bad], {1})
+    assert patch.removals == [good] and patch.inspected_cells == ['x']
+    assert [r for r, _ in rejected] == [bad] and 'Unviewed source page' in rejected[0][1]
+    assert apply_patch(cells, patch, {1})['x']['html'] == '<p>Disclosure.</p><p>Page 7</p>'
+
+
+@pytest.mark.asyncio
+async def test_retry_carries_only_rejected_removals_and_drops_them_when_retries_run_out(tmp_path, monkeypatch):
+    """Windows run: three rejected entries made the agent resubmit all 51."""
+    from pydantic_ai.messages import ModelResponse, RetryPromptPart, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.usage import RunUsage
+    from notes import cleanup_agent
+
+    monkeypatch.setattr(cleanup_agent, 'count_pdf_pages', lambda _: 2)
+    monkeypatch.setattr(cleanup_agent, 'render_pages_to_png_bytes', lambda *args: [b'image'])
+    good = op(cell='Notes:10')
+    bad = op(cell='Notes:10', block=2, text='Page 7', page=2)
+    calls = 0
+
+    def respond(messages, info):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return ModelResponse(parts=[ToolCallPart('view_pdf_pages', {'pages': [1]})])
+        if calls > 2:
+            retry = [p for m in messages for p in m.parts if isinstance(p, RetryPromptPart)][-1]
+            assert 'removal 1 ' in str(retry.content) and 'removal 0 ' not in str(retry.content)
+        # Keeps citing a page it never viewed, so the removal can never pass.
+        removals = [good, bad] if calls == 2 else [bad]
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name,
+            {'removals': [r.model_dump() for r in removals]})])
+
+    cells = {'Notes:10': {'html': '<h1>COMPANY SDN. BHD.</h1><p>Disclosure.</p><p>Page 7</p>',
+                         'label': 'Note', 'source_pages': '[1]'}}
+    patch, viewed, dropped = await cleanup_agent.propose_cleanup(
+        cells=cells, pdf_path='unused.pdf', model=FunctionModel(respond),
+        usage=RunUsage(), output_dir=str(tmp_path))
+    assert calls == 4
+    assert patch.removals == [good]
+    assert [d['block'] for d in dropped] == [2] and 'Unviewed source page' in dropped[0]['error']
+
+
+def test_policy_fields_stay_together_and_other_sheets_are_split():
+    from notes.cleanup_agent import CLEANUP_CELLS_PER_GROUP, cleanup_groups
+    cells = {f'Notes-SummaryofAccPol:{r}': {} for r in range(15)}
+    cells.update({f'Notes-Listofnotes:{r}': {} for r in range(CLEANUP_CELLS_PER_GROUP + 1)})
+    cells['Report-Directors:5'] = {}
+    groups = cleanup_groups(cells)
+    assert [len(g) for g in groups] == [15, CLEANUP_CELLS_PER_GROUP, 1, 1]
+    assert all(cid.startswith('Notes-SummaryofAccPol:') for cid in groups[0])
+
+
+@pytest.mark.asyncio
+async def test_a_failed_group_keeps_its_fields_and_the_others_are_saved(tmp_path, monkeypatch):
+    from db import repository as repo
+    from db.schema import init_db
+    from notes import cleanup_agent
+    db = tmp_path / 'test.db'; init_db(db)
+    pdf = tmp_path / 'uploaded.pdf'; pdf.write_bytes(b'%PDF')
+    html = '<h1>COMPANY SDN. BHD.</h1><p>Disclosure.</p>'
+    with repo.db_session(db) as conn:
+        rid = repo.create_run(conn, 'sample.pdf', session_id='s', output_dir=str(tmp_path))
+        for sheet in ('Notes-CI', 'Notes-Listofnotes'):
+            repo.upsert_notes_cell(conn, run_id=rid, sheet=sheet, row=10, label='Note', html=html, source_pages=[1])
+
+    async def proposed(**kwargs):
+        (cid,) = kwargs['cells']
+        if cid.startswith('Notes-Listofnotes'):
+            raise ValueError('provider error')
+        assert kwargs['trace_label'].startswith('NOTES_CLEANUP_part')
+        return Patch(inspected_cells=[cid], removals=[op(cell=cid)]), {1}, []
+    monkeypatch.setattr(cleanup_agent, 'propose_cleanup', proposed)
+    result = await cleanup_agent.run_notes_cleanup(
+        run_id=rid, db_path=str(db), pdf_path=str(pdf), sheets=['Notes-CI', 'Notes-Listofnotes'],
+        model_name='test', model_factory=lambda: 'test', output_dir=str(tmp_path),
+        on_progress=lambda *args: None)
+    assert not result['ok'] and result['removed_blocks'] == 1 and '1 of 2' in result['error']
+    with repo.db_session(db) as conn:
+        saved = dict(conn.execute('SELECT sheet, html FROM notes_cells').fetchall())
+        assert saved == {'Notes-CI': '<p>Disclosure.</p>', 'Notes-Listofnotes': html}
+        assert conn.execute('SELECT status FROM run_agents').fetchone()[0] == 'failed'
+
+
+def test_protected_blocks_are_shortened_without_renumbering():
+    from notes.cleanup_agent import PROTECTED_PREVIEW_CHARS, _block_payload
+    long_text = 'Revenue is recognised when control passes. ' * 10
+    blocks = enumerate_blocks(f'<h1>COMPANY SDN. BHD.</h1><p>{long_text}</p><table><tr><td>{long_text}</td></tr></table>')[2]
+    payload = [_block_payload(b) for b in blocks]
+    assert [b['block'] for b in payload] == [0, 1, 2]
+    assert payload[0] == blocks[0]
+    assert all(len(b['text']) == PROTECTED_PREVIEW_CHARS + 1 and not b['eligible'] for b in payload[1:])
+
+
+@pytest.mark.asyncio
+async def test_a_failed_save_keeps_the_other_groups_saved(tmp_path, monkeypatch):
+    """Peer review: a receipt error in one group's save escaped the loop and
+    stopped a valid later group from saving."""
+    from db import repository as repo
+    from db.schema import init_db
+    from notes import cleanup_agent
+    db = tmp_path / 'test.db'; init_db(db)
+    pdf = tmp_path / 'uploaded.pdf'; pdf.write_bytes(b'%PDF')
+    html = '<h1>COMPANY SDN. BHD.</h1><p>Disclosure.</p>'
+    with repo.db_session(db) as conn:
+        rid = repo.create_run(conn, 'sample.pdf', session_id='s', output_dir=str(tmp_path))
+        for sheet in ('Notes-CI', 'Notes-Listofnotes'):
+            repo.upsert_notes_cell(conn, run_id=rid, sheet=sheet, row=10, label='Note', html=html, source_pages=[1])
+
+    async def proposed(**kwargs):
+        (cid,) = kwargs['cells']
+        return Patch(inspected_cells=[cid], removals=[op(cell=cid)]), {1}, []
+    real_save = cleanup_agent.save_cleanup
+    def save(conn, **kwargs):
+        if 'Notes-CI:10' in kwargs['cells']:
+            raise ValueError('Previous cleanup receipt no longer matches Notes-CI:10')
+        return real_save(conn, **kwargs)
+    monkeypatch.setattr(cleanup_agent, 'propose_cleanup', proposed)
+    monkeypatch.setattr(cleanup_agent, 'save_cleanup', save)
+    result = await cleanup_agent.run_notes_cleanup(
+        run_id=rid, db_path=str(db), pdf_path=str(pdf), sheets=['Notes-CI', 'Notes-Listofnotes'],
+        model_name='test', model_factory=lambda: 'test', output_dir=str(tmp_path),
+        on_progress=lambda *args: None)
+    assert not result['ok'] and result['removed_blocks'] == 1
+    with repo.db_session(db) as conn:
+        saved = dict(conn.execute('SELECT sheet, html FROM notes_cells').fetchall())
+        assert saved == {'Notes-CI': html, 'Notes-Listofnotes': '<p>Disclosure.</p>'}
+
+
+def test_a_rejected_heading_deletion_does_not_reject_its_continuation():
+    """Greptile PR #41: an unsafe deletion of the retained heading also
+    rejected the safe continuation deletion that keeps it."""
+    from notes.cleanup_patch import partition_patch
+    html = "<h3>2.8 Income taxes</h3><p>Current tax.</p><h3>2.8 Income taxes (cont'd)</h3><p>Deferred.</p>"
+    cells = {'x': {'html': html, 'source_pages': '[1]'}}
+    heading = op(block=0, text='2.8 Income taxes', page=2)
+    continuation = op(block=2, text="2.8 Income taxes (cont'd)", reason='continuation_heading', retained=0)
+    patch, rejected = partition_patch(cells, [heading, continuation], {1})
+    assert patch.removals == [continuation] and [r for r, _ in rejected] == [heading]
+    assert apply_patch(cells, patch, {1})['x']['html'] == '<h3>2.8 Income taxes</h3><p>Current tax.</p><p>Deferred.</p>'
