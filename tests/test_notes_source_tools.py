@@ -721,6 +721,32 @@ def test_parent_sections_include_nested_numbered_and_roman_disclosures(seeded):
     notes = [{"source_note_id": "n3", "top_note_num": "3", "title": "Policies"}]
     assert expand_section_ids(numbered, notes, ["section:n3:3.1"]) == ["parent", "child", "text"]
 
+    # Repeated page headings must not split a complete subsection or its child.
+    for marker in ("(continued)", "(continuation)", "- continued", "\u2013 cont'd"):
+        continued = [*numbered[:3],
+            SourceBlock("parent-repeat", "heading", 4,
+                        f"<h3>3.1 Basis of preparation {marker}</h3>", source_note_id="n3", page=2),
+            SourceBlock("child-repeat", "heading", 5,
+                        f"<h4>3.1.1 Statement of compliance {marker}</h4>", source_note_id="n3", page=2),
+            SourceBlock("tail", "paragraph", 6, "<p>Additional compliance disclosure.</p>",
+                        source_note_id="n3", page=2),
+            SourceBlock("next", "heading", 7, "<h3>3.2 Other policy</h3>", source_note_id="n3"),
+        ]
+        assert expand_section_ids(continued, notes, ["section:n3:3.1"]) == [
+            "parent", "child", "text", "parent-repeat", "child-repeat", "tail",
+        ]
+        assert expand_section_ids(continued, notes, ["section:n3:3.1.1"]) == [
+            "child", "text", "parent-repeat", "child-repeat", "tail",
+        ]
+
+    # A shared reference alone cannot join genuinely different sections.
+    for heading in ("3.1 Basis of preparation", "3.1 Other basis (continued)"):
+        repeated = [*numbered[:3], SourceBlock(
+            "different", "heading", 4, f"<h3>{heading}</h3>", source_note_id="n3",
+        )]
+        assert expand_section_ids(repeated, notes, ["section:n3:3.1"]) == ["parent", "child", "text"]
+        assert expand_section_ids(repeated, notes, ["section:n3:3.1:2"]) == ["different"]
+
     lettered = [
         SourceBlock("a", "heading", 1, "<h3>(a) Leases</h3>", source_note_id="n3"),
         SourceBlock("i", "heading", 2, "<h4>(i) As lessee</h4>", source_note_id="n3",
