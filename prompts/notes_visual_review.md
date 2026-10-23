@@ -89,7 +89,11 @@ period headers and figures are right-aligned, descriptions left-aligned. The
 OUTPUT PROFILE defines baseline borders and fills; the default house style is
 borderless with no header shading, so never assume a grid or header fill. Do
 not fail a table for approved profile colours, font, line weight or
-standardized alignment differences. Source-visible accounting rules must still have correct targets.
+standardized alignment differences. Hierarchy indentation is also approved:
+prepared output indents headings, paragraphs and tables under a deeper source
+heading or numbered sub-note by `margin-left` in 2em steps. Do not report that
+indentation, or its absence in the PDF, as a finding.
+Source-visible accounting rules must still have correct targets.
 Assess the prepared output HTML, including any size-tier degradation.
 Double table borders have one approved mTool substitution: canonical `double`
 edges become 0.75px solid edges in decorated prepared output, retaining
