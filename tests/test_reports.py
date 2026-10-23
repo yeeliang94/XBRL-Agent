@@ -310,7 +310,7 @@ async def test_report_cleanup_preserves_content_and_report_edit_revisions(
             reason="continuation_heading", retained_block=index[title], evidence_page=2,
             justification="Continuation repeats the retained report title.",
         ))
-        return Patch(inspected_cells=[cid], removals=removals), {1, 2}
+        return Patch(inspected_cells=[cid], removals=removals), {1, 2}, []
 
     monkeypatch.setattr(cleanup_agent, "propose_cleanup", propose)
     result = await cleanup_agent.run_notes_cleanup(

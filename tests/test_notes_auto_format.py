@@ -322,6 +322,23 @@ async def test_large_sheet_is_formatted_in_concurrent_row_groups(auto_format_db)
     assert sorted(map(int, evidence)) == rows[:-1]
 
 
+def test_row_groups_are_sized_by_tables_and_pages(auto_format_db):
+    """Windows run: four rows with ten tables hit the time limit while four
+    small rows finished in a minute. A part is bounded by its tables and
+    source pages; a note is never split, so a large one stands alone."""
+    db_path, run_id, _ = auto_format_db
+    table = "<table><tr><td>1</td></tr></table>"
+    notes = {100: (table * 10, [9, 10]), 101: (table, [11]), 102: ("<p>Prose</p>", [11]),
+             103: (table * 2, [12]), 104: (table, [13]), 105: (table, [14, 15, 16, 17, 18, 19])}
+    with repo.db_session(db_path) as conn:
+        for row, (html, pages) in notes.items():
+            repo.upsert_notes_cell(conn, run_id=run_id, sheet="Notes-Listofnotes", row=row,
+                                   label="Note", html=html, source_pages=pages,
+                                   style_source="unstyled")
+    assert auto_format._row_groups(db_path, run_id, "Notes-Listofnotes") == [
+        [100], [101, 102, 103], [104], [105]]
+
+
 @pytest.mark.asyncio
 async def test_auto_format_limits_model_requests_across_sheets(auto_format_db):
     db_path, run_id, tmp_path = auto_format_db

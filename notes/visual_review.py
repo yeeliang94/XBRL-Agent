@@ -28,8 +28,10 @@ from notes.rule_map import rule_map_text
 
 logger = logging.getLogger(__name__)
 
-# Shared by the initial check and one recheck, separately from formatting.
+# Per check (the initial check and one recheck), separately from formatting.
 MAX_VISUAL_REVIEW_REQUESTS = 8
+# Tables judged by one checker request; larger sets run as concurrent requests.
+VISUAL_TABLES_PER_CHECK = 4
 
 
 SOURCE_DEFECT_KINDS = frozenset({"source_content", "source_provenance", "source_emphasis"})
@@ -94,11 +96,69 @@ def _plain(text: str) -> str:
     return " ".join(text.split()).casefold()
 
 
-def _table_packets(canonical: str, prepared: str) -> str | None:
+def _quote_text(quote: str) -> str:
+    """A checker quote compared as text: it often copies markup such as
+    ``<br/>`` from the candidate HTML, which the table text does not contain."""
+    return _plain(BeautifulSoup(quote, "html.parser").get_text(" "))
+
+
+def _quotes_table(quote: str, table_text: str) -> bool:
+    """A quote identifies a table only if it has text and that text is there;
+    markup alone (``<br/>``) is empty and would match every table."""
+    text = _quote_text(quote)
+    return bool(text) and text in table_text
+
+
+def _family(prop: str) -> str:
+    return prop.split("-", 1)[0]
+
+
+def _declarations(style: str) -> list[tuple[str, str]]:
+    out = []
+    for decl in style.split(";"):
+        prop, sep, value = decl.partition(":")
+        if sep and prop.strip():
+            out.append((prop.strip().lower(), value.strip()))
+    return out
+
+
+def _factor_shared_cell_style(table) -> str:
+    """Move declarations every cell repeats into one line; return that line.
+
+    Lossless: a shared declaration moves only where its property is declared
+    once in every cell and no other declaration of the same property family
+    precedes it, so reading the shared line before each cell's own style gives
+    every cell its original style. Anything else stays inline.
+    """
+    cells = [cell for cell in table.find_all(["td", "th"]) if cell.find_parent("table") is table]
+    if len(cells) < 2:
+        return ""
+    parsed = [_declarations(cell.get("style", "")) for cell in cells]
+    shared = [decl for decl in dict.fromkeys(parsed[0]) if all(decl in decls for decls in parsed[1:])]
+    movable = []
+    for decl in shared:
+        if all([prop for prop, _ in decls].count(decl[0]) == 1
+               and not any(_family(prop) == _family(decl[0]) and (prop, value) not in movable
+                           for prop, value in decls[:decls.index(decl)])
+               for decls in parsed):
+            movable.append(decl)
+    if not movable:
+        return ""
+    for cell, decls in zip(cells, parsed):
+        rest = [decl for decl in decls if decl not in movable]
+        if rest:
+            cell["style"] = "; ".join(f"{prop}: {value}" for prop, value in rest)
+        else:
+            del cell["style"]
+    return "; ".join(f"{prop}: {value}" for prop, value in movable)
+
+
+def _table_packets(canonical: str, prepared: str, only: set[int] | None = None) -> str | None:
     """Each table on its own: context, header line, candidate and prepared HTML.
 
     Adjacent current/comparative tables look alike in one blob (runs 183-185).
-    Returns None when prepared output cannot be paired table by table.
+    ``only`` limits the packets to one checker chunk's tables. Returns None
+    when prepared output cannot be paired table by table.
     """
     source = BeautifulSoup(canonical, "html.parser")
     tables = source.find_all("table")
@@ -110,6 +170,8 @@ def _table_packets(canonical: str, prepared: str) -> str | None:
         table.replace_with(outside.new_string(f" [TABLE {index}] "))
     parts = ["NOTE TEXT OUTSIDE TABLES: " + " ".join(outside.get_text(" ", strip=True).split())[:1500]]
     for index, (table, output) in enumerate(zip(tables, prepared_tables)):
+        if only is not None and index not in only:
+            continue
         context = next((
             " ".join(block.get_text(" ", strip=True).split())
             for block in table.find_all_previous(["p", "h1", "h2", "h3", "h4", "h5", "h6", "div"])
@@ -121,10 +183,13 @@ def _table_packets(canonical: str, prepared: str) -> str | None:
             " ".join(cell.get_text(" ", strip=True).split())
             for cell in (first_row.find_all(["td", "th"]) if first_row else [])
         )
+        shared = _factor_shared_cell_style(output)
         parts.append(
             f"TABLE {index} — preceding text: {context[:200] or 'none'}; first row: {header or 'empty'}"
             f"\nTABLE {index} CANONICAL CANDIDATE HTML:\n{table}"
-            f"\nTABLE {index} PREPARED OUTPUT HTML:\n{output}"
+            f"\nTABLE {index} PREPARED OUTPUT HTML:\n"
+            + (f"EVERY CELL'S STYLE STARTS WITH: {shared}\n" if shared else "")
+            + str(output)
         )
     return "\n".join(parts)
 
@@ -229,42 +294,74 @@ def retain_other_verification_receipts(previous: dict, current: dict, *, active_
     return {**current, "verified_rows": receipts}
 
 
+def _check_chunks(keys) -> list[list[tuple[int, int]]]:
+    """Group ``(row, table)`` keys for separate checker requests.
+
+    A note's tables stay together when they fit; a note with more tables than
+    one request holds is split. Each chunk is judged on its own evidence.
+    """
+    by_row: dict[int, list[tuple[int, int]]] = {}
+    for key in sorted(keys):
+        by_row.setdefault(key[0], []).append(key)
+    chunks: list[list[tuple[int, int]]] = []
+    for row_keys in by_row.values():
+        if chunks and len(chunks[-1]) + len(row_keys) <= VISUAL_TABLES_PER_CHECK:
+            chunks[-1].extend(row_keys)
+            continue
+        chunks.extend(row_keys[i:i + VISUAL_TABLES_PER_CHECK]
+                      for i in range(0, len(row_keys), VISUAL_TABLES_PER_CHECK))
+    return chunks
+
+
+def _row_packet(row: int, html: str, prepared: str, identity: dict, layout: dict | None,
+                tables: set[int]) -> str:
+    """One note's evidence, limited to the tables this checker request judges."""
+    from notes.table_layout import layout_manifest
+
+    # Coordinates matter only where a cell has more than one paragraph or a
+    # hard break; a single paragraph is always paragraph 1.
+    paragraphs = [
+        {"table": table["table"], "row": tr["row"], "cell": index,
+         "paragraphs": cell["paragraphs"]}
+        for table in layout_manifest(html) if table["table"] in tables
+        for tr in table["rows"]
+        for index, cell in enumerate(tr["cells"], 1)
+        if len(cell["paragraphs"]) > 1 or any(p["hard_breaks"] for p in cell["paragraphs"])
+    ]
+    rules = "\n".join(line for line in rule_map_text(html).splitlines()
+                      if any(line.startswith(f"table {t}:") for t in tables)) or "no explicit lines"
+    return (
+        f"FORMATTED NOTE ROW {row}"
+        + ("\nCELL PARAGRAPH COORDINATES: " + json.dumps(paragraphs) if paragraphs else "")
+        + f"\nPREPARATION TIER: {identity.get('tier', 'unknown')}"
+        + "\nRULE MAP (one entry per physical line, resolved from both cells):\n" + rules
+        + "\nFORMATTER LAYOUT (its description of the source; context only, "
+        "judge the actual HTML): " + _layout_text(layout)
+        + "\n" + (_table_packets(html, prepared, only=tables)
+                  or "CANONICAL CANDIDATE HTML:\n" + html + "\nPREPARED OUTPUT HTML:\n" + prepared)
+    )
+
+
 async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
                             sheet, model, usage, limits, output_dir, trace_label,
                             layouts=None, activity=None):
-    """A fresh context on every check; no formatter conversation is evidence."""
-    from notes.formatting_agent import _preload_source_pages, _table_geometry
-    from notes.table_layout import layout_manifest
+    """A fresh context on every check; no formatter conversation is evidence.
+
+    Tables are checked in chunks (``_check_chunks``) that run concurrently,
+    each with only its notes' source pages. A chunk that cannot finish leaves
+    only its own notes unresolved.
+    """
+    from notes.formatting_agent import _preload_source_pages
 
     by_row = {cell.row: cell for cell in cells}
     expected = {(row, index) for row, html in rows.items()
                 for index, _ in enumerate(BeautifulSoup(html, "html.parser").find_all("table"))}
     if not expected:
         return {}, {"tables": [], "evidence": {}}
-    errors, evidence, content_by_row = {}, {}, {}
+    errors, evidence, prepared_by_row = {}, {}, {}
     for row in sorted({row for row, _ in expected}):
         try:
-            prepared, identity = prepare_note_evidence(rows[row], style)
-            evidence[row] = identity
-            paragraphs = [
-                {"table": table["table"], "row": tr["row"], "cell": index,
-                 "paragraphs": cell["paragraphs"]}
-                for table in layout_manifest(rows[row]) for tr in table["rows"]
-                for index, cell in enumerate(tr["cells"], 1) if cell["paragraphs"]
-            ]
-            content_by_row[row] = (
-                f"FORMATTED NOTE ROW {row}; geometry: " + json.dumps(_table_geometry(rows[row]))
-                + ("\nCELL PARAGRAPH COORDINATES: " + json.dumps(paragraphs) if paragraphs else "")
-                + "\nOUTPUT PROFILE: " + json.dumps(asdict(style))
-                + f"\nPREPARATION TIER: {identity.get('tier', 'unknown')}"
-                + "\nRULE MAP (one entry per physical line, resolved from both cells):\n"
-                + rule_map_text(rows[row])
-                + "\nFORMATTER LAYOUT (its description of the source; context only, "
-                "judge the actual HTML): " + _layout_text((layouts or {}).get(row))
-                + "\n" + (_table_packets(rows[row], prepared)
-                          or "CANONICAL CANDIDATE HTML:\n" + rows[row]
-                          + "\nPREPARED OUTPUT HTML:\n" + prepared)
-            )
+            prepared_by_row[row], evidence[row] = prepare_note_evidence(rows[row], style)
         except ValueError as exc:
             errors[row] = str(exc)
     reviewable = {key for key in expected if key[0] not in errors}
@@ -287,48 +384,103 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
     reviewable = {key for key in reviewable if key[0] not in errors}
     if not reviewable:
         return errors, {"tables": [], "evidence": evidence}
-    attached = {page for row, _ in reviewable for page in by_row[row].source_pages}
-    source = [part for page in sorted(attached) for part in source_by_page[page]]
-    content = [content_by_row[row] for row in sorted({row for row, _ in reviewable})]
-    agent, deps = create_visual_review_agent(
-        run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
-        model=model,
-    )
-    deps.viewed_pages.update(attached)
-    deps.activity = activity
-    manifest = [{"row": row, "table": table, "source_pages": by_row[row].source_pages}
-                for row, table in sorted(reviewable)]
-    try:
-        result = await agent.run(
-            ["Check ALL manifest tables against the source PDF images. Manifest: "
-             + json.dumps(manifest), *content, *source], deps=deps,
-            usage=usage, usage_limits=limits,
-        )
-        if output_dir:
-            save_messages_trace(result.all_messages(), output_dir, trace_label,
-                                runtime_metadata=describe_model_runtime(model, role="notes_formatter"))
-        decision = VisualReview.model_validate(result.output)
-    except UsageLimitExceeded:
-        logger.warning("Visual reviewer exhausted its request budget run=%s sheet=%s", run_id, sheet)
-        for row in {row for row, _ in reviewable}:
-            _add_error(errors, row, "Visual checking reached its request budget; assessment is unresolved.")
-        return errors, {"tables": [], "evidence": evidence, "error_type": "turn_budget"}
-    except Exception:
-        logger.warning(
-            "Visual reviewer failed run=%s sheet=%s", run_id, sheet, exc_info=True,
-        )
-        for row, _ in reviewable:
-            errors[row] = "Visual reviewer did not complete a valid assessment."
-        return errors, {"tables": [], "evidence": evidence}
-    seen = set()
-    ineligible: set[tuple[int, int]] = set()
     table_text = {
         (row, index): _plain(table.get_text(" ", strip=True))
         for row in {row for row, _ in reviewable}
         for index, table in enumerate(BeautifulSoup(rows[row], "html.parser").find_all("table"))
     }
+    chunks = _check_chunks(reviewable)
+
+    async def check_chunk(index: int, chunk: list[tuple[int, int]]):
+        chunk_rows = sorted({row for row, _ in chunk})
+        attached = {page for row in chunk_rows for page in by_row[row].source_pages}
+        source = [part for page in sorted(attached) for part in source_by_page[page]]
+        content = [_row_packet(row, rows[row], prepared_by_row[row], evidence[row],
+                               (layouts or {}).get(row), {t for r, t in chunk if r == row})
+                   for row in chunk_rows]
+        # One chunk spends the caller's budget as before. Concurrent chunks
+        # each get the whole remaining allowance, so a large note's check
+        # costs at most that allowance per chunk; splitting it more thinly
+        # would leave chunks unresolved for lack of requests.
+        own_usage = usage if len(chunks) == 1 else RunUsage()
+        own_limits = limits if len(chunks) == 1 else UsageLimits(
+            request_limit=limits.request_limit - usage.requests)
+        agent, deps = create_visual_review_agent(
+            run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
+            model=model,
+        )
+        deps.viewed_pages.update(attached)
+        deps.activity = activity
+        manifest = [{"row": row, "table": table, "source_pages": by_row[row].source_pages}
+                    for row, table in chunk]
+        label = trace_label if len(chunks) == 1 else f"{trace_label}_chunk{index}"
+        try:
+            return await run_chunk(agent, deps, chunk, content, source, manifest,
+                                   own_usage, own_limits, label)
+        finally:
+            # Recorded as each chunk ends, so a sibling's timeout or a stop
+            # cannot lose the usage of a response that already completed.
+            if own_usage is not usage:
+                usage.incr(own_usage)
+
+    async def run_chunk(agent, deps, chunk, content, source, manifest, own_usage, own_limits, label):
+        try:
+            result = await agent.run(
+                ["Check ALL manifest tables against the source PDF images. Manifest: "
+                 + json.dumps(manifest) + "\nOUTPUT PROFILE: " + json.dumps(asdict(style)),
+                 *content, *source], deps=deps,
+                usage=own_usage, usage_limits=own_limits,
+            )
+            if output_dir:
+                save_messages_trace(result.all_messages(), output_dir, label,
+                                    runtime_metadata=describe_model_runtime(model, role="notes_formatter"))
+            return own_usage, set(chunk), deps.viewed_pages, VisualReview.model_validate(result.output), None
+        except UsageLimitExceeded:
+            logger.warning("Visual reviewer exhausted its request budget run=%s sheet=%s", run_id, sheet)
+            return own_usage, set(chunk), deps.viewed_pages, None, "turn_budget"
+        except Exception:
+            logger.warning(
+                "Visual reviewer failed run=%s sheet=%s", run_id, sheet, exc_info=True,
+            )
+            return own_usage, set(chunk), deps.viewed_pages, None, "failed"
+
+    outcomes = await asyncio.gather(*(check_chunk(i, chunk) for i, chunk in enumerate(chunks, 1)))
+    tables: list[dict] = []
+    ineligible: set[tuple[int, int]] = set()
+    limits_by_row: dict[int, str] = {}
+    error_type = None
+    for _, chunk, viewed, decision, failure in outcomes:
+        chunk_rows = {row for row, _ in chunk}
+        if failure == "turn_budget":
+            error_type = "turn_budget"
+            for row in chunk_rows:
+                _add_error(errors, row, "Visual checking reached its request budget; assessment is unresolved.")
+            continue
+        if failure is not None:
+            for row in chunk_rows:
+                errors[row] = "Visual reviewer did not complete a valid assessment."
+            continue
+        start = len(tables)
+        tables.extend(_judge_assessments(decision, chunk, viewed, by_row, table_text,
+                                         errors, limits_by_row, ineligible))
+        for item in tables[start:]:
+            if item.pop("_rejected", False) or (item["row"], item["table"]) in ineligible:
+                item["recopy_eligible"] = False
+    # Rows whose only findings are formatter limits; they remain unresolved.
+    limitation_rows = sorted(row for row in limits_by_row if row not in errors)
+    for row, finding in limits_by_row.items():
+        _add_error(errors, row, finding)
+    review = {"tables": tables, "evidence": evidence, "limitation_rows": limitation_rows}
+    if error_type:
+        review["error_type"] = error_type
+    return errors, review
+
+
+def _judge_assessments(decision, reviewable, viewed_pages, by_row, table_text,
+                       errors, limits, ineligible) -> list[dict]:
+    """Apply the evidence rules to one checker response; return its tables."""
+    seen = set()
     rejected: set[int] = set()
-    limits: dict[int, str] = {}
     for index, assessment in enumerate(decision.tables):
         key = (assessment.row, assessment.table)
         if key not in reviewable or key in seen:
@@ -343,7 +495,7 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
         issue = None
         if not assessment.source_pages:
             issue = "Visual assessment did not cite a source page."
-        elif not set(assessment.source_pages).issubset(deps.viewed_pages):
+        elif not set(assessment.source_pages).issubset(viewed_pages):
             issue = "Visual assessment cited unseen source pages."
         elif not set(assessment.source_pages).issubset(by_row[assessment.row].source_pages):
             issue = "Visual assessment cited pages outside this note's source pages."
@@ -361,8 +513,7 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
             issue = ("Source correction or human review required: "
                      + assessment.content_defect.strip() + "." + also)
         elif (assessment.issue_kind == "structure"
-              and (not assessment.observed_text.strip()
-                   or _plain(assessment.observed_text) not in table_text.get(key, ""))):
+              and not _quotes_table(assessment.observed_text, table_text.get(key, ""))):
             # A structure claim that names no text in this table is not
             # evidence about this table; it must not trigger a re-copy.
             assessment.status = "unresolved"
@@ -374,8 +525,7 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
             assessment.status = "unresolved"
             issue = "Source correction or human review required: " + assessment.reason
         elif (assessment.issue_kind == "unsupported_layout"
-              and (not assessment.observed_text.strip()
-                   or _plain(assessment.observed_text) not in table_text.get(key, ""))):
+              and not _quotes_table(assessment.observed_text, table_text.get(key, ""))):
             # An unquoted "cannot be drawn" claim is not evidence about this
             # table: give it one ordinary correction instead of giving up.
             assessment.issue_kind = "style"
@@ -395,19 +545,13 @@ async def check_visual_rows(*, rows, cells, style, run_id, db_path, pdf_path,
             assessment.status = "unresolved"
             issue = assessment.reason
         if issue:
-            finding = f"Table {assessment.table}: {issue}"
-            _add_error(errors, assessment.row, finding)
+            _add_error(errors, assessment.row, f"Table {assessment.table}: {issue}")
     for row, _ in reviewable - seen:
         _add_error(errors, row, "Visual assessment omitted a table.")
-    # Rows whose only findings are formatter limits; they remain unresolved.
-    limitation_rows = sorted(row for row in limits if row not in errors)
-    for row, finding in limits.items():
-        _add_error(errors, row, finding)
-    dumped = decision.model_dump()
-    for index, item in enumerate(dumped["tables"]):
-        if index in rejected or (item["row"], item["table"]) in ineligible:
-            item["recopy_eligible"] = False
-    return errors, {**dumped, "evidence": evidence, "limitation_rows": limitation_rows}
+    dumped = decision.model_dump()["tables"]
+    for index in rejected:
+        dumped[index]["_rejected"] = True
+    return dumped
 
 
 async def review_and_correct_rows(
@@ -431,7 +575,9 @@ async def review_and_correct_rows(
     originals = originals if originals is not None else rows
     layouts = layouts if layouts is not None else {}
 
-    review_usage = RunUsage()
+    # Each check (initial, recheck) has its own allowance: a large note's
+    # concurrent chunks must not leave its recheck without one.
+    check_usages: list[RunUsage] = []
     review_limits = UsageLimits(request_limit=MAX_VISUAL_REVIEW_REQUESTS)
 
     def phase(message: str) -> None:
@@ -442,10 +588,11 @@ async def review_and_correct_rows(
                 logger.warning("Could not publish formatter phase", exc_info=True)
 
     async def check(candidate_rows, suffix):
+        check_usages.append(RunUsage())
         return await check_visual_rows(
             rows=candidate_rows, cells=cells, style=style,
             run_id=run_id, db_path=db_path, pdf_path=pdf_path,
-            sheet=sheet, model=model, usage=review_usage, limits=review_limits,
+            sheet=sheet, model=model, usage=check_usages[-1], limits=review_limits,
             output_dir=output_dir, trace_label=trace_label + suffix, layouts=layouts,
             activity=activity,
         )
@@ -530,4 +677,5 @@ async def review_and_correct_rows(
     finally:
         # Aggregate telemetry only after correction; checker requests cannot
         # consume the formatter's allowance while it is still running.
-        usage.incr(review_usage)
+        for check_usage in check_usages:
+            usage.incr(check_usage)
