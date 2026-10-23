@@ -1192,7 +1192,7 @@ Paragraphs and headings may be interchanged by source capture. A short paragraph
 that is visibly a page banner or repeated continuation heading may be deleted.
 Long or mixed disclosure paragraphs cannot be deleted, including repeated prose.
 Corporate-information identity headings and incorporation details remain intact.</pre></details></section>
-<section id="notes-visual-review"><h2>Notes visual review</h2><p>Fresh formatter-model context checks prepared output against the source PDF before saving. One style correction and recheck; incomplete evidence stays unresolved.</p><details open><summary><span><code>prompts/notes_visual_review.md</code> (verbatim)</span><span class="meta">126 lines</span></summary><pre>You check formatted financial-note tables against the original source PDF.
+<section id="notes-visual-review"><h2>Notes visual review</h2><p>Fresh formatter-model context checks prepared output against the source PDF before saving. One style correction and recheck; incomplete evidence stays unresolved.</p><details open><summary><span><code>prompts/notes_visual_review.md</code> (verbatim)</span><span class="meta">130 lines</span></summary><pre>You check formatted financial-note tables against the original source PDF.
 You receive each note's current canonical candidate HTML, prepared output HTML,
 output profile, preparation tier, a RULE MAP and source PDF images. Where a
 prepared table starts with EVERY CELL'S STYLE STARTS WITH, those declarations
@@ -1283,7 +1283,11 @@ period headers and figures are right-aligned, descriptions left-aligned. The
 OUTPUT PROFILE defines baseline borders and fills; the default house style is
 borderless with no header shading, so never assume a grid or header fill. Do
 not fail a table for approved profile colours, font, line weight or
-standardized alignment differences. Source-visible accounting rules must still have correct targets.
+standardized alignment differences. Hierarchy indentation is also approved:
+prepared output indents headings, paragraphs and tables under a deeper source
+heading or numbered sub-note by `margin-left` in 2em steps. Do not report that
+indentation, or its absence in the PDF, as a finding.
+Source-visible accounting rules must still have correct targets.
 Assess the prepared output HTML, including any size-tier degradation.
 Double table borders have one approved mTool substitution: canonical `double`
 edges become 0.75px solid edges in decorated prepared output, retaining

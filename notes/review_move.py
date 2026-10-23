@@ -89,8 +89,12 @@ def transfer_source_sections(
 
     if (source_sheet, source_row) == (destination_sheet, destination_row):
         raise MoveConflict("Choose a different destination field.")
-    if not section_ids or any(not item.startswith("section:") for item in section_ids):
+    if not section_ids:
         raise MoveConflict("Select complete source section IDs for a transfer.")
+    # Other source-selection paths accept "n5:a" for "section:n5:a"; a piece
+    # ID given here is still refused below as an unknown section.
+    section_ids = [item if item.startswith("section:") else f"section:{item}"
+                   for item in section_ids]
     if not conn.in_transaction:
         conn.execute("BEGIN IMMEDIATE")
     generation = sources.fetch_generation(conn, generation_id)

@@ -510,11 +510,18 @@ def test_reviewer_cell_move_reconciles_stale_same_block_conflict(db_path: Path):
             "SELECT content_revision FROM notes_cells WHERE run_id=? AND sheet=? AND row=49",
             (run_id, _S12),
         ).fetchone()[0]
+    agent, deps, _ = _agent(db_path, run_id, _scripted([
+        [ToolCallPart(tool_name="verify_findings", args={})],
+    ]))
+    with repo.db_session(db_path) as conn:
         review_move.move_note_during_review(conn, run_id=run_id,
             sheet=_S12, row=49, destination_sheet=_S12, destination_row=80,
             expected_revision=revision, destination_revision=None)
-        assert review_move.reconcile_reviewed_placement_conflicts(
-            conn, run_id=run_id) == 1
+    # The in-pass recheck settles the conflict the move satisfied.
+    result = agent.run_sync("go", deps=deps)
+    still_open = _tool_returns(result, "verify_findings")[0].partition("STILL")[2]
+    assert "placement conflict" not in still_open
+    with repo.db_session(db_path) as conn:
         assert review_move.reconcile_reviewed_placement_conflicts(
             conn, run_id=run_id) == 0
         flags = repo.fetch_notes_review_flags(conn, run_id)
@@ -1025,6 +1032,9 @@ def test_read_note_cells_rejects_over_cap(db_path: Path) -> None:
     result = agent.run_sync("go", deps=deps)
     msg = _tool_returns(result, "read_note_cells")[0]
     assert "Too many rows" in msg and str(len(over)) in msg
+    tool = next(t for t in agent._function_toolset.tools.values()
+                if t.name == "read_note_cells")
+    assert f"at most {ra.READ_CELLS_MAX_ROWS} rows" in tool.description
 
 
 def test_read_note_cells_dedups_so_repeats_dont_eat_the_cap(db_path: Path) -> None:
@@ -1251,7 +1261,7 @@ def test_reviewer_transfers_one_complete_section_from_mixed_cell(db_path, monkey
     with repo.db_session(db_path) as conn:
         review_move.transfer_source_sections(conn, run_id=run_id, generation_id=gen,
             source_sheet=_S12, source_row=57, destination_sheet=_S12,
-            destination_row=7, section_ids=["section:note-2:2.2"],
+            destination_row=7, section_ids=["note-2:2.2"],
             template_prefix=_PREFIX)
     cells = _cells(db_path, run_id)
     assert "Historical cost basis" in cells[57]

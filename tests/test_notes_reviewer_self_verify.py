@@ -104,7 +104,10 @@ def test_introduced_finding_cannot_be_dispositioned_away():
 def test_flag_cleanup_preserves_distinct_human_concerns_and_removes_stale_work():
     stale = ("source_integrity", "disposition", ("p32-b4",))
     still_open = ("collision", 140, (12, 13))
+    settled_conflict = ("source_placement", '["source_placement",7]')
     flags = [
+        {"finding_id": "settled", "kind": "needs_human",
+         "reason": "Routing already corrected needs confirmation"},
         {"finding_id": "stale", "kind": "stuck", "reason": "Note 12 part missing"},
         {"finding_id": "stale", "kind": "needs_human", "reason": "Source text is ambiguous",
          "source_pages": [32], "evidence": "Page 32 remains unclear"},
@@ -117,7 +120,8 @@ def test_flag_cleanup_preserves_distinct_human_concerns_and_removes_stale_work()
         {"finding_id": None, "reason": "Separate human concern"},
     ]
     kept = ra.prune_resolved_review_flags(
-        flags, {"stale": stale, "open": still_open}, {still_open},
+        flags, {"stale": stale, "open": still_open, "settled": settled_conflict},
+        {still_open},
         placement_revisions={(ra.POLICIES_SHEET, 57): 1},
     )
     assert [flag["reason"] for flag in kept] == [

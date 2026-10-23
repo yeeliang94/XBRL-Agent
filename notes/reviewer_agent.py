@@ -1303,7 +1303,11 @@ def prune_resolved_review_flags(
             continue
         packet_id = flag.get("finding_id")
         key = key_by_id.get(packet_id) if packet_id else None
-        if key is not None and key not in live_keys and flag.get("kind") != "needs_human":
+        # A placement conflict leaves the live set only when the placement
+        # ledger proves it settled, so an escalation about it is stale too.
+        if key is not None and key not in live_keys and (
+            flag.get("kind") != "needs_human" or key[0] == "source_placement"
+        ):
             continue
         if key is not None:
             signature = (
@@ -1716,8 +1720,8 @@ def create_notes_reviewer_agent(
         """Read the full prose + evidence of one OR several cells on a sheet in
         a single call — always pass a list (a single cell is ``rows=[49]``).
         Returns a JSON object keyed by row; empty rows report ``null``. Read
-        every row a finding touches in ONE call; the tool caps the batch and
-        tells you to split if you ask for too many."""
+        every row a finding touches in ONE call, at most 10 rows per call;
+        split a larger set across calls."""
         import json as _json
         # De-dup while preserving order so a repeated row doesn't eat the cap.
         seen: set[int] = set()
@@ -2331,6 +2335,11 @@ def create_notes_reviewer_agent(
         can fix, or one you caused, remains.
         """
         try:
+            # Settle conflicts the reviewer's own writes satisfied, so the
+            # recheck does not keep reporting them as open.
+            from notes.review_move import reconcile_reviewed_placement_conflicts
+            with ctx.deps.io_lock, repo.db_session(ctx.deps.db_path) as conn:
+                reconcile_reviewed_placement_conflicts(conn, run_id=ctx.deps.run_id)
             context = recompute_notes_findings(ctx.deps)
         except Exception as exc:  # noqa: BLE001 — never crash the agent loop
             logger.warning(
