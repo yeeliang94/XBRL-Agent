@@ -153,6 +153,22 @@ describe("report review", () => {
     expect(screen.getByTestId("source")).toHaveTextContent("4:2");
   });
 
+  it("reveals the source pane from a label click but not while typing in a field", async () => {
+    vi.mocked(apiFetch).mockResolvedValueOnce(loaded);
+    render(<ReportsReviewTab runId={7} onPreparationBlocked={vi.fn()} />);
+    const input = await screen.findByLabelText("License number of auditor");
+    const reveal = vi.fn();
+    screen.getByRole("complementary", { name: "Report source PDF" }).scrollIntoView = reveal;
+    fireEvent.mouseDown(input);
+    fireEvent.focus(input);
+    fireEvent.click(input);
+    expect(reveal).not.toHaveBeenCalled();
+    fireEvent.mouseDown(input);
+    fireEvent.click(screen.getByText("License number of auditor", { selector: "label" }));
+    expect(reveal).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("source")).toHaveTextContent("4:2");
+  });
+
   it("navigates all three worksheets with supplied template labels and order without losing drafts", async () => {
     vi.mocked(apiFetch).mockResolvedValueOnce({ reports: [
       { type: "DIRECTORS_REPORT", label: "Directors' report", sheet: "Report-Directors", fields: [{ ...field, concept: "ssmt_DateOfSigningDirectorsReport", label: "Date of signing director's report", kind: "date", value: "2025-06-01" }] },
