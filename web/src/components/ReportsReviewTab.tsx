@@ -55,10 +55,10 @@ function Narrative({ value, onChange, label, disabled, editing }: {
   </div>;
 }
 
-function ReportFieldEditor({ runId, report, field, onSaved, onDirty, onSource, disabled = false }: {
+function ReportFieldEditor({ runId, report, field, onSaved, onDirty, onSource, onReveal, disabled = false }: {
   runId: number; report: string; field: ReportField; disabled?: boolean;
   onSaved: (field: ReportField) => void; onDirty: (id: string, dirty: boolean) => void;
-  onSource: (pages: number[]) => void;
+  onSource: (pages: number[]) => void; onReveal: () => void;
 }) {
   const [value, setValue] = useState(field.value ?? "");
   const [busy, setBusy] = useState(false);
@@ -91,14 +91,20 @@ function ReportFieldEditor({ runId, report, field, onSaved, onDirty, onSource, d
   const html = field.kind === "html";
   // Clicking a field that already has focus reopens its cited page. Clicks
   // inside report text place the cursor, so only its label reopens the page;
-  // otherwise every edit would reset the PDF page and zoom.
+  // otherwise every edit would reset the PDF page and zoom. A label click also
+  // reveals the source pane, which sits above the form on narrow screens.
   // Focus is read at mouse-down: the click that first focuses a field has
   // already opened its page.
   const focusedAtPress = useRef(false);
   function reselect(e: MouseEvent<HTMLDivElement>) {
     const target = e.target as HTMLElement;
     if (target.closest("button")) return;
-    if (html ? Boolean(target.closest("[data-field-label]")) : focusedAtPress.current) onSource(pages);
+    if (target.closest("[data-field-label]")) {
+      // A short field's label passes its click on to the control, which
+      // opens the page there; report text has no control to pass it to.
+      if (html) onSource(pages);
+      onReveal();
+    } else if (!html && focusedAtPress.current) onSource(pages);
   }
   return <div style={html ? { ...styles.row, display: "block" } : styles.row} onFocus={enter} onBlur={leave}
     onMouseDown={() => { focusedAtPress.current = focused; }} onClick={reselect}>
@@ -146,6 +152,7 @@ function ReportsReview({ runId, onPreparationBlocked }: ReportsReviewProps) {
   const [formatLaunching, setFormatLaunching] = useState(false);
   const [dirty, setDirty] = useState<Set<string>>(() => new Set());
   const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const sourcePaneRef = useRef<HTMLElement | null>(null);
   const [pdfWidth, setPdfWidth] = useState(34);
   const formatting = formatLaunching || Object.values(formats).some(state => state.status === "running");
   const markDirty = useCallback((id: string, changed: boolean) => {
@@ -213,6 +220,7 @@ function ReportsReview({ runId, onPreparationBlocked }: ReportsReviewProps) {
     onSource={pages => {
       setSource(s => ({ pages, key: s.key + 1, selected: true }));
     }}
+    onReveal={() => sourcePaneRef.current?.scrollIntoView?.({ block: "nearest" })}
     onSaved={saved => {
       setReports(old => old?.map(r => r.type === activeReport.type
         ? { ...r, fields: r.fields.map(f => f.concept === saved.concept ? saved : f) } : r) ?? []);
@@ -252,7 +260,7 @@ function ReportsReview({ runId, onPreparationBlocked }: ReportsReviewProps) {
         const width = workspaceRef.current?.getBoundingClientRect().width || 1000;
         setPdfWidth(previous => Math.max(25, Math.min(50, previous - dx / width * 100)));
       }} />
-    <aside className="reports-review-source" aria-label="Report source PDF" style={{ minWidth: 0, maxWidth: "100%", position: "sticky", top: 116,
+    <aside ref={sourcePaneRef} className="reports-review-source" aria-label="Report source PDF" style={{ minWidth: 0, maxWidth: "100%", position: "sticky", top: 116, scrollMarginTop: 116,
       maxHeight: "calc(100vh - 116px)", overflowY: "auto" }}>
       <div style={styles.sourceHeading}><h2 style={{ ...ui.sectionTitle, margin: 0 }}>Source PDF</h2></div>
       <PdfSourcePane embedded runId={runId} pages={source.pages} selectionKey={source.key} hasSelection={source.selected} />
