@@ -57,14 +57,15 @@ test("saved content and revision survive switching to an empty alternative and b
   expect(patches[1].expected_revision).toBe(2);
 });
 
-test("selecting an unplaced source note keeps its PDF and worksheet alternatives", async () => {
+test("selecting an unplaced source note keeps its PDF and says no filing field is recorded", async () => {
   notesFetch(); const pages = vi.fn();
   render(<NotesReviewTab runId={42} onActiveCellPages={pages} />);
   openField(await screen.findByRole("button", { name: "Review Corporate information" }));
   fireEvent.click(screen.getByTestId("source-note-9"));
   await waitFor(() => expect(pages).toHaveBeenLastCalledWith([9]));
   expect(screen.getByTestId("source-note-9")).toHaveAttribute("aria-current", "true");
-  expect(screen.getAllByTestId("notes-review-row")).toHaveLength(2);
+  expect(screen.getByRole("status", { name: "Source note destination" })).toHaveTextContent("No filing field is recorded for source note 9.");
+  expect(screen.queryByTestId("notes-review-row")).toBeNull();
   expect(screen.queryByTestId("notes-review-editor")).toBeNull();
 });
 

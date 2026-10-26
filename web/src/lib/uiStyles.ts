@@ -112,6 +112,16 @@ const thBase: CSSProperties = {
   borderBottom: `1px solid ${tokens.color.border.subtle}`,
 };
 
+const reviewPaneHeader: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  minHeight: 44,
+  flexShrink: 0,
+  padding: `0 ${pwc.space.xs}px`,
+  background: tokens.surface.canvas,
+};
+
 export const ui = {
   segmentControl: { display: "inline-flex", alignItems: "center", gap: 2, padding: 3, border: `1px solid ${pwc.grey300}`, borderRadius: 8, background: pwc.white, minHeight: 40 } as CSSProperties,
   segmentOption: { ...buttonQuiet, minHeight: 32, padding: "0 16px", borderRadius: 6 } as CSSProperties,
@@ -294,15 +304,8 @@ export const ui = {
   paneDivider: {
     borderLeft: `1px solid ${tokens.color.border.subtle}`,
   } as CSSProperties,
-  reviewPaneHeader: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    minHeight: 44,
-    flexShrink: 0,
-    padding: `0 ${pwc.space.xs}px`,
-    background: tokens.surface.canvas,
-  } as CSSProperties,
+  reviewPaneHeader,
+  reviewSourcePaneHeader: { ...reviewPaneHeader, paddingInline: pwc.space.lg } as CSSProperties,
   reviewSelection: {
     background: pwc.grey100,
     color: tokens.color.text.primary,

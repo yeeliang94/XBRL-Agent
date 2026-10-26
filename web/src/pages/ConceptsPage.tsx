@@ -1501,7 +1501,7 @@ function ColumnHeader({
   inset?: boolean;
 }) {
   return (
-    <div style={inset ? { ...styles.columnHeader, paddingInline: pwc.space.lg } : styles.columnHeader}>
+    <div style={inset ? { ...styles.columnHeader, ...ui.reviewSourcePaneHeader } : styles.columnHeader}>
       <span style={styles.columnHeaderTitle}>{title}</span>
       <button
         type="button"
