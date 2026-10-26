@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { REPORT_SHEET_LABELS, reportFieldLabel } from "../lib/reportLabels";
+import { REPORT_SHEET_LABELS } from "../lib/reportLabels";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { StatusIcon } from "./StatusIcon";
 import { ApiError, userMessage } from "../lib/errors";
@@ -462,7 +462,7 @@ interface ReportUnresolved { label?: string; concept?: string; sheet?: string; s
 function reportFieldName(f: ReportUnresolved): string {
   const sheet = f.source_sheet ?? f.sheet ?? "";
   const report = REPORT_SHEET_LABELS[sheet];
-  const name = f.concept ? reportFieldLabel(f.concept, f.label ?? "Field") : "Report text";
+  const name = f.label ?? "Report text";
   return report ? `${report} · ${name}` : name;
 }
 
