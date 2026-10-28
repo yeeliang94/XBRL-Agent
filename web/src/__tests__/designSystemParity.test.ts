@@ -295,7 +295,7 @@ describe("Direction A shell and responsive composition", () => {
 describe("Simplified template-oriented review", () => {
   test("pins worksheet-oriented report review and source context", () => {
     expect(designSystem).toContain("Saving report narrative refreshes that worksheet’s appearance status and exposes Recheck formatting when verification is stale");
-    for (const requirement of ["Reports review uses the same worksheet composition as Notes", "Statement by directors", "Auditor details", "Pending or failed report saves prevent worksheet changes", "Move report worksheet navigation above the fields and source before stacking the source pane", "Check formatting for a report that has never been checked"]) {
+    for (const requirement of ["Reports review uses the same worksheet composition as Notes", "Statement by directors", "exact XBRL template label and in template order", "keep unused director slots visible", "Do not show inline source-page links in Reports", "Source PDF divider supports mouse and keyboard resizing", "All three tabs inherit the same page gutters and tab-panel spacing", "Source PDF headings use the same 16px horizontal inset as their pane body", "Report worksheet buttons use the shared quiet-button padding", "Field focus and repeated field selection update the cited PDF page", "clicking a field label reveals that pane", "Pending or failed report saves prevent worksheet changes", "Move report worksheet navigation above the fields and source before stacking the source pane", "Check formatting for a report that has never been checked"]) {
       expect(designSystem).toContain(requirement);
     }
   });
