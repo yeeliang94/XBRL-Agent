@@ -12,6 +12,8 @@ describe("focused-workspace shell", () => {
   test("shared primitives define the compact context bar", () => {
     expect(ui.appTopbar.height).toBe(64);
     expect(ui.appTopbar.position).toBe("sticky");
+    expect(ui.reviewPaneHeader).toMatchObject({ minHeight: 44, padding: "0 4px" });
+    expect(ui.reviewSourcePaneHeader).toMatchObject({ ...ui.reviewPaneHeader, paddingInline: 16 });
     expect(tokens.surface.canvas).toBe(pwc.white);
     expect(tokens.surface.navigation).toBe(pwc.grey50);
   });
@@ -28,7 +30,7 @@ describe("focused-workspace shell", () => {
     expect(css).toContain("@media (max-width: 780px)");
     expect(css).toContain(".review-workspace .review-source-column");
     expect(css).toContain("flex: 1 0 100% !important");
-    const tabletBlock = css.slice(css.indexOf("@media (max-width: 1000px)"), css.indexOf("@media (max-width: 780px)"));
+    const tabletBlock = css.slice(css.indexOf("@media (max-width: 1000px)"), css.indexOf("@media (max-width: 780px)", css.indexOf("@media (max-width: 1000px)")));
     expect(tabletBlock).toContain("display: block !important");
     expect(tabletBlock).not.toContain(".review-source-column,\n  .review-workspace .review-resize-handle");
     // JSDOM cannot evaluate container queries. Pin the explicit divider-width
@@ -40,7 +42,7 @@ describe("focused-workspace shell", () => {
   });
 
   test("mobile navigation keeps sticky identifiers without overriding the note action grid", () => {
-    const mobileStart = css.indexOf("@media (max-width: 780px)");
+    const mobileStart = css.indexOf("@media (max-width: 780px)", css.indexOf("@media (max-width: 1000px)"));
     const mobileEnd = css.indexOf("@media (prefers-reduced-motion: reduce)", mobileStart);
     const mobile = css.slice(mobileStart, mobileEnd);
     expect(mobile).toContain(".review-workspace .review-menu-column");

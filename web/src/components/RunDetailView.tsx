@@ -1370,7 +1370,7 @@ export function RunDetailView({
           replaying the shared fade-in so the new panel arrives instead of
           hard-swapping. The child <section> keeps role="tabpanel". */}
       <TabPanelFade tabKey={activeTab}>
-      {activeTab === "reports" && <section role="tabpanel"><Suspense fallback={<p role="status">Loading reports…</p>}>
+      {activeTab === "reports" && <section style={styles.sectionFull} role="tabpanel"><Suspense fallback={<p role="status">Loading reports…</p>}>
         <ReportsReviewTab runId={detail.id} onPreparationBlocked={setNotesPreparationBlocked} />
       </Suspense></section>}
       {activeTab === "overview" && (
