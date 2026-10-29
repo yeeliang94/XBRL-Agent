@@ -93,10 +93,11 @@ ROLE_EXPANSION_EXCLUDE = {
 
 # Accounting identities the calc linkbase cannot express (cross-period
 # bridges), re-applied after linkbase emission. ``{c}`` is the value column.
-SUPPLEMENTAL_FORMULAS: dict[str, dict[str, dict[int, str]]] = {
-    # Cash and cash equivalents at end = beginning + net increase after FX.
-    "08-SOCF-Direct.xlsx": {"SOCF-Direct": {77: "=1*{c}76+1*{c}75"}},
-}
+# SOCF-Direct closing cash is deliberately NOT here (2026-10-29): mTool's face
+# closing-cash line is a typed mandatory input, and a formula made it a
+# COMPUTED concept the mTool fill never writes. It stays a leaf, as on
+# SOCF-Indirect and MPERS SOCF-Direct; socf_articulation checks the bridge.
+SUPPLEMENTAL_FORMULAS: dict[str, dict[str, dict[int, str]]] = {}
 
 
 def configure_mfrs_taxonomy() -> None:
