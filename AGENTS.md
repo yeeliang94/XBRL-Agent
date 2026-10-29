@@ -30,24 +30,12 @@ and Group filings, five primary statements, and five supplementary notes
 templates. The canonical concept model is the only extraction, review, and
 export path.
 
-Key areas:
-
-- Orchestration and entry points: `server.py`, `run.py`, `coordinator.py`,
-  `api/`.
-- Extraction and review: `scout/`, `extraction/`, `correction/`, `notes/`.
-- Canonical data and filing: `concept_model/`, `cross_checks/`, `mtool/`,
-  `eval/`, `db/`.
-- Frontend: `web/src/`; backend tests: `tests/`; frontend tests:
-  `web/src/__tests__/`.
-- Taxonomy and generated templates: `SSMxT_2022v1.0/`,
-  `XBRL-template-MFRS/`, `XBRL-template-MPERS/`.
-
 ## Before Changing Files
 
-1. Inspect `git status` and the files in scope.
-2. Use the task table in `CLAUDE.md` to select the relevant numbered
+1. Use the task table in `CLAUDE.md` to select the relevant numbered
    invariants. Read those sections in `CLAUDE-REFERENCE.md` and the pinning
    tests named there.
+2. Read the nested `AGENTS.md` of each directory you change, when one exists.
 3. Inspect current code or configuration for values that change mechanically,
    including schema versions, model defaults, flags, paths, and test counts.
 4. If the request is ambiguous at a load-bearing boundary, state the competing
@@ -115,7 +103,9 @@ with the reason.
 ## Load-Bearing Floors
 
 These are concise tripwires, not the full rationale. Follow the routed section
-in `CLAUDE-REFERENCE.md` before changing the surrounding subsystem.
+in `CLAUDE-REFERENCE.md` before changing the surrounding subsystem. Floors
+whose code lives in one directory are in that directory's `AGENTS.md`
+(`db/`, `mtool/`, `notes/`, `tools/`, `web/`).
 
 ### Templates and taxonomy
 
@@ -123,9 +113,8 @@ in `CLAUDE-REFERENCE.md` before changing the surrounding subsystem.
 - Regenerate formula changes from the SSM calculation linkbase and retain the
   required before/after snapshot. Run
   `scripts/generate_mpers_templates.py` only with `--snapshot`.
-- Abstract section-header rows are not writable. Keep the mechanical guard and
-  leave an imbalance visible instead of placing a balancing residual in a
-  catch-all row.
+- Never place a balancing residual in a catch-all or abstract row; leave the
+  imbalance visible (`tools/AGENTS.md`).
 
 ### Canonical pipeline and persistence
 
@@ -135,10 +124,6 @@ in `CLAUDE-REFERENCE.md` before changing the surrounding subsystem.
 - Create or reuse the audit row before validation. Every started run must reach
   a terminal status. Keep `_safe_mark_finished` exception-safe and persist a
   successful merge before the final status update.
-- Database migrations advance one version at a time and remain idempotent.
-  Read `db/schema.py::CURRENT_SCHEMA_VERSION`; do not cache its value here.
-  Preserve documented inert fields and tables so every older database can
-  migrate forward.
 - Route live workbook writes through `utils/workbook_io.py` or the established
   atomic replacement path. Shared workbook access is serialized.
 - Background reviewer, formatter, and suite-runner threads own separate event
@@ -146,15 +131,12 @@ in `CLAUDE-REFERENCE.md` before changing the surrounding subsystem.
 
 ### Models, extraction, and review
 
-- Before model construction, transport, cache, reasoning, or PydanticAI changes,
-  read invariants 2, 2a, 5, 6, and 18. Keep live agents on
-  `end_strategy="early"`. A structured cap must fire before PydanticAI's
-  request limit: keep it below the default of 50, or pass an explicit limit
-  through `agent_tracing.agent_usage_limits` (invariant 18).
+- Keep live agents on `end_strategy="early"`. A structured cap must fire
+  before PydanticAI's request limit: keep it below PydanticAI's default, or
+  pass an explicit limit through `agent_tracing.agent_usage_limits`
+  (invariant 18).
 - Scout page hints are advisory. Extraction agents may inspect any valid PDF
   page; no `allowed_pages` or equivalent filter may restrict them.
-- Notes matching remains model judgment. Do not add deterministic label
-  matching, synonym dictionaries, or OCR to the notes pipeline.
 - Keep filing standard, filing level, statement variant, and entity scope
   explicit. Apply the Group SOCIE matrix overlay only to MFRS Group SOCIE
   Default. Resolve reviewer concepts within the run's exact template family
@@ -165,46 +147,8 @@ in `CLAUDE-REFERENCE.md` before changing the surrounding subsystem.
   figures and notes reviewers may overlap, but the automatic notes reviewer
   receives no merged-workbook path; apply its overlay only after both finish.
 
-### Notes and mTool
+### Authentication and safety
 
-- `notes_cells` is the canonical notes store. Downloads overlay live rows and
-  deletion tombstones onto a temporary workbook.
-- A later Sheet-12 call for the same structured note number and resolved row
-  replaces earlier calls; chunks within one call remain combinable. Structured
-  identity, not prose, determines replacement.
-- Extraction and reviewer agents author content, not formatting. The formatter
-  may apply validated style-only patches and may not change rendered text,
-  numbers, table geometry, structure, or placement.
-- Source Word table markup passes through only under the
-  `data-source-styled="true"` contract. Prose stays style-free. Keep the
-  sanitizer, TipTap schema, review CSS, mTool decorator, and clipboard behavior
-  synchronized.
-- `mtool/notes_exporter.py::prepare_note_output` owns review, Copy, and mTool
-  output preparation. Clipboard code copies that HTML verbatim. TX-specific
-  white borders and legacy widths stay in `mtool/notes_decorate.py`.
-- Source-integrity assessment that is incomplete is unresolved, never clean.
-  Read `tests/test_notes_integrity_false_greens.py` before changing this area.
-- `mtool/offline_fill.py` stays standard-library-only and remains the one
-  patcher used by the CLI and server. Do not reserialize mTool files with
-  openpyxl.
-
-### Frontend, authentication, and safety
-
-- Keep component styling in inline `style={}` props. Shared tokens live in
-  `web/src/lib/theme.ts`, shared layout primitives in
-  `web/src/lib/uiStyles.ts`, and interaction or responsive states in
-  `web/src/index.css`.
-- For any frontend layout, navigation, content, style, or accessibility change,
-  read `docs/xbrl-design-system.html` before editing; it is the
-  canonical UI/UX authority.
-  Direction A in `docs/prototype-ui-overhaul.html` supplies composition examples
-  only; the design guide wins when they differ. Apply its clarity-first contract
-  across the full affected workflow: remove repeated explanation and internal
-  metadata, reserve indicators for exceptions, keep actions contextual, align
-  shared page boundaries, contain long content and tables, preserve source-PDF
-  context, and surface every material waiting stage. Update shared rules,
-  implementation, and pinning tests together. Scope ARIA-tab tests to the
-  labelled tab list and keep heavy tab content lazy-mounted.
 - Authentication guards every `/api/*` route except the documented auth and
   health exemptions. Enforce authorization server-side. Production requires
   `SESSION_SECRET` and refuses `AUTH_MODE=dev`.
@@ -214,10 +158,10 @@ in `CLAUDE-REFERENCE.md` before changing the surrounding subsystem.
 ## Code Review Rules
 
 Prioritize behavior and regressions over formatting. Flag violations of the
-floors above, false-success states, silent data loss, wrong entity or template
-routing, non-terminal runs, non-atomic workbook writes, broken migration paths,
-frontend-only authorization, content-changing notes formatting, and tests that
-miss the user-visible failure mode.
+floors above and in nested `AGENTS.md` files, false-success states, silent data
+loss, wrong entity or template routing, non-terminal runs, non-atomic workbook
+writes, broken migration paths, frontend-only authorization, content-changing
+notes formatting, and tests that miss the user-visible failure mode.
 
 For each finding, state the affected behavior, impact, file and tight line
 range, and safe correction. Do not report formatting issues already enforced by
@@ -233,7 +177,6 @@ automation unless they cause functional harm.
 - `docs/workflows/*.md`: statement-specific extraction workflows.
 - `docs/xbrl-field-descriptions.md`: XBRL field reference.
 
-Historically referenced but absent files are
-`docs/ARCHITECTURE.md`, `docs/SYNC-MATRIX.md`, `docs/PORTING-WINDOWS.md`,
-`docs/ADR-002-socie-dividend-sign.md`, and
-`docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md`. Do not search for them.
+"ADR-002" in source comments means the SOCIE dividend sign convention
+(dividends stored positive, subtracted by formula). That document no longer
+exists; do not search for it.
