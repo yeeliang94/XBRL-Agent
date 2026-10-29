@@ -346,3 +346,46 @@ def test_db_labels_resolve_exactly_against_own_template(company_db, tmp_path):
     assert report["skipped_formula"] == []
     assert code == 0
     assert len(report["written"]) == 6
+
+
+# ---------------------------------------------------------------- SOCF-Direct
+# Face closing cash is a typed mandatory mTool input. When the template made it
+# a formula, the fill sent it as verification-only and left the line blank
+# (2026-10-29).
+
+@pytest.mark.parametrize("level,columns", [
+    ("Company", {"current_year": "B", "prior_year": "C"}),
+    ("Group", {"group_current_year": "B", "group_prior_year": "C",
+               "company_current_year": "D", "company_prior_year": "E"}),
+])
+def test_socf_direct_closing_cash_is_written(tmp_path, level, columns):
+    import shutil
+    from openpyxl import load_workbook
+    from mtool.offline_fill import fill_workbook
+    template = REPO / "XBRL-template-MFRS" / level / "08-SOCF-Direct.xlsx"
+    db = tmp_path / "xbrl.db"
+    init_db(db)
+    _import(db, template, group=level == "Group")
+    run_id = _init_run(db)
+    uuid, label = _leaf_at(db, "SOCF-Direct", 77)
+    expected = {}
+    for i, role in enumerate(columns):
+        scope = "Group" if role.startswith("group_") else "Company"
+        period = "PY" if role.endswith("prior_year") else "CY"
+        expected[columns[role]] = 5000 + i
+        _seed(db, run_id, uuid, period=period, scope=scope, value=5000 + i)
+
+    doc = build_fill_doc(db, run_id, filing_standard="mfrs",
+                         filing_level=level.lower())
+    assert not doc["checks"]
+    assert {w["label"] for w in doc["writes"]} == {label}
+    ready = apply_column_map(doc, {
+        "SOCF-Direct": {"label_column": "A", "columns": columns}})
+    work, out = tmp_path / "template.xlsx", tmp_path / "filled.xlsx"
+    shutil.copyfile(template, work)
+    report = fill_workbook(str(work), ready, str(out))
+    assert report["status"] == "ok", report
+    filled = load_workbook(out)
+    assert {col: filled["SOCF-Direct"][f"{col}77"].value
+            for col in expected} == expected
+    filled.close()
