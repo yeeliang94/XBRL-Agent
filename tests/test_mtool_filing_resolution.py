@@ -265,8 +265,13 @@ def test_matrix_exact_label_prefers_unique_input_over_formula(tmp_path):
 @pytest.mark.parametrize('prefix', ['ifrs-full','ifrs-smes'])
 @pytest.mark.parametrize('family', ['capital','related'])
 @pytest.mark.parametrize('verified_total', [True,False])
-def test_category_note_zero_total_requires_exact_table_axis_and_total_label(tmp_path, prefix, family, verified_total):
-    """Native totals must preserve their disclosed aggregate category identity."""
+@pytest.mark.parametrize('separate_block', [False,True])
+def test_category_note_zero_total_requires_exact_table_axis_and_total_label(tmp_path, prefix, family, verified_total, separate_block):
+    """Native totals must preserve their disclosed aggregate category identity.
+
+    Group workbooks mark the Company (separate) block's total column with a
+    scope-qualified zero in the standard's own prefix (ifrs-smes on MPERS).
+    """
     from openpyxl import Workbook
     table, axis, component, total = (
         ('DisclosureOfClassesOfShareCapitalTable','ClassesOfShareCapitalAxis','OrdinarySharesMember','ClassesOfShareCapitalMember')
@@ -275,7 +280,8 @@ def test_category_note_zero_total_requires_exact_table_axis_and_total_label(tmp_
     book = Workbook(); sheet = book.active; sheet.title = 'Notes-Issuedcapital' if family == 'capital' else 'Notes-RelatedPartytran'
     href = lambda identifier: 'native.xsd#'+prefix+'_'+identifier
     sheet['E2'] = '::'.join(map(href,[table,axis,component]))
-    sheet['F2'] = 0
+    sheet['F2'] = ('0::'+href('ConsolidatedAndSeparateFinancialStatementsAxis')+'::'+href('SeparateMember')+':::0'
+                   if separate_block else 0)
     sheet['C3'] = '#DOM#'; sheet['D3'] = '#PRIM#'
     sheet['B3'] = '::'.join(map(href,[table,axis]))
     sheet['E3'] = 'Ordinary shares' if family == 'capital' else 'Parent'

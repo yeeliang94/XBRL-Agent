@@ -216,7 +216,7 @@ def run_workbook(source, output_dir, include_primary=False):
     statement_variants = {}
     if include_primary:
         from statement_types import StatementType, template_path
-        variants = {'SOFP':'CuNonCu','SOPL':'Nature' if 'SOIE-Nature' in source.name else 'Function',
+        variants = {'SOFP':'CuNonCu','SOPL':'Nature' if ('SOIE-Nature' in source.name or 'SOPL-Nature' in source.name) else 'Function',
                     'SOCI':'BeforeTax' if 'BeforeTax' in source.name else 'NetOfTax',
                     'SOCF':'Direct' if 'SOCF-Direct' in source.name else 'Indirect',
                     'SOCIE':'SoRE' if '_SORE_' in source.name else 'Default'}
