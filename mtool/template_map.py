@@ -94,8 +94,8 @@ def index_workbook(data: dict) -> tuple[dict, dict]:
                 total_marker = (kind == "N" and raw == "0") or (
                     kind == "S" and (raw in {"0:::abc::abc::abc", "0:::0", "0:::0:::abc::abc::abc"}
                     or re.fullmatch(
-                        r"0::[A-Za-z0-9_.-]+\.xsd#ifrs-full_ConsolidatedAndSeparateFinancialStatementsAxis"
-                        r"::[A-Za-z0-9_.-]+\.xsd#ifrs-full_SeparateMember:::0(?::::abc::abc::abc)?",
+                        r"0::[A-Za-z0-9_.-]+\.xsd#ifrs-(?:full|smes)_ConsolidatedAndSeparateFinancialStatementsAxis"
+                        r"::[A-Za-z0-9_.-]+\.xsd#ifrs-(?:full|smes)_SeparateMember:::0(?::::abc::abc::abc)?",
                         raw or ""))
                 )
                 next_category = next((r for r in category_rows if r > row), None)
