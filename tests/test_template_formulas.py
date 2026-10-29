@@ -136,11 +136,15 @@ def test_socf_direct_operating_rows_all_added_per_linkbase() -> None:
         assert "B11" in b20
 
 
-def test_socf_direct_period_bridge_survives_regeneration() -> None:
-    """Cash at end = beginning + net increase is a cross-period identity the
-    calc linkbase cannot express; regeneration must re-apply it
-    (SUPPLEMENTAL_FORMULAS), not drop it."""
+def test_socf_direct_closing_cash_is_an_input() -> None:
+    """Face closing cash stays a data-entry leaf, as on SOCF-Indirect.
+
+    mTool's face closing-cash line is a typed mandatory input; a template
+    formula made it COMPUTED, so the mTool fill left it blank (2026-10-29).
+    socf_articulation checks beginning + net change = end instead."""
     for level in ("Company", "Group"):
         f = f"{level}/08-SOCF-Direct.xlsx"
-        assert _formula(f, "SOCF-Direct", "B77") == "=1*B76+1*B75"
+        cols = ("B", "C") if level == "Company" else ("B", "C", "D", "E")
+        for col in cols:
+            assert _formula(f, "SOCF-Direct", f"{col}77") is None
         assert _formula(f, "SOCF-Direct", "B73") == "=1*B20+1*B52+1*B72"

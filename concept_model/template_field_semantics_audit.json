@@ -194,15 +194,15 @@
     },
     {
       "filename": "08-SOCF-Direct.xlsx",
-      "fingerprint": "9779169130b37fdf8d03e14efbf57c6eb84c2308fadfba523e9695132286a554",
+      "fingerprint": "2fc75d2abd32a9200b22ff22a25fa15220379b70eada9219f4762a7cb55ff5cd",
       "manifest_version": "2022-v1-slot-semantics-3",
-      "mapped_writable_slots": 65,
+      "mapped_writable_slots": 66,
       "path": "XBRL-template-MFRS/Company/08-SOCF-Direct.xlsx",
       "semantic_coverage": "complete",
       "slots": 80,
       "template_id": "mfrs-company-socf-direct-v1",
       "worksheets": 1,
-      "writable_slots": 65
+      "writable_slots": 66
     },
     {
       "filename": "09-SOCIE.xlsx",
@@ -398,15 +398,15 @@
     },
     {
       "filename": "08-SOCF-Direct.xlsx",
-      "fingerprint": "37d7de9576100089670ac10af937218b2193c7c352914384d2afbc694d159d19",
+      "fingerprint": "23fea06ff8aa561b8d0638846f1e9f07ca7ff76caa8da2acfa8ee18e48a69206",
       "manifest_version": "2022-v1-slot-semantics-3",
-      "mapped_writable_slots": 65,
+      "mapped_writable_slots": 66,
       "path": "XBRL-template-MFRS/Group/08-SOCF-Direct.xlsx",
       "semantic_coverage": "complete",
       "slots": 80,
       "template_id": "mfrs-group-socf-direct-v1",
       "worksheets": 1,
-      "writable_slots": 65
+      "writable_slots": 66
     },
     {
       "filename": "09-SOCIE.xlsx",
