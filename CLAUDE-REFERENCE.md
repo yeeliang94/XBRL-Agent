@@ -10,6 +10,20 @@ invariants, failure history, and the reasons behind non-obvious constraints.
 For values that change mechanically, such as the database schema version or a
 runtime default, inspect the named code or configuration before editing.
 
+## Reference Maintenance
+
+- Put universal action, safety, and completion rules in `AGENTS.md` once.
+- Put a floor whose code lives in one directory in that directory's nested
+  `AGENTS.md`, with a sibling `CLAUDE.md` containing `@AGENTS.md` so Claude
+  Code loads it. Keep cross-cutting floors in the root `AGENTS.md`.
+- Put detailed subsystem rationale and failure history in this file, under the
+  existing stable invariant number.
+- Add a new always-loaded rule only when it changes behavior for most tasks.
+- For a new task-specific invariant, add a routing trigger, a checkable
+  completion criterion, and the pinning test that proves it.
+- Keep volatile facts in code or configuration. Link to their authoritative
+  location instead of copying values into instruction files.
+
 ## What This Is
 
 A standalone XBRL extraction agent for Malaysian financial statement PDFs.

@@ -1,22 +1,10 @@
 # XBRL Agent — Claude Code Instructions
 
-Keep this file small. Claude Code loads it for every task. The shared operating
-contract is [`AGENTS.md`](AGENTS.md); read and follow it before changing files.
-The detailed incident history and pinning-test map live in
-[`CLAUDE-REFERENCE.md`](CLAUDE-REFERENCE.md). Read only the sections relevant to
-the task.
+@AGENTS.md
 
-## Start Here
-
-1. Read `AGENTS.md`.
-2. Classify the task using the routing table below.
-3. Read the listed numbered sections in `CLAUDE-REFERENCE.md` and the pinning
-   tests named there. Do not read the reference end to end by default.
-4. Inspect the current code and configuration before relying on a documented
-   default, version, path, or count. The repository is authoritative for facts
-   that can change mechanically.
-5. Make the smallest in-scope change and meet the applicable definition of done
-   in `AGENTS.md`.
+`AGENTS.md` (imported above) is the shared operating contract. This file adds
+the task router. Detailed incident history and pinning tests live in
+[`CLAUDE-REFERENCE.md`](CLAUDE-REFERENCE.md); read only the routed sections.
 
 ## Task Routing
 
@@ -36,13 +24,9 @@ the task.
 Use the narrowest applicable set. If a change crosses subsystems, read the
 union of those sections.
 
-For frontend UI work, read [`docs/xbrl-design-system.html`](docs/xbrl-design-system.html)
-before editing. It is the production design authority. Direction A in the UI
-prototype supplies examples when needed, and the XBRL guide wins if they differ.
-
-For authoring formatted notes for mTool injection, read
-[the agent guide](docs/MTOOL-NOTES-AUTHORING.md) for the production workflow,
-accepted native formatting limits, and deferred Word/PDF output verification.
+`db/`, `mtool/`, `notes/`, `tools/`, and `web/` carry a nested `AGENTS.md`
+with that directory's floors. Claude Code loads it through the sibling
+`CLAUDE.md` when you read files there.
 
 ## Invariant Index
 
@@ -82,14 +66,3 @@ it. Detailed explanations and pinning tests are in
 29. [Word input converts at upload; PDF remains the extraction spine](CLAUDE-REFERENCE.md#29-word-docx-input--convert-at-the-door-pdf-stays-the-spine).
 30. [Repeat-run compatibility history](CLAUDE-REFERENCE.md#30-repeat-run-compatibility-history).
 31. [Source-integrity assessment must never produce a false clean result](CLAUDE-REFERENCE.md#31-notes-source-integrity--a-count-not-a-claim-ships-off).
-
-## Reference Maintenance
-
-- Put universal action, safety, and completion rules in `AGENTS.md` once.
-- Put detailed subsystem rationale and failure history in
-  `CLAUDE-REFERENCE.md`, under the existing stable invariant number.
-- Add a new always-loaded rule only when it changes behavior for most tasks.
-- For a new task-specific invariant, add a routing trigger, a checkable
-  completion criterion, and the pinning test that proves it.
-- Keep volatile facts in code or configuration. Link to their authoritative
-  location instead of copying values into both instruction files.

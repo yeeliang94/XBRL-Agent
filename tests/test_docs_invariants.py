@@ -43,13 +43,13 @@ def test_agent_test_commands_use_repository_python() -> None:
 
 def test_agent_guidance_routes_frontend_work_to_clarity_first_contract() -> None:
     """Future agents must preserve the canonical simplification direction."""
-    agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    web_agents = (REPO_ROOT / "web" / "AGENTS.md").read_text(encoding="utf-8")
     router = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     reference = (REPO_ROOT / "CLAUDE-REFERENCE.md").read_text(encoding="utf-8")
     docs_index = (REPO_ROOT / "docs" / "README.md").read_text(encoding="utf-8")
 
-    assert "canonical UI/UX authority" in agents
-    assert "design guide wins when they differ" in agents
+    assert "canonical UI/UX authority" in web_agents
+    assert "design guide wins when they differ" in web_agents
     assert "content hierarchy, simplification" in router
     assert "Clarity-first composition is load-bearing" in reference
     assert "where am I, what needs attention" in reference
