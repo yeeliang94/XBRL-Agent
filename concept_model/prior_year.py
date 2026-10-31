@@ -401,9 +401,17 @@ def compare_value(
                 template_id,
             ),
         ).fetchone()
-        if row is None:
-            return "No imported value exists for that exact field, scope and category. Leave the missing comparative visible."
-        difference = value - row[0]
+        imported = row[0] if row else None
+        if imported is None:
+            known = conn.execute(
+                "SELECT 1 FROM concept_nodes WHERE concept_uuid=? AND (? IS NULL OR template_id=?)",
+                (concept_uuid, template_id, template_id),
+            ).fetchone()
+            if known is None or value == 0:
+                return "No imported value exists for that exact field, scope and category. Leave the missing comparative visible."
+        # A comparative the workbook leaves blank cannot be filed in this mode,
+        # so it is recorded as a difference instead of passing silently.
+        difference = value - (imported or 0)
         # A reviewer's decision on this exact difference survives a repeat check.
         previous = conn.execute(
             "SELECT residual,status FROM run_concept_conflicts WHERE run_id=? AND concept_uuid=? AND period='PY' "
@@ -427,15 +435,18 @@ def compare_value(
                 entity_scope,
                 dims,
                 difference,
-                json.dumps({"imported": row[0], "report": value, "evidence": evidence}),
+                json.dumps({"imported": imported, "report": value, "evidence": evidence}),
                 status,
             ),
         )
     if difference == 0:
         return "Comparative agrees."
+    if imported is None:
+        return (f"The workbook leaves this prior-year field blank, but the report shows {value}. "
+                "It will not be filed; review required.")
     if status != "open":
-        return f"Comparative differs: workbook={row[0]}, report={value}. A reviewer already accepted this difference."
-    return f"Comparative differs: workbook={row[0]}, report={value}. Preserved workbook value; review required."
+        return f"Comparative differs: workbook={imported}, report={value}. A reviewer already accepted this difference."
+    return f"Comparative differs: workbook={imported}, report={value}. Preserved workbook value; review required."
 
 
 def register_comparison_tool(agent, db_path, run_id, template_id):
@@ -519,6 +530,24 @@ def check_results(db_path, run_id):
                         message=f"Imported prior-year figure differs from the current report. {detail['evidence']}",
                     )
                 )
+        imported_keys = {(uid, scope, dims) for uid, scope, dims, _ in facts}
+        labels = dict(conn.execute("SELECT concept_uuid,canonical_label FROM concept_nodes"))
+        for (uid, scope, dims), (residual, raw, status) in comparisons.items():
+            if (uid, scope, dims) in imported_keys or residual == 0:
+                continue
+            if status != "open":
+                accepted += 1
+                continue
+            detail = json.loads(raw)
+            results.append(
+                CrossCheckResult(
+                    name=f"Prior-year comparative: {labels.get(uid, uid)} [{scope}] {dims}",
+                    status="failed",
+                    expected=None,
+                    actual=detail["report"],
+                    message=f"The report shows a prior-year figure the workbook leaves blank; it will not be filed. {detail['evidence']}",
+                )
+            )
         results.append(
             CrossCheckResult(
                 name="Prior-year comparative coverage",
@@ -538,9 +567,10 @@ def check_results(db_path, run_id):
             ).fetchone()[0]
         )
         summary = config.get("prior_year_summary", {})
+        # Blank slots are normal in a template. A blank the report fills is
+        # reported per figure by the comparisons above.
         if (
-            summary.get("blank_slots")
-            or summary.get("unresolved_slots")
+            summary.get("unresolved_slots")
             or summary.get("not_in_file")
             or summary.get("period_issues")
         ):
@@ -548,7 +578,7 @@ def check_results(db_path, run_id):
                 CrossCheckResult(
                     name="Prior-year import coverage",
                     status="warning",
-                    message="Some prior-year slots are blank, unresolved, absent or have unverified dates. Missing inputs were not imported as zero. Review the imported workbook coverage.",
+                    message="Some prior-year slots are unresolved, absent or have unverified dates. Missing inputs were not imported as zero. Review the imported workbook coverage.",
                 )
             )
         return results

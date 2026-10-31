@@ -3,7 +3,7 @@ import type { RunConfigPayload } from "../lib/types";
 import { apiFetch } from "../lib/api";
 import { userMessage } from "../lib/errors";
 import { ui } from "../lib/uiStyles";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { FileDropzone } from "./FileDropzone";
 
 type Metadata = {
@@ -101,7 +101,7 @@ export function PriorYearWorkbook({
       style={{
         display: "flex",
         flexDirection: "column",
-        gap: pwc.space.sm,
+        gap: ds.space.sm,
         minWidth: 0,
       }}
     >
@@ -150,7 +150,7 @@ export function PriorYearWorkbook({
               <div
                 style={{
                   overflowWrap: "anywhere",
-                  fontWeight: pwc.weight.medium,
+                  fontWeight: ds.weight.medium,
                 }}
               >
                 {metadata.filename}
@@ -160,13 +160,12 @@ export function PriorYearWorkbook({
                 {metadata.summary.sheets.length} worksheets.
               </p>
               {!!(
-                metadata.summary.blank_slots ||
                 metadata.summary.unresolved_slots ||
                 metadata.summary.not_in_file.length ||
                 metadata.summary.period_issues.length
               ) && (
                 <p role="note" style={ui.supportingText}>
-                  Some comparative fields are blank or unverified. Review
+                  Some comparative fields are unresolved or unverified. Review
                   coverage before filing.
                 </p>
               )}

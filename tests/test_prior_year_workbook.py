@@ -96,6 +96,26 @@ def test_import_guidance_retry_protection_and_comparative_checks(tmp_path):
     compare_value(db, run, SOFP, facts[0][0], facts[0][2] + 6, "PDF page 8: restated again")
     assert any(r.status == "failed" for r in check_results(db, run))
 
+    # A comparative the workbook leaves blank cannot be filed in this mode, so
+    # it is named; a printed zero against a blank is not. Ordinary blank
+    # template rows alone raise no coverage warning.
+    with sqlite3.connect(db) as conn:
+        blank_leaf = conn.execute(
+            "SELECT concept_uuid FROM concept_nodes WHERE template_id=? AND kind='LEAF' AND concept_uuid NOT IN "
+            "(SELECT concept_uuid FROM run_concept_facts WHERE run_id=?) LIMIT 1",
+            (SOFP, run),
+        ).fetchone()[0]
+        conn.execute(
+            "UPDATE runs SET run_config_json=json_set(run_config_json,'$.prior_year_summary',"
+            "json('{\"blank_slots\": 300, \"unresolved_slots\": 0, \"not_in_file\": [], \"period_issues\": []}')) WHERE id=?",
+            (run,),
+        )
+    assert "No imported value" in compare_value(db, run, SOFP, blank_leaf, 0, "PDF page 8: dash")
+    assert "will not be filed" in compare_value(db, run, SOFP, blank_leaf, 500, "PDF page 8: 2024 column")
+    results = check_results(db, run)
+    assert any(r.status == "failed" and "leaves blank" in r.message for r in results)
+    assert not any(r.name == "Prior-year import coverage" for r in results)
+
     # A malformed tool call is reported back to the agent instead of ending its run.
     from concept_model.prior_year import register_comparison_tool
 
@@ -118,7 +138,7 @@ def test_import_guidance_retry_protection_and_comparative_checks(tmp_path):
                 "SELECT COUNT(*) FROM run_concept_conflicts WHERE run_id=? AND kind='prior_year_comparative'",
                 (run,),
             ).fetchone()[0]
-            == 1
+            == 2  # the restated figure and the blank-in-workbook figure
         )
     for uid, _, value in facts:
         compare_value(db, run, SOFP, uid, value, "PDF page 8: comparative")
