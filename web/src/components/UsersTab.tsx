@@ -1,6 +1,6 @@
 import { Fragment, useState, useEffect, useCallback } from "react";
 import { userMessage } from "../lib/errors";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
@@ -26,27 +26,27 @@ const visuallyHidden: React.CSSProperties = { position: "absolute", width: 1, he
 
 const styles = {
   helperText: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.grey700,
-    margin: `0 0 ${pwc.space.lg}px`,
+    color: ds.grey700,
+    margin: `0 0 ${ds.space.lg}px`,
   } as React.CSSProperties,
   notice: {
     ...ui.alertInfo,
-    padding: pwc.space.sm,
-    marginBottom: pwc.space.md,
+    padding: ds.space.sm,
+    marginBottom: ds.space.md,
     fontSize: 13,
   } as React.CSSProperties,
   error: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.errorText,
-    marginBottom: pwc.space.md,
+    color: ds.errorText,
+    marginBottom: ds.space.md,
   } as React.CSSProperties,
   table: {
     width: "100%",
     borderCollapse: "collapse" as const,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
   } as React.CSSProperties,
   // Shared standard table density (design-system Tables).
@@ -55,20 +55,20 @@ const styles = {
   } as React.CSSProperties,
   td: {
     ...ui.td,
-    color: pwc.grey900,
+    color: ds.grey900,
     verticalAlign: "middle" as const,
   } as React.CSSProperties,
   actionBtn: {
     ...ui.buttonSecondary,
   } as React.CSSProperties,
   addForm: {
-    marginTop: pwc.space.xl,
-    paddingTop: pwc.space.lg,
-    borderTop: `1px solid ${pwc.grey200}`,
+    marginTop: ds.space.xl,
+    paddingTop: ds.space.lg,
+    borderTop: `1px solid ${ds.grey200}`,
   } as React.CSSProperties,
   addRow: {
     display: "flex",
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
     alignItems: "flex-end",
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
@@ -79,17 +79,17 @@ const styles = {
   } as React.CSSProperties,
   heading: {
     ...ui.sectionTitle,
-    marginBottom: pwc.space.lg,
+    marginBottom: ds.space.lg,
   } as React.CSSProperties,
   saveButton: { ...ui.buttonPrimary } as React.CSSProperties,
   checkboxLabel: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     minHeight: 40,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey900,
+    color: ds.grey900,
     cursor: "pointer",
   } as React.CSSProperties,
   // Visible field labels for the add-user form (UX-QA #8) — stacked above each
@@ -97,18 +97,18 @@ const styles = {
   fieldLabel: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.sm,
-    fontFamily: pwc.fontHeading,
+    gap: ds.space.sm,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey900,
+    fontWeight: ds.weight.medium,
+    color: ds.grey900,
   } as React.CSSProperties,
   youLabel: {
     ...ui.badge,
-    marginLeft: pwc.space.sm,
+    marginLeft: ds.space.sm,
   } as React.CSSProperties,
   resetTarget: {
-    color: pwc.grey700,
+    color: ds.grey700,
     fontSize: 12,
     maxWidth: 180,
   } as React.CSSProperties,
@@ -238,7 +238,7 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
               <td style={styles.td}>
                 {u.display_name}{isSelf && <span style={styles.youLabel}>You</span>}
               </td>
-              <td style={{ ...styles.td, color: pwc.grey700 }}>{u.email}</td>
+              <td style={{ ...styles.td, color: ds.grey700 }}>{u.email}</td>
               <td style={styles.td}>{u.is_admin ? "Administrator" : "Standard user"}</td>
               <td style={styles.td}>{u.disabled ? "Disabled" : "Active"}</td>
               <td style={{ ...styles.td, textAlign: "right" }}>
@@ -257,8 +257,8 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
             </tr>
             {open && (
             <tr data-testid={`user-actions-${u.email}`}>
-              <td colSpan={5} style={{ ...styles.td, padding: `${pwc.space.md}px 0 ${pwc.space.lg}px` }}>
-                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: pwc.space.sm }}>
+              <td colSpan={5} style={{ ...styles.td, padding: `${ds.space.md}px 0 ${ds.space.lg}px` }}>
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: ds.space.sm }}>
                 {resetTarget === u.email ? (
                   <>
                     <input

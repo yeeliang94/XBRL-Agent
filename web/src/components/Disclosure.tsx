@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { pwc, tokens } from "../lib/theme";
+import { ds, tokens } from "../lib/theme";
 import { DisclosureChevron } from "./icons";
 
 // ---------------------------------------------------------------------------
@@ -47,16 +47,16 @@ export function Disclosure({ summary, children, defaultOpen = false, open, onTog
         style={{
           display: "flex",
           alignItems: "center",
-          gap: pwc.space.sm,
+          gap: ds.space.sm,
           width: "100%",
-          padding: `${pwc.space.sm}px 0`,
+          padding: `${ds.space.sm}px 0`,
           background: "transparent",
           border: "none",
           cursor: "pointer",
           textAlign: "left",
-          fontFamily: pwc.fontHeading,
+          fontFamily: ds.fontHeading,
           fontSize: 14,
-          fontWeight: pwc.weight.medium,
+          fontWeight: ds.weight.medium,
           color: tokens.color.text.primary,
         }}
       >
@@ -66,7 +66,7 @@ export function Disclosure({ summary, children, defaultOpen = false, open, onTog
       {isOpen && (
         <div
           id={bodyId}
-          className="pwc-disclosure-content"
+          className="app-disclosure-content"
           style={{
             overflow: "hidden",
           }}

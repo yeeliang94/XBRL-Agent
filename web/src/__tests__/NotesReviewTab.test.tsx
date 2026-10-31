@@ -20,7 +20,7 @@ import { Color } from "@tiptap/extension-color";
 import { Highlight } from "@tiptap/extension-highlight";
 import { TextAlign } from "@tiptap/extension-text-align";
 import type { NotesCellsResponse } from "../lib/notesCells";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { PreparedNotesHtml, readablePreviewHtml } from "../components/PreparedNotesHtml";
 import { humanSlotKey, type HumanFigureSlot } from "../lib/humanFile";
 
@@ -341,8 +341,8 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(noteHeading).toBeVisible();
     // The opaque header also covers the gap below the sticky run tabs.
     expect(noteHeading.parentElement).toHaveStyle({
-      background: pwc.white,
-      boxShadow: `0 -${pwc.space.lg}px 0 ${pwc.white}`,
+      background: ds.white,
+      boxShadow: `0 -${ds.space.lg}px 0 ${ds.white}`,
     });
     expect(screen.getByText("Numbered source notes")).toHaveStyle({ fontSize: "16px" });
   });
@@ -2230,12 +2230,12 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     expect(within(rows[0]).getByTestId("numeric-human-6-Ordinary-cy")).toHaveTextContent("100");
     expect(within(rows[1]).getByTestId("numeric-human-6-Preference-cy")).toHaveTextContent("25");
     // The AI/human boundary continues from the header through category and total rows.
-    expect(screen.getByRole("columnheader", { name: "Human CY" })).toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
-    expect(screen.getByRole("columnheader", { name: "Human PY" })).not.toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
+    expect(screen.getByRole("columnheader", { name: "Human CY" })).toHaveStyle({ borderLeft: `1px solid ${ds.grey200}` });
+    expect(screen.getByRole("columnheader", { name: "Human PY" })).not.toHaveStyle({ borderLeft: `1px solid ${ds.grey200}` });
     for (const row of rows) {
       const cells = within(row).getAllByRole("cell");
-      expect(cells[2]).toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
-      expect(cells[3]).not.toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
+      expect(cells[2]).toHaveStyle({ borderLeft: `1px solid ${ds.grey200}` });
+      expect(cells[3]).not.toHaveStyle({ borderLeft: `1px solid ${ds.grey200}` });
     }
     expect(within(rows[1]).getByRole("img", { name: "Differs from human" })).toBeInTheDocument();
     const input = within(rows[1]).getByTestId("numeric-input-6-cy");
@@ -2270,13 +2270,13 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     fireEvent.mouseDown(first);
     expect(first).toHaveAttribute("aria-selected", "true");
     // The selected row uses the shared grey selection surface.
-    expect(first).toHaveStyle({ background: pwc.grey100 });
-    expect(second).toHaveStyle({ background: pwc.white });
+    expect(first).toHaveStyle({ background: ds.grey100 });
+    expect(second).toHaveStyle({ background: ds.white });
     fireEvent.focus(within(second).getByTestId("numeric-input-7-cy"));
     expect(second).toHaveAttribute("aria-selected", "true");
     expect(first).toHaveAttribute("aria-selected", "false");
-    expect(second).toHaveStyle({ background: pwc.grey100 });
-    expect(first).toHaveStyle({ background: pwc.white });
+    expect(second).toHaveStyle({ background: ds.grey100 });
+    expect(first).toHaveStyle({ background: ds.white });
   });
 
   test("renders blank prose rows as editable cells", async () => {

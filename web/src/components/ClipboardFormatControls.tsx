@@ -1,5 +1,5 @@
 import { useState, type CSSProperties, type ReactNode } from "react";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import type { BorderStyle, ClipboardFormatOptions, ListMarker } from "../lib/clipboardFormat";
 
@@ -109,6 +109,6 @@ const styles: Record<string, CSSProperties> = {
   labelRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, minHeight: 44 },
   input: { ...ui.input, width: "100%", minWidth: 0 },
   select: { ...ui.select, width: "100%", minWidth: 0 },
-  origin: { minHeight: 20, fontSize: 13, color: pwc.grey700 },
-  heading: { fontSize: 14, fontWeight: pwc.weight.semibold, margin: "0 0 12px", color: pwc.grey900 },
+  origin: { minHeight: 20, fontSize: 13, color: ds.grey700 },
+  heading: { fontSize: 14, fontWeight: ds.weight.semibold, margin: "0 0 12px", color: ds.grey900 },
 };

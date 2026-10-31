@@ -1,4 +1,4 @@
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { RunDetailView } from "./RunDetailView";
 import type { RunDetailViewProps } from "./RunDetailView";
@@ -104,14 +104,14 @@ const styles = {
   root: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
   } as React.CSSProperties,
   topBar: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    gap: pwc.space.md,
-    paddingBottom: pwc.space.sm,
+    gap: ds.space.md,
+    paddingBottom: ds.space.sm,
     borderBottom: "none",
   } as React.CSSProperties,
   backButton: {
@@ -120,19 +120,19 @@ const styles = {
   } as React.CSSProperties,
   state: {
     textAlign: "center" as const,
-    color: pwc.grey500,
-    fontFamily: pwc.fontBody,
+    color: ds.grey500,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    padding: pwc.space.xl,
+    padding: ds.space.xl,
     margin: 0,
   } as React.CSSProperties,
   errorBanner: {
-    padding: pwc.space.lg,
-    background: pwc.orange50,
-    color: pwc.grey800,
-    borderRadius: pwc.radius.md,
+    padding: ds.space.lg,
+    background: ds.orange50,
+    color: ds.grey800,
+    borderRadius: ds.radius.md,
     border: "none",
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
   } as React.CSSProperties,
 } as const;

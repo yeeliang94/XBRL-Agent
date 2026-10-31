@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { pwc, tokens } from "../lib/theme";
+import { ds, tokens } from "../lib/theme";
 
 // Contrast matrix (design-system Accessibility rule D / plan "Canonical
 // Semantic Tokens"): the minimum ratios are encoded in ROLES, so this test
@@ -51,9 +51,9 @@ export function contrastRatio(fg: string, bg: string): number {
 }
 
 const SURFACES: Array<[string, string]> = [
-  ["white", pwc.white],
-  ["grey50 canvas", pwc.grey50],
-  ["grey100 sunken", pwc.grey100],
+  ["white", ds.white],
+  ["grey50 canvas", ds.grey50],
+  ["grey100 sunken", ds.grey100],
 ];
 
 describe("text roles meet 4.5:1 on every app surface", () => {
@@ -74,40 +74,40 @@ describe("text roles meet 4.5:1 on every app surface", () => {
 
 describe("primary action text meets 4.5:1 in every state", () => {
   test("white on action.primary (default)", () => {
-    expect(contrastRatio(pwc.white, tokens.color.action.primary)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(ds.white, tokens.color.action.primary)).toBeGreaterThanOrEqual(4.5);
   });
 
   test("white on action.primaryHover (hover)", () => {
-    expect(contrastRatio(pwc.white, tokens.color.action.primaryHover)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(ds.white, tokens.color.action.primaryHover)).toBeGreaterThanOrEqual(4.5);
   });
 
   test("action.primary as small interactive text on white", () => {
-    expect(contrastRatio(tokens.color.action.primary, pwc.white)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(tokens.color.action.primary, ds.white)).toBeGreaterThanOrEqual(4.5);
   });
 });
 
 describe("status label text meets 4.5:1 on neutral surfaces", () => {
   const statusText: Array<[string, string]> = [
-    ["successText", pwc.successText],
-    ["errorText", pwc.errorText],
-    ["warningText", pwc.warningText],
-    ["infoText", pwc.infoText],
+    ["successText", ds.successText],
+    ["errorText", ds.errorText],
+    ["warningText", ds.warningText],
+    ["infoText", ds.infoText],
   ];
 
   for (const [name, fg] of statusText) {
     test(`${name} on white`, () => {
-      expect(contrastRatio(fg, pwc.white)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(fg, ds.white)).toBeGreaterThanOrEqual(4.5);
     });
   }
 
   test("destructive hover keeps readable text (errorText on errorBg)", () => {
-    expect(contrastRatio(pwc.errorText, pwc.errorBg)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(ds.errorText, ds.errorBg)).toBeGreaterThanOrEqual(4.5);
   });
 });
 
 describe("essential boundaries and focus meet 3:1", () => {
   test("control border is distinguishable on white", () => {
-    expect(contrastRatio(tokens.color.border.control, pwc.white)).toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(tokens.color.border.control, ds.white)).toBeGreaterThanOrEqual(3);
   });
 
   test("focus.strong outline on every app surface", () => {
@@ -117,20 +117,20 @@ describe("essential boundaries and focus meet 3:1", () => {
   });
 
   test("focus.ring (form-control focus border) on white", () => {
-    expect(contrastRatio(tokens.color.focus.ring, pwc.white)).toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(tokens.color.focus.ring, ds.white)).toBeGreaterThanOrEqual(3);
   });
 
   test("tab active indicator (brand) on white", () => {
-    expect(contrastRatio(tokens.color.brand.indicator, pwc.white)).toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(tokens.color.brand.indicator, ds.white)).toBeGreaterThanOrEqual(3);
   });
 });
 
 describe("small coloured text roles meet 4.5:1", () => {
   test("grey500 on white", () => {
-    expect(contrastRatio(pwc.grey500, pwc.white)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(ds.grey500, ds.white)).toBeGreaterThanOrEqual(4.5);
   });
 
   test("orange700 on white", () => {
-    expect(contrastRatio(pwc.orange700, pwc.white)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(ds.orange700, ds.white)).toBeGreaterThanOrEqual(4.5);
   });
 });

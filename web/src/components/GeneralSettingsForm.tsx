@@ -7,7 +7,7 @@ import type {
   SettingsResponse,
   SourceIntegrityMode,
 } from "../lib/types";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -108,30 +108,30 @@ const SUMMARY_VISIBILITY_FALLBACK = ["off", "auto", "concise", "detailed"];
 
 const styles = {
   fieldGroup: {
-    marginBottom: pwc.space.lg,
+    marginBottom: ds.space.lg,
   } as React.CSSProperties,
   label: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontWeight: 500,
     fontSize: 14,
-    color: pwc.grey700,
+    color: ds.grey700,
     display: "block",
-    marginBottom: pwc.space.xs,
+    marginBottom: ds.space.xs,
   } as React.CSSProperties,
   // Disclosure headings keep the shared summary layout from index.css (flex
   // row with the chevron); never give a <summary> display:block.
   summary: {
-    fontFamily: pwc.fontHeading,
-    fontWeight: pwc.weight.medium,
+    fontFamily: ds.fontHeading,
+    fontWeight: ds.weight.medium,
     fontSize: 14,
-    color: pwc.black,
+    color: ds.black,
     minHeight: 40,
   } as React.CSSProperties,
   labelExtra: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontWeight: 400,
-    color: pwc.grey700,
-    marginLeft: pwc.space.sm,
+    color: ds.grey700,
+    marginLeft: ds.space.sm,
   } as React.CSSProperties,
   // Shared control primitive: 44px targets + perceptible (3:1) boundaries.
   input: {
@@ -143,24 +143,24 @@ const styles = {
   inputMono: {
     ...ui.input,
     width: "100%",
-    fontFamily: pwc.fontMono,
+    fontFamily: ds.fontMono,
     fontSize: 13,
     boxSizing: "border-box" as const,
   } as React.CSSProperties,
   inputError: {
-    borderColor: pwc.error,
+    borderColor: ds.error,
   },
   helperText: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.grey700,
-    marginTop: pwc.space.xs,
+    color: ds.grey700,
+    marginTop: ds.space.xs,
   } as React.CSSProperties,
   errorText: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.errorText,
-    marginTop: pwc.space.xs,
+    color: ds.errorText,
+    marginTop: ds.space.xs,
   } as React.CSSProperties,
   actions: {
     // Test Connection sits on the left, Save/Cancel group on the right (C4).
@@ -169,12 +169,12 @@ const styles = {
     ...ui.stickyActionBar,
     boxShadow: "none",
     paddingInline: 0,
-    marginTop: pwc.space.xl,
+    marginTop: ds.space.xl,
   } as React.CSSProperties,
   actionsRight: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.md,
+    gap: ds.space.md,
   } as React.CSSProperties,
   cancelButton: {
     ...ui.buttonSecondary,
@@ -186,37 +186,37 @@ const styles = {
     ...ui.buttonSecondary,
   } as React.CSSProperties,
   testResult: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    marginTop: pwc.space.sm,
+    marginTop: ds.space.sm,
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.xs,
+    gap: ds.space.xs,
   } as React.CSSProperties,
   testSpinner: {
     width: 14,
     height: 14,
-    border: `2px solid ${pwc.grey200}`,
-    borderTop: `2px solid ${pwc.orange500}`,
+    border: `2px solid ${ds.grey200}`,
+    borderTop: `2px solid ${ds.orange500}`,
     borderRadius: "50%",
     display: "inline-block",
   } as React.CSSProperties,
   savedBadge: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.successText,
+    color: ds.successText,
   } as React.CSSProperties,
   unsavedBadge: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.grey700,
+    color: ds.grey700,
   } as React.CSSProperties,
-  fieldGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: pwc.space.xl } as React.CSSProperties,
+  fieldGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: ds.space.xl } as React.CSSProperties,
   thinkingRow: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
     alignItems: "start",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     padding: "5px 0",
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
@@ -224,15 +224,15 @@ const styles = {
     display: "flex",
     flexDirection: "column",
     fontSize: 14,
-    color: pwc.grey900,
+    color: ds.grey900,
   } as React.CSSProperties,
   thinkingHint: {
-    fontSize: 12, color: pwc.grey700,
+    fontSize: 12, color: ds.grey700,
   } as React.CSSProperties,
   sectionHeading: {
     marginTop: 0,
-    marginBottom: pwc.space.lg,
-    paddingTop: pwc.space.lg,
+    marginBottom: ds.space.lg,
+    paddingTop: ds.space.lg,
   } as React.CSSProperties,
   sectionTitle: {
     ...ui.sectionTitle,
@@ -240,13 +240,13 @@ const styles = {
   } as React.CSSProperties,
   sectionDescription: {
     ...ui.supportingText,
-    margin: `${pwc.space.xs}px 0 0`,
+    margin: `${ds.space.xs}px 0 0`,
   } as React.CSSProperties,
   loadError: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.errorText,
-    marginBottom: pwc.space.lg,
+    color: ds.errorText,
+    marginBottom: ds.space.lg,
   } as React.CSSProperties,
 };
 
@@ -601,7 +601,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           value={proxyUrl}
           onChange={(e) => { setProxyUrl(e.target.value); setDirty(true); }}
           onBlur={() => validateField("proxyUrl")}
-          placeholder="https://genai-sharedservice-emea.pwc.com"
+          placeholder="https://llm-proxy.example.com"
           // Focus the first field on mount so keyboard users land inside the
           // form, not on whatever was behind it.
           autoFocus={!readOnly}
@@ -720,7 +720,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             style={{
               ...ui.input,
               width: "100%",
-              fontFamily: pwc.fontMono,
+              fontFamily: ds.fontMono,
               fontSize: 13,
               ...(errors.model ? styles.inputError : {}),
             }}
@@ -777,7 +777,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           type="button"
           onClick={handleUseGpt6ForEveryRole}
           disabled={readOnly}
-          style={{ ...ui.buttonSecondary, ...ui.buttonSm, alignSelf: "flex-start", marginLeft: pwc.space.sm }}
+          style={{ ...ui.buttonSecondary, ...ui.buttonSm, alignSelf: "flex-start", marginLeft: ds.space.sm }}
         >
           Use GPT-6 Luna for every role
         </button>
@@ -962,7 +962,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       />
 
       <div style={styles.fieldGroup}>
-        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: ds.space.sm, cursor: "pointer" }}>
           <input
             type="checkbox" style={ui.checkbox}
             checked={notesCoverage}
@@ -1028,7 +1028,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       </div>
       </fieldset>
       {shown("general") && !readOnly && (
-        <div style={{ marginTop: pwc.space.xl }}>
+        <div style={{ marginTop: ds.space.xl }}>
           <h3 style={styles.sectionTitle}>Restore defaults</h3>
           <p style={styles.helperText}>Resets models, limits and notes appearance for everyone.</p>
           <button type="button" style={ui.buttonSecondary} disabled={!loaded || loading || saving || testing} onClick={() => setResetOpen(true)}>Reset settings to defaults</button>
@@ -1045,8 +1045,8 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         <div style={styles.testResult}>
           {testResult.status === "ok" ? (
             <>
-              <StatusIcon symbol={STATUS_SYMBOLS.success} size={16} style={{ color: pwc.success }} />
-              <span style={{ color: pwc.success }}>{testResult.message}</span>
+              <StatusIcon symbol={STATUS_SYMBOLS.success} size={16} style={{ color: ds.success }} />
+              <span style={{ color: ds.success }}>{testResult.message}</span>
             </>
           ) : (
             <>
@@ -1072,7 +1072,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             >
               {testing ? (
                 <>
-                  <span className="pwc-spinner" style={styles.testSpinner} /> Testing...
+                  <span className="app-spinner" style={styles.testSpinner} /> Testing...
                 </>
               ) : (
                 "Test connection"

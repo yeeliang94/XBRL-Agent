@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AgentTabStatus, ReasoningBlock, SSEEvent, ToolTimelineEntry } from "../lib/types";
 import { buildActivitySentences } from "../lib/buildActivitySentences";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 
 interface Props {
@@ -128,46 +128,46 @@ export function ActivityStream({
 const styles = {
   root: {
     minWidth: 0,
-    padding: `${pwc.space.lg}px 0 ${pwc.space.sm}px`,
-    borderTop: `1px solid ${pwc.grey100}`,
+    padding: `${ds.space.lg}px 0 ${ds.space.sm}px`,
+    borderTop: `1px solid ${ds.grey100}`,
   } as const,
   headingRow: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: pwc.space.md,
+    gap: ds.space.md,
     minHeight: 40,
-    marginBottom: pwc.space.sm,
+    marginBottom: ds.space.sm,
   } as const,
   heading: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey900,
+    fontWeight: ds.weight.medium,
+    color: ds.grey900,
   } as const,
   technicalToggle: {
     display: "inline-flex",
     alignItems: "center",
-    gap: pwc.space.sm,
-    fontFamily: pwc.fontBody,
+    gap: ds.space.sm,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey900,
+    color: ds.grey900,
     cursor: "pointer",
   } as const,
   // The list grows with the page; only narrow layouts bound it.
   feed: {
     margin: 0,
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px ${pwc.space.xs}px 0`,
+    padding: `${ds.space.xs}px ${ds.space.sm}px ${ds.space.xs}px 0`,
     listStyle: "none",
     scrollBehavior: "auto" as const,
   } as const,
   update: {
     display: "grid",
     gridTemplateColumns: "10px minmax(0, 1fr)",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     alignItems: "stretch",
     minHeight: 48,
-    padding: `${pwc.space.xs}px 0 ${pwc.space.md}px`,
+    padding: `${ds.space.xs}px 0 ${ds.space.md}px`,
     contentVisibility: "auto" as const,
     containIntrinsicSize: "0 56px",
   } as const,
@@ -175,7 +175,7 @@ const styles = {
     position: "relative" as const,
     width: 10,
     marginLeft: 3,
-    borderLeft: `1px solid ${pwc.grey200}`,
+    borderLeft: `1px solid ${ds.grey200}`,
   } as const,
   dot: {
     position: "absolute" as const,
@@ -186,10 +186,10 @@ const styles = {
     borderRadius: "50%",
   } as const,
   dotActive: {
-    background: pwc.orange500,
+    background: ds.orange500,
   } as const,
   dotComplete: {
-    background: pwc.grey300,
+    background: ds.grey300,
   } as const,
   copy: {
     minWidth: 0,
@@ -197,19 +197,19 @@ const styles = {
   sentence: {
     margin: 0,
     maxWidth: 680,
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
     lineHeight: 1.55,
-    fontWeight: pwc.weight.regular,
-    color: pwc.grey800,
+    fontWeight: ds.weight.regular,
+    color: ds.grey800,
     whiteSpace: "pre-wrap" as const,
     overflowWrap: "anywhere" as const,
   } as const,
   empty: {
-    padding: `${pwc.space.md}px 0`,
-    fontFamily: pwc.fontBody,
+    padding: `${ds.space.md}px 0`,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.grey500,
+    color: ds.grey500,
   } as const,
   visuallyHidden: {
     position: "absolute",

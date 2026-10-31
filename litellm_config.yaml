@@ -1,5 +1,5 @@
 model_list:
-  # Model IDs below mirror the Windows enterprise PwC LiteLLM proxy so the same
+  # Model IDs below mirror the Windows enterprise LiteLLM proxy so the same
   # config/models.json dropdown works in both environments. The Mac local proxy
   # re-routes each Windows-style ID to the direct provider API.
 

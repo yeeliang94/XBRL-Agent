@@ -3,7 +3,7 @@ import { REPORT_SHEET_LABELS } from "../lib/reportLabels";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { StatusIcon } from "./StatusIcon";
 import { ApiError, userMessage } from "../lib/errors";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { friendlyMtoolSheetName, MtoolSheetSelection } from "./MtoolSheetSelection";
 import { FileDropzone } from "./FileDropzone";
@@ -284,8 +284,8 @@ const styles = {
     display: "flex",
     alignItems: "flex-start",
     justifyContent: "space-between",
-    gap: pwc.space.md,
-    marginBottom: pwc.space.sm,
+    gap: ds.space.md,
+    marginBottom: ds.space.sm,
   } as React.CSSProperties,
   heading: {
     ...ui.dialogTitle,
@@ -294,11 +294,11 @@ const styles = {
   closeX: {
     border: "none",
     background: "transparent",
-    color: pwc.grey500,
+    color: ds.grey500,
     fontSize: 16,
     lineHeight: 1,
     cursor: "pointer",
-    padding: pwc.space.xs,
+    padding: ds.space.xs,
     minWidth: 40,
     minHeight: 40,
     display: "inline-flex",
@@ -307,43 +307,43 @@ const styles = {
   } as React.CSSProperties,
   sub: {
     ...ui.bodyText,
-    margin: `0 0 ${pwc.space.lg}px`,
+    margin: `0 0 ${ds.space.lg}px`,
   } as React.CSSProperties,
   statLine: {
     fontSize: 13,
-    color: pwc.grey900,
+    color: ds.grey900,
     margin: `2px 0`,
   } as React.CSSProperties,
   actions: {
     display: "flex",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     justifyContent: "flex-end",
     flexWrap: "wrap",
-    marginTop: pwc.space.lg,
+    marginTop: ds.space.lg,
   } as React.CSSProperties,
   noteCard: {
-    borderTop: `1px solid ${pwc.grey200}`,
-    padding: `${pwc.space.sm}px 0`,
+    borderTop: `1px solid ${ds.grey200}`,
+    padding: `${ds.space.sm}px 0`,
     fontSize: 12,
   } as React.CSSProperties,
   selectedFile: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: pwc.space.md,
-    padding: `${pwc.space.sm}px 0 ${pwc.space.md}px`,
-    borderBottom: `1px solid ${pwc.grey200}`,
+    gap: ds.space.md,
+    padding: `${ds.space.sm}px 0 ${ds.space.md}px`,
+    borderBottom: `1px solid ${ds.grey200}`,
   } as React.CSSProperties,
   summaryGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(84px, 1fr))",
-    gap: pwc.space.md,
-    padding: `${pwc.space.md}px 0`,
+    gap: ds.space.md,
+    padding: `${ds.space.md}px 0`,
   } as React.CSSProperties,
   summaryValue: {
     fontSize: 16,
-    fontWeight: pwc.weight.regular,
-    color: pwc.grey900,
+    fontWeight: ds.weight.regular,
+    color: ds.grey900,
     lineHeight: 1.2,
   } as React.CSSProperties,
 };
@@ -364,7 +364,7 @@ function PlanSection({
 }) {
   if (count === 0) return null;
   return (
-    <details open={defaultOpen} style={{ marginTop: pwc.space.sm }}>
+    <details open={defaultOpen} style={{ marginTop: ds.space.sm }}>
       <summary
         style={{
           cursor: "pointer",
@@ -372,15 +372,15 @@ function PlanSection({
           alignItems: "center",
           gap: 8,
           fontSize: 13,
-          fontWeight: pwc.weight.medium,
-          color: pwc.grey900,
+          fontWeight: ds.weight.medium,
+          color: ds.grey900,
         }}
       >
         {title}
-        <span style={{ color: pwc.grey500, fontWeight: pwc.weight.regular }}>({count})</span>
+        <span style={{ color: ds.grey500, fontWeight: ds.weight.regular }}>({count})</span>
       </summary>
       {hint && (
-        <div style={{ color: pwc.grey700, fontSize: 12, margin: "4px 0 0 15px" }}>{hint}</div>
+        <div style={{ color: ds.grey700, fontSize: 12, margin: "4px 0 0 15px" }}>{hint}</div>
       )}
       <div style={{ margin: "4px 0 2px 15px" }}>{children}</div>
     </details>
@@ -446,9 +446,9 @@ function RowDetail({ title, rows, defaultOpen = false }: { title: string; rows: 
   return (
     <details style={{ marginTop: 6, fontSize: 12 }} open={defaultOpen}>
       <summary style={{ cursor: "pointer" }}>
-        {title} <span style={{ color: pwc.grey500 }}>({rows.length})</span>
+        {title} <span style={{ color: ds.grey500 }}>({rows.length})</span>
       </summary>
-      <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: pwc.grey700, overflowWrap: "anywhere" }}>
+      <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: ds.grey700, overflowWrap: "anywhere" }}>
         {rows.map((r, i) => (
           <li key={i}>{r}</li>
         ))}
@@ -1074,7 +1074,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
 
   return (
     <div
-      className="pwc-dialog-scrim-enter"
+      className="app-dialog-scrim-enter"
       style={styles.overlay}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
@@ -1083,7 +1083,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
       aria-modal="true"
       aria-label="Prepare mTool draft"
     >
-      <div ref={dialogRef} tabIndex={-1} style={styles.modal} className="pwc-dialog-enter">
+      <div ref={dialogRef} tabIndex={-1} style={styles.modal} className="app-dialog-enter">
         <div style={styles.headerRow}>
           <h2 style={styles.heading}>{report ? "Draft prepared" : "Prepare mTool draft"}</h2>
           {/* Corner close — Esc + scrim-click already close, but a visible ✕
@@ -1100,7 +1100,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
         </div>
         <div style={{ overflowY: "auto", minHeight: 0, flex: "1 1 auto" }}>
         {notice && (
-          <p role="note" style={{ ...ui.bodyText, display: "flex", alignItems: "flex-start", gap: pwc.space.sm, margin: `0 0 ${pwc.space.md}px` }}>
+          <p role="note" style={{ ...ui.bodyText, display: "flex", alignItems: "flex-start", gap: ds.space.sm, margin: `0 0 ${ds.space.md}px` }}>
             <StatusIcon symbol={STATUS_SYMBOLS.attention} style={{ marginTop: 2 }} />
             <span>{notice}</span>
           </p>
@@ -1123,7 +1123,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
         {file && (
           <div style={styles.selectedFile}>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: pwc.weight.medium, overflowWrap: "anywhere" }}>{file.name}</div>
+              <div style={{ fontWeight: ds.weight.medium, overflowWrap: "anywhere" }}>{file.name}</div>
             </div>
             <button type="button" className={uiClass.btnSecondary}
               style={{ ...ui.buttonSecondary, flexShrink: 0 }}
@@ -1147,27 +1147,27 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
         )}
 
         {file && meta && !report && (
-          <p aria-label="Fill summary" style={{ margin: `${pwc.space.md}px 0`, color: pwc.grey700, fontSize: 14 }}>
-            <strong style={{ color: pwc.grey900 }}>{meta.counts.writes} figures</strong>
-            {notesCount !== null && <> · <strong style={{ color: pwc.grey900 }}>{notesCount} notes</strong></>}
+          <p aria-label="Fill summary" style={{ margin: `${ds.space.md}px 0`, color: ds.grey700, fontSize: 14 }}>
+            <strong style={{ color: ds.grey900 }}>{meta.counts.writes} figures</strong>
+            {notesCount !== null && <> · <strong style={{ color: ds.grey900 }}>{notesCount} notes</strong></>}
           </p>
         )}
 
         {file && !report && (
-          <section aria-label="Detected template settings" style={{ borderTop: `1px solid ${pwc.grey200}`, paddingTop: pwc.space.md, marginBottom: pwc.space.md }}>
-            <div style={{ fontWeight: pwc.weight.semibold, marginBottom: pwc.space.sm }}>Detected template</div>
+          <section aria-label="Detected template settings" style={{ borderTop: `1px solid ${ds.grey200}`, paddingTop: ds.space.md, marginBottom: ds.space.md }}>
+            <div style={{ fontWeight: ds.weight.semibold, marginBottom: ds.space.sm }}>Detected template</div>
             {detectBusy && <div role="status" style={styles.statLine}>Checking template settings…</div>}
             {!detectBusy && templateSettings && <>
-              <div style={{ ...styles.statLine, display: "grid", gridTemplateColumns: "minmax(105px, 130px) minmax(0, 1fr)", gap: `${pwc.space.xs}px ${pwc.space.md}px` }}>
-                <span style={{ color: pwc.grey700 }}>Standard</span><span>{templateSettings.filing_standard?.toUpperCase() ?? "Not identified"}</span>
-                <span style={{ color: pwc.grey700 }}>Filing level</span><span>{templateSettings.filing_level ? templateSettings.filing_level[0].toUpperCase() + templateSettings.filing_level.slice(1) : "Not identified"}</span>
-                <span style={{ color: pwc.grey700 }}>Statements</span><span>{detectedStatementLabels(templateSettings.sheets).join("; ") || "No statement format identified"}</span>
-                <span style={{ color: pwc.grey700 }}>Amount scale</span><span>{detectedScaleLabel(templateSettings.declared_unit_scales)}</span>
+              <div style={{ ...styles.statLine, display: "grid", gridTemplateColumns: "minmax(105px, 130px) minmax(0, 1fr)", gap: `${ds.space.xs}px ${ds.space.md}px` }}>
+                <span style={{ color: ds.grey700 }}>Standard</span><span>{templateSettings.filing_standard?.toUpperCase() ?? "Not identified"}</span>
+                <span style={{ color: ds.grey700 }}>Filing level</span><span>{templateSettings.filing_level ? templateSettings.filing_level[0].toUpperCase() + templateSettings.filing_level.slice(1) : "Not identified"}</span>
+                <span style={{ color: ds.grey700 }}>Statements</span><span>{detectedStatementLabels(templateSettings.sheets).join("; ") || "No statement format identified"}</span>
+                <span style={{ color: ds.grey700 }}>Amount scale</span><span>{detectedScaleLabel(templateSettings.declared_unit_scales)}</span>
               </div>
-              {!templateSettings.filing_family_match && <div role="alert" style={{ ...ui.alertError, marginTop: pwc.space.sm }}>
+              {!templateSettings.filing_family_match && <div role="alert" style={{ ...ui.alertError, marginTop: ds.space.sm }}>
                 This template does not match the run&apos;s filing standard, company/group level, or statements. Choose a matching template.
               </div>}
-              {unitScaleWarnings.length > 0 && <div role="alert" style={{ ...ui.alertWarning, marginTop: pwc.space.sm }}>
+              {unitScaleWarnings.length > 0 && <div role="alert" style={{ ...ui.alertWarning, marginTop: ds.space.sm }}>
                 Amount scale differs: template {detectedScaleLabel([unitScaleWarnings[0].template_declares])}, run {detectedScaleLabel([unitScaleWarnings[0].run_denomination])}. Check the amounts before filing.
               </div>}
             </>}
@@ -1181,22 +1181,22 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
               disabled={busy || previewBusy} onClick={() => void runPreview()}>Refresh notes preview</button>}
           </div>
         )}
-        {busy && <p role="status" style={{ ...ui.bodyText, margin: `0 0 ${pwc.space.md}px` }}>Preparing template…</p>}
+        {busy && <p role="status" style={{ ...ui.bodyText, margin: `0 0 ${ds.space.md}px` }}>Preparing template…</p>}
         {readinessErr && <p role="status" style={styles.statLine}>Run checks unavailable: {readinessErr}</p>}
         {loadErr && (
           <div style={ui.alertError}>Could not load fill data: {loadErr}</div>
         )}
 
         <div hidden={!!report} style={{ display: report ? undefined : "flex", flexDirection: "column" }}>
-        {file && <details style={{ marginBottom: pwc.space.md }}>
-          <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: pwc.weight.medium, color: pwc.grey900 }}>
+        {file && <details style={{ marginBottom: ds.space.md }}>
+          <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: ds.weight.medium, color: ds.grey900 }}>
             Customize
           </summary>
         {availableSheets.length > 0 && (
           <MtoolSheetSelection sheets={availableSheets} selected={selectedSheets} onChange={changeSheets} />
         )}
         {notesCount !== null && notesCount > 0 && (
-          <label style={{ ...styles.statLine, display: "flex", alignItems: "center", gap: pwc.space.sm, fontSize: 14, marginBottom: 4 }}>
+          <label style={{ ...styles.statLine, display: "flex", alignItems: "center", gap: ds.space.sm, fontSize: 14, marginBottom: 4 }}>
             <input
               type="checkbox" style={ui.checkbox}
               checked={fillNotes}
@@ -1219,7 +1219,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
 
         {notesCount !== null && notesCount > 0 && fillNotes && (
           <label
-            style={{ ...styles.statLine, display: "flex", alignItems: "flex-start", gap: pwc.space.sm, fontSize: 14, marginBottom: pwc.space.md }}
+            style={{ ...styles.statLine, display: "flex", alignItems: "flex-start", gap: ds.space.sm, fontSize: 14, marginBottom: ds.space.md }}
           >
             <input
               type="checkbox"
@@ -1243,7 +1243,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
         )}
 
         {reviewGroups.length > 0 && (
-          <div aria-label="Run review reminders" style={{ ...ui.supportingText, borderTop: `1px solid ${pwc.grey200}`, paddingTop: pwc.space.sm }}>
+          <div aria-label="Run review reminders" style={{ ...ui.supportingText, borderTop: `1px solid ${ds.grey200}`, paddingTop: ds.space.sm }}>
             {reviewGroups.reduce((sum, group) => sum + group.items.length, 0)} saved-run {reviewGroups.reduce((sum, group) => sum + group.items.length, 0) === 1 ? "item needs" : "items need"} review.
           </div>
         )}
@@ -1252,41 +1252,41 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
         </details>}
 
         {fillNotes && (
-          <div style={{ marginBottom: pwc.space.md }}>
+          <div style={{ marginBottom: ds.space.md }}>
             {previewBusy && (
-              <div role="status" style={{ color: pwc.grey500, fontSize: 12 }}>Checking where notes can be placed…</div>
+              <div role="status" style={{ color: ds.grey500, fontSize: 12 }}>Checking where notes can be placed…</div>
             )}
             {previewErr && (
-              <div style={{ ...ui.alertError, marginTop: pwc.space.sm }}>
+              <div style={{ ...ui.alertError, marginTop: ds.space.sm }}>
                 <div>Couldn&apos;t check note placement. You can still fill the figures.</div>
-                <button type="button" onClick={() => void runPreview()} disabled={busy} style={{ ...ui.buttonGhost, marginTop: pwc.space.sm }} className={uiClass.btnGhost}>Try note check again</button>
+                <button type="button" onClick={() => void runPreview()} disabled={busy} style={{ ...ui.buttonGhost, marginTop: ds.space.sm }} className={uiClass.btnGhost}>Try note check again</button>
               </div>
             )}
             {preview && (preview.unresolved.length > 0 || preview.errors.length > 0) && (
               <details
                 open={preview.errors.length > 0}
                 style={{
-                  borderTop: `1px solid ${pwc.grey200}`,
-                  paddingTop: pwc.space.md,
+                  borderTop: `1px solid ${ds.grey200}`,
+                  paddingTop: ds.space.md,
                   fontSize: 14,
                 }}
                 aria-label="Notes preview"
               >
-                <summary style={{ color: pwc.grey900, fontWeight: pwc.weight.medium, cursor: "pointer" }}>
+                <summary style={{ color: ds.grey900, fontWeight: ds.weight.medium, cursor: "pointer" }}>
                   {preview.unresolved.length > 0
                     ? `${preview.unresolved.length} ${preview.unresolved.length === 1 ? "note has" : "notes have"} no certain destination`
                     : `${preview.errors.length} ${preview.errors.length === 1 ? "note issue" : "note issues"} to review`}
                   {preview.unresolved.length > 0 && preview.errors.length > 0 && ` · ${preview.errors.length} ${preview.errors.length === 1 ? "issue" : "issues"}`}
                 </summary>
-                <p style={{ color: pwc.grey700, margin: `${pwc.space.xs}px 0 ${pwc.space.sm}px` }}>
+                <p style={{ color: ds.grey700, margin: `${ds.space.xs}px 0 ${ds.space.sm}px` }}>
                   {preview.unresolved.length > 0
                     ? "Uncertain notes will be left for completion in mTool unless you choose a destination below."
                     : "Review these note issues before filling."}
                 </p>
 
                 {preview.errors.length > 0 && (
-                  <div style={{ ...ui.alertError, marginTop: pwc.space.sm }}>
-                    <div style={{ fontWeight: pwc.weight.medium }}>
+                  <div style={{ ...ui.alertError, marginTop: ds.space.sm }}>
+                    <div style={{ fontWeight: ds.weight.medium }}>
                       {preview.errors.length === 1
                         ? "1 problem stops the notes from being filled:"
                         : `${preview.errors.length} problems stop the notes from being filled:`}
@@ -1315,13 +1315,13 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
                     const suggestion = u.reason === "strict_near_miss" ? suggestionTarget(u) : null;
                     return (
                       <div key={i} style={styles.noteCard}>
-                        <div style={{ fontWeight: pwc.weight.medium, color: pwc.grey900 }}>{u.label}</div>
+                        <div style={{ fontWeight: ds.weight.medium, color: ds.grey900 }}>{u.label}</div>
                         {u.source_sheet && noteReasonUsesSheetScope(u.reason) && (
-                          <div style={{ color: pwc.grey500, marginTop: 2 }}>
+                          <div style={{ color: ds.grey500, marginTop: 2 }}>
                             Only checked in: {u.source_sheet}
                           </div>
                         )}
-                        <div style={{ color: pwc.grey700, margin: "2px 0 4px" }}>{unresolvedReasonText(u)}</div>
+                        <div style={{ color: ds.grey700, margin: "2px 0 4px" }}>{unresolvedReasonText(u)}</div>
                         {(u.reason === "ambiguous" || u.reason === "identity_mismatch") && (u.candidates?.length ?? 0) > 0 && idx >= 0 && (
                           <select
                             aria-label={`Choose where “${u.label}” goes`}
@@ -1351,7 +1351,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
                           </select>
                         )}
                         {suggestion && idx >= 0 && (
-                          <label style={{ display: "inline-flex", alignItems: "center", gap: pwc.space.sm, fontSize: 14 }}>
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: ds.space.sm, fontSize: 14 }}>
                             <input
                               type="checkbox" style={ui.checkbox}
                               checked={!!chosen}
@@ -1372,8 +1372,8 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
                     );
                   })}
                   {Object.keys(noteTargets).length > 0 && (
-                    <div style={{ marginTop: pwc.space.sm, display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ color: pwc.grey700 }}>
+                    <div style={{ marginTop: ds.space.sm, display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ color: ds.grey700 }}>
                         {Object.keys(noteTargets).length} placed — applied when you fill.
                       </span>
                       <button
@@ -1394,7 +1394,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
                   count={preview.will_create.length}
                   hint="These notes have no spot in the template yet — one is created next to each label."
                 >
-                  <ul style={{ margin: 0, paddingLeft: 18, color: pwc.grey700 }}>
+                  <ul style={{ margin: 0, paddingLeft: 18, color: ds.grey700 }}>
                     {preview.will_create.map((w, i) => (
                       <li key={i}>
                         {w.label ?? "(placed by you)"} → {w.cell}
@@ -1408,7 +1408,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
                   count={preview.will_fill_existing.length}
                   hint="These match a spot that already exists in the template."
                 >
-                  <ul style={{ margin: 0, paddingLeft: 18, color: pwc.grey700 }}>
+                  <ul style={{ margin: 0, paddingLeft: 18, color: ds.grey700 }}>
                     {preview.will_fill_existing.map((w, i) => (
                       <li key={i}>{w.label}</li>
                     ))}
@@ -1416,7 +1416,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
                 </PlanSection>
 
                 {!createMissingNotes && preview.unresolved.length > 0 && preview.will_create.length === 0 && (
-                  <div style={{ color: pwc.grey700, marginTop: pwc.space.sm }}>
+                  <div style={{ color: ds.grey700, marginTop: ds.space.sm }}>
                     Enable “Add missing note fields” in Customize.
                   </div>
                 )}
@@ -1436,13 +1436,13 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
           const cellInput: React.CSSProperties = { ...ui.input, width: 64, padding: 0, textAlign: "center", textTransform: "uppercase" };
           return (
           <section
-            style={{ borderTop: `1px solid ${pwc.grey200}`, paddingTop: pwc.space.lg, marginTop: pwc.space.lg }}
+            style={{ borderTop: `1px solid ${ds.grey200}`, paddingTop: ds.space.lg, marginTop: ds.space.lg }}
             aria-label="Column layout editor"
           >
-            <h3 style={{ ...ui.subsectionTitle, marginBottom: pwc.space.xs }}>
+            <h3 style={{ ...ui.subsectionTitle, marginBottom: ds.space.xs }}>
               {columnConfidence === "high" ? "Excel columns" : "Confirm Excel columns"}
             </h3>
-            <p style={{ ...ui.metadata, margin: `0 0 ${pwc.space.md}px` }}>
+            <p style={{ ...ui.metadata, margin: `0 0 ${ds.space.md}px` }}>
               {columnPrompt ?? (columnConfidence === "high"
                 ? "Change only if your template uses a different layout."
                 : "Enter the column letters for labels and each year, for example D, E, F.")}
@@ -1458,10 +1458,10 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
               <tbody>
                 {Object.entries(columnMap).map(([sheet, cfg]) => (
                   <tr key={sheet}>
-                    <td style={{ ...ui.td, padding: `${pwc.space.xs}px ${pwc.space.lg}px ${pwc.space.xs}px 0` }} title={sheet}>
+                    <td style={{ ...ui.td, padding: `${ds.space.xs}px ${ds.space.lg}px ${ds.space.xs}px 0` }} title={sheet}>
                       {friendlyMtoolSheetName(sheet)}
                     </td>
-                    <td style={{ ...ui.td, padding: `${pwc.space.xs}px ${pwc.space.lg}px ${pwc.space.xs}px 0` }}>
+                    <td style={{ ...ui.td, padding: `${ds.space.xs}px ${ds.space.lg}px ${ds.space.xs}px 0` }}>
                       <input
                         aria-label={`${sheet} label column`}
                         value={cfg.label_column}
@@ -1476,7 +1476,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
                       />
                     </td>
                     {roles.map((role) => (
-                      <td key={role} style={{ ...ui.td, padding: `${pwc.space.xs}px ${pwc.space.lg}px ${pwc.space.xs}px 0` }}>
+                      <td key={role} style={{ ...ui.td, padding: `${ds.space.xs}px ${ds.space.lg}px ${ds.space.xs}px 0` }}>
                         {role in cfg.columns && (
                           <input
                             aria-label={`${sheet} ${role} column`}
@@ -1507,7 +1507,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
           );
         })()}
         {!columnMap && columnPrompt && (
-          <p style={{ ...ui.metadata, marginTop: pwc.space.md }}>{columnPrompt}</p>
+          <p style={{ ...ui.metadata, marginTop: ds.space.md }}>{columnPrompt}</p>
         )}
 
         </div>
@@ -1516,25 +1516,25 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
           <div role="status"
             style={{
               display: "block",
-              marginTop: pwc.space.md,
+              marginTop: ds.space.md,
             }}
           >
             {report.status !== "ok" && (
-              <p style={{ ...ui.bodyText, margin: `${pwc.space.xs}px 0 0` }}>
+              <p style={{ ...ui.bodyText, margin: `${ds.space.xs}px 0 0` }}>
                 The draft contains every safely matched value. Finish the items below in mTool before filing.
               </p>
             )}
             <div style={styles.summaryGrid}>
-              <div><div style={styles.summaryValue}>{report.counts.written}</div><div style={{ ...styles.statLine, color: pwc.grey700 }}>figures filled</div></div>
-              {report.notes && <div><div style={styles.summaryValue}>{report.notes.counts.written}</div><div style={{ ...styles.statLine, color: pwc.grey700 }}>notes filled</div></div>}
-              {notFilledCount > 0 && <div><div style={styles.summaryValue}>{notFilledCount}</div><div style={{ ...styles.statLine, color: pwc.grey700 }}>not filled</div></div>}
+              <div><div style={styles.summaryValue}>{report.counts.written}</div><div style={{ ...styles.statLine, color: ds.grey700 }}>figures filled</div></div>
+              {report.notes && <div><div style={styles.summaryValue}>{report.notes.counts.written}</div><div style={{ ...styles.statLine, color: ds.grey700 }}>notes filled</div></div>}
+              {notFilledCount > 0 && <div><div style={styles.summaryValue}>{notFilledCount}</div><div style={{ ...styles.statLine, color: ds.grey700 }}>not filled</div></div>}
             </div>
             {Boolean(report.sheet_selection?.excluded_sheets.length) && (
-              <p style={{ ...ui.supportingText, margin: `0 0 ${pwc.space.sm}px`, overflowWrap: "anywhere" }}>
+              <p style={{ ...ui.supportingText, margin: `0 0 ${ds.space.sm}px`, overflowWrap: "anywhere" }}>
                 Partial workbook: {report.sheet_selection!.excluded_sheets.map(friendlyMtoolSheetName).join(", ")} not included. {report.sheet_selection!.excluded_figures} figures {report.sheet_selection!.excluded_notes === null ? "and any notes" : `and ${report.sheet_selection!.excluded_notes} ${report.sheet_selection!.excluded_notes === 1 ? "note" : "notes"}`} were left unchanged.
               </p>
             )}
-            <p style={{ ...ui.supportingText, margin: `0 0 ${pwc.space.md}px` }}>After downloading, run Validate &amp; Generate in mTool.</p>
+            <p style={{ ...ui.supportingText, margin: `0 0 ${ds.space.md}px` }}>After downloading, run Validate &amp; Generate in mTool.</p>
             <RowDetail
               title="Prior-year figures not filed"
               rows={(report.filing_coverage?.excluded_writes ?? []).map((item) => [
@@ -1546,18 +1546,18 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
               ].filter(Boolean).join(" · ") + (item.detail ? ` — ${item.detail}` : ""))}
             />
             {(report.unit_scale_warnings?.length ?? 0) > 0 && (
-              <div role="alert" style={{ ...ui.alertWarning, marginBottom: pwc.space.md, fontSize: 12 }}>
+              <div role="alert" style={{ ...ui.alertWarning, marginBottom: ds.space.md, fontSize: 12 }}>
                 This template says its figures are in {report.unit_scale_warnings![0].template_declares}, but this run&apos;s figures are in {report.unit_scale_warnings![0].run_denomination}. Check the amounts before filing.
               </div>
             )}
-            <details style={{ fontSize: 12, marginBottom: pwc.space.md }}>
-              <summary style={{ cursor: "pointer", fontWeight: pwc.weight.medium }}>
+            <details style={{ fontSize: 12, marginBottom: ds.space.md }}>
+              <summary style={{ cursor: "pointer", fontWeight: ds.weight.medium }}>
                 {notFilledCount > 0 ? `View ${notFilledCount} unfinished items and fill receipt` : "View fill receipt"}
               </summary>
             {Boolean(report.filing_coverage?.operator_resolutions?.length) && (
-              <details style={{ marginBottom: pwc.space.sm, fontSize: 12 }}>
+              <details style={{ marginBottom: ds.space.sm, fontSize: 12 }}>
                 <summary style={{ cursor: "pointer" }}>Confirmed filing destinations ({report.filing_coverage!.operator_resolutions!.length})</summary>
-                <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: pwc.grey700 }}>
+                <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: ds.grey700 }}>
                   {report.filing_coverage!.operator_resolutions!.map((item, index) => (
                     <li key={`${item.cell}:${index}`} style={{ overflowWrap: "anywhere" }}>
                       {item.label} · {item.period} · {item.entity_scope}: {item.cell}
@@ -1568,13 +1568,13 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
               </details>
             )}
             {((report.counts.reconciled_formula ?? 0) > 0 || (report.unit_class_unknown?.length ?? 0) > 0) && (
-              <details style={{ marginBottom: pwc.space.sm, fontSize: 12 }}>
+              <details style={{ marginBottom: ds.space.sm, fontSize: 12 }}>
                 <summary style={{ cursor: "pointer" }}>Other details</summary>
                 {(report.counts.reconciled_formula ?? 0) > 0 && (
                   <p>{report.counts.reconciled_formula} calculated values agree with the reviewed figures. The template formulas were preserved.</p>
                 )}
                 {(report.unit_class_unknown?.length ?? 0) > 0 && (
-                  <p style={{ color: pwc.grey700 }}>
+                  <p style={{ color: ds.grey700 }}>
                     {report.unit_class_unknown!.length} value(s) could not be classified by unit and were written unchanged.
                   </p>
                 )}
@@ -1643,7 +1643,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
               <details style={{ marginTop: 6, fontSize: 12 }}>
                 <summary style={{ cursor: "pointer" }}>Note formatting details</summary>
                 {report.notes.styling_disabled && (
-                  <p style={{ color: pwc.grey700 }}>
+                  <p style={{ color: ds.grey700 }}>
                     Written without styling — you chose the diagnostic “No styling” option,
                     so plain-looking notes are expected.
                   </p>
@@ -1654,7 +1654,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
                     (report.notes.counts.formatting_dropped ?? 0) > 0 ||
                     (report.notes.counts.source_styling_dropped ?? 0) > 0 ||
                     (report.notes.counts.white_grid_dropped ?? 0) > 0) && (
-                    <p style={{ color: pwc.grey700 }}>
+                    <p style={{ color: ds.grey700 }}>
                       {[
                         (report.notes.counts.formatting_compacted ?? 0) > 0 &&
                           `${report.notes.counts.formatting_compacted} large note(s) used slimmer styling (looks the same)`,
@@ -1678,21 +1678,21 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
         )}
 
         {downloadErr && (
-          <div style={{ ...ui.alertError, marginTop: pwc.space.sm }}>
+          <div style={{ ...ui.alertError, marginTop: ds.space.sm }}>
             Download failed: {downloadErr}
           </div>
         )}
         {downloaded && (
-          <div style={{ ...styles.statLine, color: pwc.grey700, marginTop: pwc.space.sm }}>
+          <div style={{ ...styles.statLine, color: ds.grey700, marginTop: ds.space.sm }}>
             Downloaded. Open it in mTool and run Validate &amp; Generate.
           </div>
         )}
 
         </div>
-        <div style={{ ...styles.actions, flexShrink: 0, paddingTop: pwc.space.md, borderTop: `1px solid ${pwc.grey200}` }}>
+        <div style={{ ...styles.actions, flexShrink: 0, paddingTop: ds.space.md, borderTop: `1px solid ${ds.grey200}` }}>
           {/* Say why Fill is unavailable, beside the button it affects. */}
           {!report && file && !busy && !fillQueued && fillBlockedReason && (
-            <span role="status" style={{ ...ui.metadata, marginRight: "auto", alignSelf: "center", display: "inline-flex", alignItems: "center", gap: pwc.space.sm }}>
+            <span role="status" style={{ ...ui.metadata, marginRight: "auto", alignSelf: "center", display: "inline-flex", alignItems: "center", gap: ds.space.sm }}>
               <StatusIcon symbol={STATUS_SYMBOLS.attention} />{fillBlockedReason}
             </span>
           )}

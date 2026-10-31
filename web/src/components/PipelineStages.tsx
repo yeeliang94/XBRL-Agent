@@ -1,5 +1,5 @@
 import type { EventPhase, PipelineStage, PreparationAction, PreparationPhase } from "../lib/types";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 
 interface Props {
   currentPhase: EventPhase | null;
@@ -82,7 +82,7 @@ function getStepStatus(
 const styles = {
   container: {
     overflowX: "auto" as const,
-    paddingBottom: pwc.space.xs,
+    paddingBottom: ds.space.xs,
   },
   track: {
     display: "grid",
@@ -105,92 +105,92 @@ const styles = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    background: pwc.white,
-    border: `2px solid ${pwc.success}`,
+    background: ds.white,
+    border: `2px solid ${ds.success}`,
     flexShrink: 0,
   } as React.CSSProperties,
   completeDot: {
     width: 6,
     height: 6,
     borderRadius: "50%",
-    background: pwc.success,
+    background: ds.success,
   } as React.CSSProperties,
   activeCircle: {
     width: 18,
     height: 18,
     borderRadius: "50%",
-    background: pwc.orange400,
+    background: ds.orange400,
     flexShrink: 0,
   } as React.CSSProperties,
   actionCircle: {
     width: 18,
     height: 18,
     borderRadius: "50%",
-    border: `2px solid ${pwc.orange400}`,
-    background: pwc.white,
+    border: `2px solid ${ds.orange400}`,
+    background: ds.white,
     flexShrink: 0,
   } as React.CSSProperties,
   stoppedCircle: {
     width: 18,
     height: 18,
     borderRadius: "50%",
-    border: `2px solid ${pwc.error}`,
-    background: pwc.errorBg,
+    border: `2px solid ${ds.error}`,
+    background: ds.errorBg,
     flexShrink: 0,
   } as React.CSSProperties,
   pendingCircle: {
     width: 18,
     height: 18,
     borderRadius: "50%",
-    border: `2px solid ${pwc.grey300}`,
+    border: `2px solid ${ds.grey300}`,
     background: "transparent",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    color: pwc.grey300,
+    color: ds.grey300,
     fontSize: 12,
-    fontFamily: pwc.fontMono,
+    fontFamily: ds.fontMono,
     flexShrink: 0,
   } as React.CSSProperties,
   // Labels
   completedLabel: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 12,
-    color: pwc.grey700,
-    marginTop: pwc.space.sm,
+    color: ds.grey700,
+    marginTop: ds.space.sm,
   },
   activeLabel: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 12,
     fontWeight: 500,
-    color: pwc.grey900,
-    marginTop: pwc.space.sm,
+    color: ds.grey900,
+    marginTop: ds.space.sm,
   },
   actionLabel: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 12,
     fontWeight: 500,
-    color: pwc.orange700,
-    marginTop: pwc.space.sm,
+    color: ds.orange700,
+    marginTop: ds.space.sm,
   },
   stoppedLabel: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 12,
     fontWeight: 500,
-    color: pwc.errorText,
-    marginTop: pwc.space.sm,
+    color: ds.errorText,
+    marginTop: ds.space.sm,
   },
   pendingLabel: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 12,
-    color: pwc.grey700,
-    marginTop: pwc.space.sm,
+    color: ds.grey700,
+    marginTop: ds.space.sm,
   },
   // Connector
   connector: {
     height: 2,
     flex: 1,
-    margin: `0 ${pwc.space.sm}px`,
+    margin: `0 ${ds.space.sm}px`,
   },
 };
 
@@ -249,8 +249,8 @@ export function PipelineStages({
                       background:
                         status === "completed" &&
                         getStepStatus(i + 1, currentIndex, active, isComplete, actionIndex, stoppedIndex) !== "pending"
-                          ? pwc.success
-                          : pwc.grey200,
+                          ? ds.success
+                          : ds.grey200,
                     }}
                   />
                 )}

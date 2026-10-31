@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { pwc, tokens, component } from "./theme";
+import { ds, tokens, component } from "./theme";
 
 export const activityWorkspaceStyle: CSSProperties = {
   display: "grid",
@@ -26,7 +26,7 @@ export const activityWorkspaceStyle: CSSProperties = {
 // to all inputs/selects/textareas in index.css and need no className.
 
 const controlBase: CSSProperties = {
-  fontFamily: pwc.fontBody,
+  fontFamily: ds.fontBody,
   fontSize: 14,
   lineHeight: 1.5,
   borderRadius: tokens.radius.control,
@@ -39,9 +39,9 @@ const controlBase: CSSProperties = {
 const buttonBase: CSSProperties = {
   minHeight: 40,
   padding: "0 15px",
-  fontFamily: pwc.fontHeading,
+  fontFamily: ds.fontHeading,
   fontSize: 14,
-  fontWeight: pwc.weight.medium,
+  fontWeight: ds.weight.medium,
   borderRadius: tokens.radius.control,
   border: "1px solid transparent",
   cursor: "pointer",
@@ -49,7 +49,7 @@ const buttonBase: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  gap: pwc.space.sm,
+  gap: ds.space.sm,
   whiteSpace: "nowrap",
   lineHeight: 1.2,
 };
@@ -65,14 +65,14 @@ const badgeBase: CSSProperties = {
   minHeight: 22,
   padding: "3px 11px",
   borderRadius: tokens.radius.pill,
-  fontFamily: pwc.fontHeading,
+  fontFamily: ds.fontHeading,
   fontSize: 12,
-  fontWeight: pwc.weight.medium,
+  fontWeight: ds.weight.medium,
   lineHeight: 1.4,
   whiteSpace: "nowrap",
   background: "transparent",
-  color: pwc.grey800,
-  border: `1px solid ${pwc.grey300}`,
+  color: ds.grey800,
+  border: `1px solid ${ds.grey300}`,
 };
 
 // Restrained alert (design-system Alerts): neutral surface and one hairline
@@ -80,14 +80,14 @@ const badgeBase: CSSProperties = {
 // alerts do not reintroduce the accent-edge treatment used by old selections.
 const alertBase: CSSProperties = {
   display: "flex",
-  gap: pwc.space.md,
+  gap: ds.space.md,
   alignItems: "flex-start",
-  padding: pwc.space.lg,
+  padding: ds.space.lg,
   borderRadius: tokens.radius.control,
   background: tokens.surface.default,
   border: `1px solid ${tokens.color.border.subtle}`,
   color: tokens.color.text.body,
-  fontFamily: pwc.fontBody,
+  fontFamily: ds.fontBody,
   fontSize: 14,
   lineHeight: 1.5,
 };
@@ -96,7 +96,7 @@ const alertBase: CSSProperties = {
 // Ghost variants converged into this single role (design-system Buttons).
 const buttonQuiet: CSSProperties = {
   ...buttonBase,
-  color: pwc.grey800,
+  color: ds.grey800,
   background: "transparent",
 };
 
@@ -108,7 +108,7 @@ const thBase: CSSProperties = {
   fontSize: 12,
   letterSpacing: 0,
   color: component.table.header.text,
-  fontWeight: pwc.weight.regular,
+  fontWeight: ds.weight.regular,
   borderBottom: `1px solid ${tokens.color.border.subtle}`,
 };
 
@@ -118,91 +118,91 @@ const reviewPaneHeader: CSSProperties = {
   justifyContent: "space-between",
   minHeight: 44,
   flexShrink: 0,
-  padding: `0 ${pwc.space.xs}px`,
+  padding: `0 ${ds.space.xs}px`,
   background: tokens.surface.canvas,
 };
 
 export const ui = {
-  segmentControl: { display: "inline-flex", alignItems: "center", gap: 2, padding: 3, border: `1px solid ${pwc.grey300}`, borderRadius: 8, background: pwc.white, minHeight: 40 } as CSSProperties,
+  segmentControl: { display: "inline-flex", alignItems: "center", gap: 2, padding: 3, border: `1px solid ${ds.grey300}`, borderRadius: 8, background: ds.white, minHeight: 40 } as CSSProperties,
   segmentOption: { ...buttonQuiet, minHeight: 32, padding: "0 16px", borderRadius: 6 } as CSSProperties,
-  segmentOptionActive: { background: pwc.grey100, color: pwc.black } as CSSProperties,
-  comparisonAttention: { background: pwc.orange50 } as CSSProperties,
-  comparisonQuiet: { background: pwc.grey50 } as CSSProperties,
+  segmentOptionActive: { background: ds.grey100, color: ds.black } as CSSProperties,
+  comparisonAttention: { background: ds.orange50 } as CSSProperties,
+  comparisonQuiet: { background: ds.grey50 } as CSSProperties,
   // --- Typography --------------------------------------------------------
   // Focused-workspace scale: 28 Page title · 16 Section/item · 14 Body.
   // Short metadata and mono identifiers may step down to 12–13px.
   // Titles at 22-28px take a touch of negative tracking (design-system
   // Typography): a grotesk at display size reads loose at 0 tracking.
   pageTitle: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 28,
     lineHeight: 1.2,
     letterSpacing: "-0.01em",
-    fontWeight: pwc.weight.semibold,
+    fontWeight: ds.weight.semibold,
     color: tokens.color.text.primary,
     margin: 0,
   } as CSSProperties,
   pageTitleCompact: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 16,
     lineHeight: 1.2,
     letterSpacing: "-0.01em",
-    fontWeight: pwc.weight.semibold,
+    fontWeight: ds.weight.semibold,
     color: tokens.color.text.primary,
     margin: 0,
   } as CSSProperties,
   sectionTitle: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 16,
     lineHeight: 1.25,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: ds.weight.semibold,
     color: tokens.color.text.primary,
     margin: 0,
   } as CSSProperties,
   subsectionTitle: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
     lineHeight: 1.4,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: ds.weight.semibold,
     color: tokens.color.text.primary,
     margin: 0,
   } as CSSProperties,
   bodyText: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
     lineHeight: 1.5,
-    fontWeight: pwc.weight.regular,
+    fontWeight: ds.weight.regular,
     color: tokens.color.text.body,
   } as CSSProperties,
   supportingText: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
     lineHeight: 1.5,
-    fontWeight: pwc.weight.regular,
+    fontWeight: ds.weight.regular,
     color: tokens.color.text.secondary,
   } as CSSProperties,
   metadata: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
     lineHeight: 1.5,
-    fontWeight: pwc.weight.regular,
+    fontWeight: ds.weight.regular,
     color: tokens.color.text.secondary,
   } as CSSProperties,
   // Micro-label: short eyebrows and compact keys ONLY — never table headers,
   // long labels, or instructions.
   microLabel: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 12,
     lineHeight: 1.4,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
     letterSpacing: 0,
     color: tokens.color.text.secondary,
   } as CSSProperties,
   financialValue: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
     lineHeight: 1.45,
-    fontWeight: pwc.weight.regular,
+    fontWeight: ds.weight.regular,
     color: tokens.color.text.primary,
     fontVariantNumeric: "tabular-nums",
     textAlign: "right",
@@ -211,7 +211,7 @@ export const ui = {
   // Reading copy is distinct from compact application labels. Long guidance
   // and document-adjacent prose should wrap at a comfortable measure.
   readingText: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
     lineHeight: 1.6,
     color: tokens.color.text.body,
@@ -265,8 +265,8 @@ export const ui = {
     alignSelf: "start",
     display: "flex",
     flexDirection: "column",
-    gap: pwc.space.xl,
-    padding: `${pwc.space.xl}px ${pwc.space.md}px ${pwc.space.lg}px`,
+    gap: ds.space.xl,
+    padding: `${ds.space.xl}px ${ds.space.md}px ${ds.space.lg}px`,
     background: tokens.surface.navigation,
     borderRight: `1px solid ${tokens.color.border.subtle}`,
   } as CSSProperties,
@@ -278,7 +278,7 @@ export const ui = {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
     padding: `0 ${tokens.space.pageGutter}px`,
     background: tokens.surface.canvas,
   } as CSSProperties,
@@ -293,23 +293,23 @@ export const ui = {
     width: "100%",
     padding: "0 10px",
     textAlign: "left",
-    fontWeight: pwc.weight.regular,
+    fontWeight: ds.weight.regular,
     color: tokens.color.text.primary,
     textDecoration: "none",
   } as CSSProperties,
   navLinkActive: {
-    background: pwc.grey200,
-    fontWeight: pwc.weight.medium,
+    background: ds.grey200,
+    fontWeight: ds.weight.medium,
   } as CSSProperties,
   paneDivider: {
     borderLeft: `1px solid ${tokens.color.border.subtle}`,
   } as CSSProperties,
   reviewPaneHeader,
-  reviewSourcePaneHeader: { ...reviewPaneHeader, paddingInline: pwc.space.lg } as CSSProperties,
+  reviewSourcePaneHeader: { ...reviewPaneHeader, paddingInline: ds.space.lg } as CSSProperties,
   reviewSelection: {
-    background: pwc.grey100,
+    background: ds.grey100,
     color: tokens.color.text.primary,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
   } as CSSProperties,
   flatList: {
     borderTop: `1px solid ${tokens.color.border.subtle}`,
@@ -323,7 +323,7 @@ export const ui = {
     alignItems: "center",
     justifyContent: "space-between",
     flexWrap: "wrap",
-    gap: pwc.space.md,
+    gap: ds.space.md,
   } as CSSProperties,
   // Compact filter toolbar — controls flow left, denser gap than ui.toolbar.
   // Pair with the `quality-toolbar` class for narrow-screen stacking.
@@ -331,7 +331,7 @@ export const ui = {
     display: "flex",
     alignItems: "flex-end",
     flexWrap: "wrap",
-    gap: pwc.space.md,
+    gap: ds.space.md,
   } as CSSProperties,
   // Standard section-header composition: title left, optional actions right,
   // sits above a section's content with a group gap below.
@@ -340,8 +340,8 @@ export const ui = {
     alignItems: "baseline",
     justifyContent: "space-between",
     flexWrap: "wrap",
-    gap: pwc.space.md,
-    marginBottom: pwc.space.lg,
+    gap: ds.space.md,
+    marginBottom: ds.space.lg,
   } as CSSProperties,
   stickyActionBar: {
     position: "sticky",
@@ -350,14 +350,14 @@ export const ui = {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: pwc.space.md,
-    padding: pwc.space.lg,
+    gap: ds.space.md,
+    padding: ds.space.lg,
     background: tokens.surface.default,
     borderTop: `1px solid ${tokens.color.border.subtle}`,
-    boxShadow: pwc.shadow.elevated,
+    boxShadow: ds.shadow.elevated,
   } as CSSProperties,
   emptyState: {
-    padding: `${pwc.space.xxl}px ${pwc.space.xl}px`,
+    padding: `${ds.space.xxl}px ${ds.space.xl}px`,
     textAlign: "left",
     borderTop: `1px solid ${tokens.color.border.subtle}`,
     borderBottom: `1px solid ${tokens.color.border.subtle}`,
@@ -381,13 +381,13 @@ export const ui = {
     background: tokens.surface.default,
     border: `1px solid ${tokens.color.border.subtle}`,
     borderRadius: tokens.radius.panel,
-    padding: pwc.space.xl,
+    padding: ds.space.xl,
   } as CSSProperties,
 
   fieldLabel: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
     color: tokens.color.text.secondary,
   } as CSSProperties,
 
@@ -397,15 +397,15 @@ export const ui = {
     ...controlBase,
     height: 40,
     minHeight: 40,
-    padding: `0 ${pwc.space.lg}px`,
+    padding: `0 ${ds.space.lg}px`,
   } as CSSProperties,
 
   select: {
     ...controlBase,
-    borderColor: pwc.grey300,
+    borderColor: ds.grey300,
     height: 40,
     minHeight: 40,
-    padding: `0 ${pwc.space.lg}px`,
+    padding: `0 ${ds.space.lg}px`,
   } as CSSProperties,
 
   // Native checkbox semantics; checked and disabled states live in index.css.
@@ -416,10 +416,10 @@ export const ui = {
     flexShrink: 0,
     margin: 0,
     padding: 0,
-    border: `1px solid ${pwc.grey300}`,
+    border: `1px solid ${ds.grey300}`,
     borderRadius: 4,
-    background: pwc.white,
-    color: pwc.black,
+    background: ds.white,
+    color: ds.black,
     display: "inline-grid",
     placeContent: "center",
     cursor: "pointer",
@@ -428,7 +428,7 @@ export const ui = {
   textarea: {
     ...controlBase,
     minHeight: 80,
-    padding: `9px ${pwc.space.md}px`,
+    padding: `9px ${ds.space.md}px`,
     resize: "vertical",
   } as CSSProperties,
 
@@ -460,12 +460,12 @@ export const ui = {
 
   // Destructive action (delete / stop). Orange outline and accessible orange
   // text so it reads as destructive without a large orange fill; hover fill
-  // lives in index.css (.pwc-btn-danger).
+  // lives in index.css (.app-btn-danger).
   buttonDanger: {
     ...buttonBase,
-    color: pwc.orange700,
+    color: ds.orange700,
     background: tokens.surface.default,
-    borderColor: pwc.orange500,
+    borderColor: ds.orange500,
   } as CSSProperties,
 
   // Size modifier kept for existing call sites. Buttons now share one 40px
@@ -490,7 +490,7 @@ export const ui = {
     display: "inline-flex",
     alignItems: "center",
     gap: 7,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
     lineHeight: 1.4,
     color: tokens.color.text.body,
@@ -507,7 +507,7 @@ export const ui = {
     flexShrink: 0,
     textAlign: "center",
     fontSize: 13,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: ds.weight.semibold,
     color: tokens.color.text.secondary,
   } as CSSProperties,
 
@@ -528,24 +528,24 @@ export const ui = {
     gap: 2,
     minHeight: 40,
     padding: 3,
-    border: `1px solid ${pwc.grey300}`,
+    border: `1px solid ${ds.grey300}`,
     borderRadius: tokens.radius.control,
     background: tokens.surface.default,
   } as CSSProperties,
   segmentButton: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
     minHeight: 32,
     padding: "0 16px",
     border: "none",
-    borderRadius: pwc.radius.sm,
+    borderRadius: ds.radius.sm,
     background: "transparent",
     color: tokens.color.text.secondary,
     cursor: "pointer",
   } as CSSProperties,
   segmentButtonActive: {
-    background: pwc.grey100,
+    background: ds.grey100,
     color: tokens.color.text.primary,
   } as CSSProperties,
 
@@ -555,16 +555,16 @@ export const ui = {
   // an accent underline or edge.
   tabBar: {
     display: "flex",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     maxWidth: "100%",
     overflowX: "auto",
   } as CSSProperties,
   tab: {
     minHeight: 40,
     padding: "0 16px",
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
     background: "none",
     border: "none",
     borderRadius: tokens.radius.control,
@@ -574,12 +574,12 @@ export const ui = {
     textDecoration: "none",
     display: "inline-flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as CSSProperties,
   tabActive: {
     color: tokens.color.text.primary,
-    background: pwc.grey100,
-    fontWeight: pwc.weight.medium,
+    background: ds.grey100,
+    fontWeight: ds.weight.medium,
   } as CSSProperties,
 
   // --- Dialog -------------------------------------------------------------
@@ -592,25 +592,25 @@ export const ui = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    padding: pwc.space.xl,
+    padding: ds.space.xl,
     zIndex: 100,
   } as CSSProperties,
   dialog: {
     background: tokens.surface.default,
     border: `1px solid ${tokens.color.border.subtle}`,
     borderRadius: tokens.radius.panel,
-    boxShadow: pwc.shadow.modal,
+    boxShadow: ds.shadow.modal,
     width: "100%",
     maxWidth: 480,
     maxHeight: "85vh",
     overflow: "auto",
-    padding: pwc.space.xl,
+    padding: ds.space.xl,
   } as CSSProperties,
   dialogTitle: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 16,
     lineHeight: 1.3,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: ds.weight.semibold,
     color: tokens.color.text.primary,
     margin: 0,
   } as CSSProperties,
@@ -620,8 +620,8 @@ export const ui = {
     display: "flex",
     alignItems: "center",
     justifyContent: "flex-end",
-    gap: pwc.space.md,
-    marginTop: pwc.space.xl,
+    gap: ds.space.md,
+    marginTop: ds.space.xl,
   } as CSSProperties,
 
   // --- Badges ------------------------------------------------------------
@@ -636,27 +636,27 @@ export const ui = {
   } as CSSProperties,
   badgeSuccess: {
     ...badgeBase,
-    borderColor: pwc.success,
+    borderColor: ds.success,
   } as CSSProperties,
   badgeWarning: {
     ...badgeBase,
-    borderColor: pwc.warning,
+    borderColor: ds.warning,
   } as CSSProperties,
   badgeError: {
     ...badgeBase,
-    borderColor: pwc.error,
+    borderColor: ds.error,
   } as CSSProperties,
   badgeInfo: {
     ...badgeBase,
-    borderColor: pwc.info,
+    borderColor: ds.info,
   } as CSSProperties,
   badgeBrand: {
     ...badgeBase,
-    borderColor: pwc.orange500,
+    borderColor: ds.orange500,
   } as CSSProperties,
 
   // Leading status dot for an outline badge. Pass the status hue (use
-  // pwc.grey500 for neutral). 7px circle per the design-system spec.
+  // ds.grey500 for neutral). 7px circle per the design-system spec.
   badgeDot: (color: string): CSSProperties => ({
     width: 7,
     height: 7,
@@ -706,7 +706,7 @@ export const ui = {
   // BenchmarksPage with a single shape). Quiet and FLAT — a metric is not an
   // elevated card.
   statTile: {
-    padding: `${pwc.space.sm}px 0`,
+    padding: `${ds.space.sm}px 0`,
     border: "none",
     borderRadius: 0,
     background: tokens.surface.default,
@@ -721,7 +721,7 @@ export const ui = {
     justifyContent: "center",
     minWidth: 32,
     minHeight: 32,
-    padding: pwc.space.xs,
+    padding: ds.space.xs,
     borderRadius: tokens.radius.control,
     border: "1px solid transparent",
     background: "transparent",
@@ -744,19 +744,19 @@ export const ui = {
   // left edge as the page title and controls above the table.
   th: {
     ...thBase,
-    padding: `8px ${pwc.space.lg}px 8px 0`,
+    padding: `8px ${ds.space.lg}px 8px 0`,
   } as CSSProperties,
   td: {
-    padding: `10px ${pwc.space.lg}px 10px 0`,
+    padding: `10px ${ds.space.lg}px 10px 0`,
     borderBottom: `1px solid ${tokens.color.border.subtle}`,
   } as CSSProperties,
   // Comfortable density (48px rows) — setup surfaces, two-line content.
   thComfortable: {
     ...thBase,
-    padding: `8px ${pwc.space.lg}px 8px 0`,
+    padding: `8px ${ds.space.lg}px 8px 0`,
   } as CSSProperties,
   tdComfortable: {
-    padding: `14px ${pwc.space.lg}px 14px 0`,
+    padding: `14px ${ds.space.lg}px 14px 0`,
     borderBottom: `1px solid ${tokens.color.border.subtle}`,
   } as CSSProperties,
 
@@ -765,25 +765,25 @@ export const ui = {
   thDense: {
     ...thBase,
     fontSize: 12,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px ${pwc.space.sm}px 0`,
+    padding: `${ds.space.sm}px ${ds.space.md}px ${ds.space.sm}px 0`,
   } as CSSProperties,
   tdDense: {
-    padding: `${pwc.space.sm}px ${pwc.space.md}px ${pwc.space.sm}px 0`,
-    borderBottom: `1px solid ${pwc.grey100}`,
+    padding: `${ds.space.sm}px ${ds.space.md}px ${ds.space.sm}px 0`,
+    borderBottom: `1px solid ${ds.grey100}`,
   } as CSSProperties,
 };
 
 // className hooks for states inline styles can't express (hover). The matching
 // rules live in index.css. Focus rings are global and don't need a class.
 export const uiClass = {
-  btnPrimary: "pwc-btn-primary",
-  btnSecondary: "pwc-btn-secondary",
-  btnQuiet: "pwc-btn-quiet",
+  btnPrimary: "app-btn-primary",
+  btnSecondary: "app-btn-secondary",
+  btnQuiet: "app-btn-quiet",
   // Deprecated aliases — both resolve to the Quiet hover rule.
-  btnSubtle: "pwc-btn-quiet",
-  btnGhost: "pwc-btn-quiet",
-  btnDanger: "pwc-btn-danger",
-  card: "pwc-card",
-  tableRow: "pwc-table-row",
-  tab: "pwc-tab",
+  btnSubtle: "app-btn-quiet",
+  btnGhost: "app-btn-quiet",
+  btnDanger: "app-btn-danger",
+  card: "app-card",
+  tableRow: "app-table-row",
+  tab: "app-tab",
 } as const;

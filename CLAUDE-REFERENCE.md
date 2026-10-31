@@ -54,7 +54,7 @@ All LLM calls route through `_create_proxy_model()` in `server.py`. Both
 master key `sk-local-dev-key`, logs in `litellm.log`. Falls back to direct
 mode if the proxy fails to start.
 
-**Windows:** all traffic goes through `https://genai-sharedservice-emea.pwc.com`
+**Windows:** all traffic goes through `https://llm-proxy.example.com`
 (OpenAI-compatible). Direct Google API calls are blocked (403).
 
 ### Runtime settings and deployment environment
@@ -425,7 +425,7 @@ documents differ. Direction A in
 composition examples and screen-state context; it does not restore controls or
 copy removed by the canonical guide.
 Tokens live in
-`web/src/lib/theme.ts` (the `pwc` object — imported by ~30 components, so it
+`web/src/lib/theme.ts` (the `ds` object — imported by ~30 components, so it
 is the single cascade point); shared component primitives in
 `web/src/lib/uiStyles.ts`. Anything inline styles can't express (`:hover`,
 `:focus-visible`, focus rings, table cell borders) lives in

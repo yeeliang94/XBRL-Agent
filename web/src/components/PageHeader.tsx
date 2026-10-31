@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from "react";
-import { pwc, tokens } from "../lib/theme";
+import { ds, tokens } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 
 // Reusable page title chrome. Keep it quiet: title, optional actions, and a
@@ -30,7 +30,7 @@ const wrapBase: CSSProperties = {
   display: "flex",
   justifyContent: "space-between",
   alignItems: "flex-start",
-  gap: pwc.space.lg,
+  gap: ds.space.lg,
   flexWrap: "wrap",
 };
 
@@ -49,11 +49,11 @@ const styles: Record<string, CSSProperties> = {
     minWidth: 0,
   },
   eyebrow: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 12,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
     color: tokens.color.text.secondary,
-    marginBottom: pwc.space.sm,
+    marginBottom: ds.space.sm,
   },
   title: {
     ...ui.pageTitle,
@@ -66,13 +66,13 @@ const styles: Record<string, CSSProperties> = {
     ...ui.bodyText,
     color: tokens.color.text.secondary,
     maxWidth: "70ch",
-    marginTop: pwc.space.sm,
+    marginTop: ds.space.sm,
     marginBottom: 0,
   },
   actions: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.md,
+    gap: ds.space.md,
     flexShrink: 0,
   },
 };

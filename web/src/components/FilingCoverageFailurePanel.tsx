@@ -1,5 +1,5 @@
 import React from "react";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 
 export interface FilingCoverageIssue {
@@ -109,12 +109,12 @@ export function FilingCoverageFailurePanel({ coverage, selections = {}, onSelect
   ];
 
   return (
-    <div data-testid="filing-coverage-failure" style={{ ...ui.alertError, flexDirection: "column", alignItems: "stretch", minWidth: 0, marginTop: pwc.space.md }}>
+    <div data-testid="filing-coverage-failure" style={{ ...ui.alertError, flexDirection: "column", alignItems: "stretch", minWidth: 0, marginTop: ds.space.md }}>
       <div role="alert">
-        <div style={{ fontWeight: pwc.weight.medium, color: pwc.grey900 }}>
+        <div style={{ fontWeight: ds.weight.medium, color: ds.grey900 }}>
           We couldn&apos;t create a filled workbook
         </div>
-        <div style={{ fontSize: 12, marginTop: 4, color: pwc.grey700 }}>
+        <div style={{ fontSize: 12, marginTop: 4, color: ds.grey700 }}>
           {coverage.mapped} of {coverage.requested} figures had a matching place. {blocked}{" "}
           {blocked === 1 ? "figure did" : "figures did"} not, so nothing was downloaded.
         </div>
@@ -127,7 +127,7 @@ export function FilingCoverageFailurePanel({ coverage, selections = {}, onSelect
         </p>
       )}
       {affectedSheets.length > 0 && (
-        <div style={{ fontSize: 12, marginTop: 4, color: pwc.grey700 }}>
+        <div style={{ fontSize: 12, marginTop: 4, color: ds.grey700 }}>
           Affected sheets: {affectedSheets.join(", ")}.
         </div>
       )}
@@ -135,12 +135,12 @@ export function FilingCoverageFailurePanel({ coverage, selections = {}, onSelect
       <div
         role="group"
         aria-label="Reasons figures were skipped"
-        style={{ marginTop: pwc.space.sm }}
+        style={{ marginTop: ds.space.sm }}
       >
-        <div style={{ fontSize: 12, fontWeight: pwc.weight.medium, color: pwc.grey900 }}>
+        <div style={{ fontSize: 12, fontWeight: ds.weight.medium, color: ds.grey900 }}>
           Why figures were skipped
         </div>
-        <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: pwc.grey700, fontSize: 12 }}>
+        <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: ds.grey700, fontSize: 12 }}>
           {[...reasonCounts.entries()].map(([reasonCode, { count, detail }]) => (
             <li key={reasonCode}>
               <strong>{count} {count === 1 ? "figure" : "figures"}</strong> — {detail}
@@ -153,13 +153,13 @@ export function FilingCoverageFailurePanel({ coverage, selections = {}, onSelect
         role="group"
         aria-label="Skipped figures"
         open={Boolean(onSelect) || rows.length <= 12}
-        style={{ marginTop: pwc.space.sm, fontSize: 12 }}
+        style={{ marginTop: ds.space.sm, fontSize: 12 }}
       >
-        <summary style={{ cursor: "pointer", fontWeight: pwc.weight.medium }}>
+        <summary style={{ cursor: "pointer", fontWeight: ds.weight.medium }}>
           Skipped figures ({rows.length})
         </summary>
         <div style={{ overflowX: "auto", marginTop: 6 }}>
-          <table style={{ width: "100%", minWidth: 760, tableLayout: "fixed", borderCollapse: "collapse", color: pwc.grey700 }}>
+          <table style={{ width: "100%", minWidth: 760, tableLayout: "fixed", borderCollapse: "collapse", color: ds.grey700 }}>
             <colgroup><col style={{ width: "17%" }} /><col style={{ width: "26%" }} /><col style={{ width: "25%" }} /><col style={{ width: "32%" }} /></colgroup>
             <thead>
               <tr>
@@ -170,7 +170,7 @@ export function FilingCoverageFailurePanel({ coverage, selections = {}, onSelect
                     style={{
                       textAlign: "left",
                       padding: "4px 6px",
-                      borderBottom: "1px solid " + pwc.grey300,
+                      borderBottom: "1px solid " + ds.grey300,
                     }}
                   >
                     {heading}
@@ -183,7 +183,7 @@ export function FilingCoverageFailurePanel({ coverage, selections = {}, onSelect
                 const cellStyle: React.CSSProperties = {
                   padding: "4px 6px",
                   verticalAlign: "top",
-                  borderBottom: "1px solid " + pwc.grey200,
+                  borderBottom: "1px solid " + ds.grey200,
                   overflowWrap: "anywhere",
                   fontSize: 13,
                 };

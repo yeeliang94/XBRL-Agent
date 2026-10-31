@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import type { ToolTimelineEntry } from "../lib/types";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import {
   humanToolName,
   argsPreview,
@@ -44,16 +44,16 @@ const GLYPH_STYLES: Record<GlyphState, React.CSSProperties> = {
   // Same small dots as the plain activity list: orange only for live work
   // or a failure, grey otherwise.
   active: {
-    background: pwc.orange500,
+    background: ds.orange500,
   },
   done: {
-    background: pwc.grey300,
+    background: ds.grey300,
   },
   failed: {
-    background: pwc.orange500,
+    background: ds.orange500,
   },
   cancelled: {
-    background: pwc.grey400,
+    background: ds.grey400,
   },
 };
 
@@ -84,14 +84,14 @@ const CARD_BASE: React.CSSProperties = {
   borderRadius: 0,
   padding: CARD_PADDING,
   border: "none",
-  borderTop: `1px solid ${pwc.grey100}`,
+  borderTop: `1px solid ${ds.grey100}`,
 };
 
 const CARD_STYLES: Record<GlyphState, React.CSSProperties> = {
-  active: { background: pwc.white },
-  done: { background: pwc.white },
-  failed: { background: pwc.white },
-  cancelled: { background: pwc.white },
+  active: { background: ds.white },
+  done: { background: ds.white },
+  failed: { background: ds.white },
+  cancelled: { background: ds.white },
 };
 
 function cardStyleFor(state: GlyphState): React.CSSProperties {
@@ -113,19 +113,19 @@ const styles = {
   headerLeft: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.md,
+    gap: ds.space.md,
     minWidth: 0, // let the truncated args preview shrink
   } as React.CSSProperties,
   toolName: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    fontWeight: pwc.weight.regular,
-    color: pwc.grey900,
+    fontWeight: ds.weight.regular,
+    color: ds.grey900,
   } as React.CSSProperties,
   argsSummary: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.grey700,
+    color: ds.grey700,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap" as const,
@@ -135,28 +135,28 @@ const styles = {
   // primitive own the geometry (pill radius, dot gap, neutral grey label).
   // Plain secondary text at the row end — no pill.
   badge: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.grey700,
+    color: ds.grey700,
     fontVariantNumeric: "tabular-nums",
     flexShrink: 0,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   // Expanded detail aligns with the row text (7px dot + 12px gap).
   detail: {
-    marginTop: pwc.space.sm,
+    marginTop: ds.space.sm,
     paddingLeft: 19,
   } as React.CSSProperties,
   detailLabel: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 12,
-    color: pwc.grey700,
-    marginBottom: pwc.space.xs,
+    color: ds.grey700,
+    marginBottom: ds.space.xs,
   } as React.CSSProperties,
   detailValue: {
-    fontFamily: pwc.fontMono,
+    fontFamily: ds.fontMono,
     fontSize: 12,
-    color: pwc.grey800,
+    color: ds.grey800,
     whiteSpace: "pre-wrap" as const,
     wordBreak: "break-word" as const,
   } as React.CSSProperties,
@@ -169,16 +169,16 @@ function renderArgs(toolName: string, args: Record<string, unknown>): React.Reac
     const fields = parseFillFields(args);
     if (fields) {
       return (
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: pwc.fontMono }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: ds.fontMono }}>
           <thead>
             <tr>
-              <th style={{ textAlign: "left", padding: "4px 8px", borderBottom: `1px solid ${pwc.grey200}`, fontWeight: 400 }}>Label</th>
-              <th style={{ textAlign: "right", padding: "4px 8px", borderBottom: `1px solid ${pwc.grey200}`, fontWeight: 400 }}>Value</th>
+              <th style={{ textAlign: "left", padding: "4px 8px", borderBottom: `1px solid ${ds.grey200}`, fontWeight: 400 }}>Label</th>
+              <th style={{ textAlign: "right", padding: "4px 8px", borderBottom: `1px solid ${ds.grey200}`, fontWeight: 400 }}>Value</th>
             </tr>
           </thead>
           <tbody>
             {fields.map((f, i) => (
-              <tr key={i} style={{ background: i % 2 === 0 ? pwc.white : pwc.grey50 }}>
+              <tr key={i} style={{ background: i % 2 === 0 ? ds.white : ds.grey50 }}>
                 <td style={{ padding: "3px 8px" }}>{fieldDisplayLabel(f)}</td>
                 <td style={{ padding: "3px 8px", textAlign: "right" }}>{fmtNum(f.value)}</td>
               </tr>
@@ -202,16 +202,16 @@ function renderResult(toolName: string, summary: string): React.ReactNode {
           const isPass = /:\s*True/i.test(line);
           const isFail = /:\s*False/i.test(line);
           const isMismatch = line.startsWith("Mismatches:") || line.startsWith("Action required:");
-          const resultBackground = isFail || isMismatch ? pwc.orange50 : isPass ? pwc.grey50 : pwc.white;
+          const resultBackground = isFail || isMismatch ? ds.orange50 : isPass ? ds.grey50 : ds.white;
           return (
             <div key={i} style={{
               fontSize: 12,
-              fontFamily: pwc.fontMono,
+              fontFamily: ds.fontMono,
               padding: "4px 8px",
               borderRadius: 4,
               background: resultBackground,
-              border: `1px solid ${pwc.grey200}`,
-              color: pwc.grey800,
+              border: `1px solid ${ds.grey200}`,
+              color: ds.grey800,
             }}>
               {line}
             </div>
@@ -236,7 +236,7 @@ function ToolCallCardImpl({ entry }: Props) {
     const rs = entry.result_summary ? resultSummary(entry.tool_name, entry.result_summary) : null;
     if (rs) {
       badge = (
-        <span style={{ ...styles.badge, ...(rs.tone === "warn" ? { color: pwc.orange700 } : {}) }}>
+        <span style={{ ...styles.badge, ...(rs.tone === "warn" ? { color: ds.orange700 } : {}) }}>
           {rs.text}
         </span>
       );
@@ -249,7 +249,7 @@ function ToolCallCardImpl({ entry }: Props) {
     <div
       data-testid="tool-card"
       data-state={glyphState}
-      className="pwc-status-change"
+      className="app-status-change"
       style={cardStyleFor(glyphState)}
     >
       <button
@@ -278,7 +278,7 @@ function ToolCallCardImpl({ entry }: Props) {
             </div>
           )}
           {entry.result_summary && (
-            <div style={{ marginTop: pwc.space.sm }}>
+            <div style={{ marginTop: ds.space.sm }}>
               <div style={styles.detailLabel}>Result</div>
               {renderResult(entry.tool_name, entry.result_summary)}
             </div>

@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import type { AgentTabStatus, SSEEvent } from "../lib/types";
 import { buildToolTimeline } from "../lib/buildToolTimeline";
 import { deriveFormatterSheets, labelFormatterEvents } from "../lib/formatterSubAgents";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ActivityStream } from "./ActivityStream";
 import { NotesSubTabBar } from "./NotesSubTabBar";
 import { AgentTimeline } from "./AgentTimeline";
@@ -101,18 +101,18 @@ function FormatterTechnicalActivity({ events }: { events: SSEEvent[] }) {
 
 // Same "What went wrong" treatment as a failed workstream in RunDetailView.
 const styles = {
-  execution: { fontSize: 13, color: pwc.grey700, padding: "0 16px" },
-  partHeading: { fontSize: 14, fontWeight: pwc.weight.medium, padding: "12px 16px 0" },
+  execution: { fontSize: 13, color: ds.grey700, padding: "0 16px" },
+  partHeading: { fontSize: 14, fontWeight: ds.weight.medium, padding: "12px 16px 0" },
   detail: { padding: "8px 16px", whiteSpace: "pre-wrap" as const, overflowWrap: "anywhere" as const },
   failure: {
     display: "grid",
     gap: 4,
     padding: "10px 0",
-    color: pwc.grey900,
-    borderTop: `1px solid ${pwc.grey100}`,
+    color: ds.grey900,
+    borderTop: `1px solid ${ds.grey100}`,
     fontSize: 14,
     lineHeight: 1.55,
   },
-  failureLabel: { fontSize: 13, fontWeight: pwc.weight.medium, color: pwc.grey700 },
-  sheetName: { fontWeight: pwc.weight.medium },
+  failureLabel: { fontSize: 13, fontWeight: ds.weight.medium, color: ds.grey700 },
+  sheetName: { fontWeight: ds.weight.medium },
 };

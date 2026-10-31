@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { exportRunDiagnostics } from "../lib/api";
 import { userMessage } from "../lib/errors";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 
 /** Run-scoped support action. It sits with the run's header actions while
@@ -24,13 +24,13 @@ export function DiagnosticsExport({ runId }: { runId: number }) {
   }
 
   return (
-    <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: pwc.space.xs }}>
+    <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: ds.space.xs }}>
       <button type="button" disabled={pending} onClick={handleExport}
         title="Saved traces and logs. May contain financial content."
         className={uiClass.btnSecondary} style={ui.buttonSecondary}>
         {pending ? "Preparing diagnostics…" : "Export diagnostics"}
       </button>
-      {error && <span role="alert" data-testid="diagnostics-error" style={{ ...ui.metadata, color: pwc.errorText, maxWidth: 320, textAlign: "right" }}>{error}</span>}
+      {error && <span role="alert" data-testid="diagnostics-error" style={{ ...ui.metadata, color: ds.errorText, maxWidth: 320, textAlign: "right" }}>{error}</span>}
     </span>
   );
 }

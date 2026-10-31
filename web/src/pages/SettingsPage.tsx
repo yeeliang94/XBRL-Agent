@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { PageHeader } from "../components/PageHeader";
 import { ArrowForward } from "../components/iconGlyphs";
@@ -103,7 +103,7 @@ export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
               aria-selected={active}
               disabled={(notesBusy || sharedBusy) && !active}
               tabIndex={active ? 0 : -1}
-              className="pwc-tab"
+              className="app-tab"
               onPointerDown={(e) => e.currentTarget.setAttribute("data-pointer-focus", "true")}
               onBlur={(e) => e.currentTarget.removeAttribute("data-pointer-focus")}
               onClick={() => changeTab(t.key)}
@@ -121,15 +121,15 @@ export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
       {/* Field labels is its own page; it sits with the sections so every
           shared configuration surface is found in one place. */}
       {isAdmin && onFieldLabels && (
-        <button type="button" className="pwc-tab" style={styles.tab} onClick={onFieldLabels}>
-          Field labels<ArrowForward size={16} style={{ marginLeft: "auto", color: pwc.grey500 }} />
+        <button type="button" className="app-tab" style={styles.tab} onClick={onFieldLabels}>
+          Field labels<ArrowForward size={16} style={{ marginLeft: "auto", color: ds.grey500 }} />
         </button>
       )}
       </div>
 
       <div style={{ minWidth: 0 }}>
       {sharedTab(activeTab) && (
-        <section className="pwc-view-enter" style={styles.section} id={`settings-panel-${activeTab}`} aria-labelledby={`settings-tab-${activeTab}`} role="tabpanel">
+        <section className="app-view-enter" style={styles.section} id={`settings-panel-${activeTab}`} aria-labelledby={`settings-tab-${activeTab}`} role="tabpanel">
           <GeneralSettingsForm
             getSettings={getSettings}
             saveSettings={updateSettings}
@@ -155,14 +155,14 @@ export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
       )}
 
       {activeTab === "account" && (
-        <section className="pwc-view-enter" style={styles.section} id="settings-panel-account" aria-labelledby="settings-tab-account" role="tabpanel">
+        <section className="app-view-enter" style={styles.section} id="settings-panel-account" aria-labelledby="settings-tab-account" role="tabpanel">
           <h2 style={styles.panelTitle}>Account</h2>
           <AccountTab />
         </section>
       )}
 
       {activeTab === "users" && isAdmin && (
-        <section className="pwc-view-enter" style={styles.section} id="settings-panel-users" aria-labelledby="settings-tab-users" role="tabpanel">
+        <section className="app-view-enter" style={styles.section} id="settings-panel-users" aria-labelledby="settings-tab-users" role="tabpanel">
           <h2 style={styles.panelTitle}>Users</h2>
           <UsersTab currentEmail={currentEmail} />
         </section>
@@ -179,11 +179,11 @@ const styles = {
     ...ui.pageStandard,
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xl,
+    gap: ds.space.xl,
   } as React.CSSProperties,
   layout: { display: "grid", gridTemplateColumns: "190px minmax(0, 1fr)", gap: 32, alignItems: "start" } as React.CSSProperties,
   rail: { display: "flex", flexDirection: "column" as const, gap: 4, minWidth: 0 } as React.CSSProperties,
-  panelTitle: { ...ui.sectionTitle, marginBottom: pwc.space.lg } as React.CSSProperties,
+  panelTitle: { ...ui.sectionTitle, marginBottom: ds.space.lg } as React.CSSProperties,
   tabBar: {
     display: "flex",
     flexDirection: "column" as const,

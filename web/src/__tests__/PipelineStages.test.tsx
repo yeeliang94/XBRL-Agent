@@ -108,7 +108,7 @@ describe("PipelineStages", () => {
     expect(screen.getByText("Confirm setup")).toHaveAttribute("aria-current", "step");
   });
 
-  test("applies PwC theme colors (orange500 active, success completed, grey300 pending)", () => {
+  test("applies theme colors (orange500 active, success completed, grey300 pending)", () => {
     const { container } = render(
       <PipelineStages currentPhase="viewing_pdf" isRunning={true} isComplete={false} />,
     );

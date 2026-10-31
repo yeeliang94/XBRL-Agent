@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from "react";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 
 // Shared empty state (design-system Content & states): a clear title, an
@@ -17,21 +17,21 @@ interface EmptyStateProps {
 
 export function EmptyState({ title, explanation, action, style }: EmptyStateProps) {
   return (
-    <div className="pwc-empty-state" style={{ ...ui.emptyState, ...style }}>
+    <div className="app-empty-state" style={{ ...ui.emptyState, ...style }}>
       <div
         style={{
-          fontFamily: pwc.fontHeading,
+          fontFamily: ds.fontHeading,
           fontSize: 14,
-          fontWeight: pwc.weight.semibold,
-          color: pwc.grey900,
+          fontWeight: ds.weight.semibold,
+          color: ds.grey900,
         }}
       >
         {title}
       </div>
       {explanation && (
-        <p style={{ ...ui.supportingText, margin: `${pwc.space.sm}px 0 0` }}>{explanation}</p>
+        <p style={{ ...ui.supportingText, margin: `${ds.space.sm}px 0 0` }}>{explanation}</p>
       )}
-      {action && <div style={{ marginTop: pwc.space.lg }}>{action}</div>}
+      {action && <div style={{ marginTop: ds.space.lg }}>{action}</div>}
     </div>
   );
 }

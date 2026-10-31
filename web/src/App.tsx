@@ -1,7 +1,7 @@
 import { useReducer, useCallback, useState, useRef, useEffect } from "react";
 import type { RunConfigPayload, NotesTemplateType, RunSummaryJson } from "./lib/types";
 import { NOTES_TEMPLATE_TYPES, STATEMENT_TYPES, isReportType } from "./lib/types";
-import { pwc, tokens } from "./lib/theme";
+import { ds, tokens } from "./lib/theme";
 import { ui, uiClass } from "./lib/uiStyles";
 import { appReducer, bootState, parseRouteFromPath } from "./lib/appReducer";
 import { uploadPdf, abortAll, abortAgent } from "./lib/api";
@@ -42,14 +42,14 @@ const SIDEBAR_DOCUMENT_LIMIT = 3;
 
 const styles = {
   headerTitle: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     // Brand wordmark at semibold — the design system sets titles, headings
     // and the wordmark at 600 (two text weights: regular for body/data,
     // semibold for headings; no Light 300).
-    fontWeight: pwc.weight.semibold,
+    fontWeight: ds.weight.semibold,
     fontSize: 16,
     letterSpacing: "-0.02em",
-    color: pwc.black,
+    color: ds.black,
     margin: 0,
   } as const,
   topbar: {
@@ -62,7 +62,7 @@ const styles = {
   mainFull: {
     maxWidth: "100%",
     margin: "0 auto",
-    padding: `${pwc.space.xxl}px ${tokens.space.pageGutter}px 110px`,
+    padding: `${ds.space.xxl}px ${tokens.space.pageGutter}px 110px`,
     display: "flex",
     flexDirection: "column" as const,
     gap: tokens.space.section,
@@ -73,7 +73,7 @@ const styles = {
   mainHistory: {
     maxWidth: 1500,
     margin: "0 auto",
-    padding: `${pwc.space.xxl}px ${tokens.space.pageGutter}px 110px`,
+    padding: `${ds.space.xxl}px ${tokens.space.pageGutter}px 110px`,
     display: "flex",
     flexDirection: "column" as const,
     gap: tokens.space.section,
@@ -736,7 +736,7 @@ export default function App() {
       <a href="#main-content" className="skip-link">Skip to main content</a>
       <aside className="app-sidebar" aria-label="Workspace navigation" style={{ ...ui.appSidebar, maxHeight: "100dvh" }}>
         <div className="app-rail-brand" style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 8px", minHeight: 28 }}>
-          <svg viewBox="0 0 100 100" fill="none" aria-hidden="true" style={{ width: 28, height: 28, flexShrink: 0, color: pwc.orange500 }}>
+          <svg viewBox="0 0 100 100" fill="none" aria-hidden="true" style={{ width: 28, height: 28, flexShrink: 0, color: ds.orange500 }}>
             <path d="M12 78 L40 22 L52 50 L66 30 L88 78" stroke="currentColor" strokeWidth="11" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
           <span className="app-navigation-label" style={styles.headerTitle}>XBRL Agent</span>
@@ -783,8 +783,8 @@ export default function App() {
             <Icon glyph={sidebarCollapsed ? LeftPanelOpen : LeftPanelClose} size={20} />
             <span className="app-navigation-label">{sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}</span>
           </button>
-          {user && <div className="app-user" style={{ display: "flex", alignItems: "center", gap: 10, borderTop: `1px solid ${pwc.grey200}`, padding: "16px 8px 0", marginTop: 8 }}>
-            <span aria-hidden="true" style={{ display: "grid", placeItems: "center", width: 30, height: 30, flexShrink: 0, borderRadius: "50%", background: pwc.grey100, fontSize: 12 }}>{(user.display_name || user.email).slice(0, 2).toUpperCase()}</span>
+          {user && <div className="app-user" style={{ display: "flex", alignItems: "center", gap: 10, borderTop: `1px solid ${ds.grey200}`, padding: "16px 8px 0", marginTop: 8 }}>
+            <span aria-hidden="true" style={{ display: "grid", placeItems: "center", width: 30, height: 30, flexShrink: 0, borderRadius: "50%", background: ds.grey100, fontSize: 12 }}>{(user.display_name || user.email).slice(0, 2).toUpperCase()}</span>
             <div className="app-navigation-label" style={{ minWidth: 0, flex: 1 }}>
               <div style={{ fontSize: 13, overflowWrap: "anywhere" }}>{user.display_name || user.email}</div>
               <div style={ui.metadata}>{user.is_admin ? "Administrator" : "User"}</div>
@@ -797,7 +797,7 @@ export default function App() {
       <div className="app-workspace" style={{ minWidth: 0 }}>
       {/* Only sub-pages have a top bar, and it holds just the back link; main
           pages start with their title. */}
-      {backLink && <header className="app-topbar" style={{ ...styles.topbar, zIndex: 30, borderBottom: `1px solid ${pwc.grey200}`, height: 64 }}>
+      {backLink && <header className="app-topbar" style={{ ...styles.topbar, zIndex: 30, borderBottom: `1px solid ${ds.grey200}`, height: 64 }}>
         <button type="button" className={uiClass.btnQuiet} style={{ ...ui.buttonQuiet, marginLeft: -10, padding: "0 10px" }} onClick={backLink.onClick}><ArrowBack size={20} />{backLink.label}</button>
       </header>}
       <main id="main-content" tabIndex={-1} className="app-main" style={reviewFocused || state.view === "concepts" ? styles.mainFull : styles.mainHistory}>

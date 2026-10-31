@@ -12,7 +12,7 @@ import { ConceptsPage, formatGroupedInput, rowLacksSource, resolveInitialWorkspa
 import type { ConceptRow } from "../pages/ConceptsPage";
 import type { CrossCheckResult } from "../lib/types";
 import type { HumanFileRecord } from "../lib/humanFile";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 
 // UX-QA #6 review fix: the no-source badge must mirror the PDF pane's
 // evidence→source fallback — a page in EITHER column counts. `evidence ||
@@ -793,15 +793,15 @@ describe("ConceptsPage", () => {
     const comparedGrid = await screen.findByTestId("concept-matrix-grid");
     await waitFor(() => expect(within(comparedGrid).getAllByText("Human CY")).toHaveLength(2));
     for (const header of within(comparedGrid).getAllByText("Human CY")) {
-      expect(header).toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
+      expect(header).toHaveStyle({ borderLeft: `1px solid ${ds.grey200}` });
     }
     for (const header of within(comparedGrid).getAllByText("Human PY")) {
-      expect(header).not.toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
+      expect(header).not.toHaveStyle({ borderLeft: `1px solid ${ds.grey200}` });
     }
     expect(within(comparedGrid).getByTestId("matrix-human-11-B-CY").parentElement)
-      .toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
+      .toHaveStyle({ borderLeft: `1px solid ${ds.grey200}` });
     expect(within(comparedGrid).getByTestId("matrix-human-11-B-PY").parentElement)
-      .not.toHaveStyle({ borderLeft: `1px solid ${pwc.grey200}` });
+      .not.toHaveStyle({ borderLeft: `1px solid ${ds.grey200}` });
   });
 
   test("editable matrix cells render an input and PATCH the facts endpoint", async () => {

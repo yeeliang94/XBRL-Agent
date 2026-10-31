@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 
 // ---------------------------------------------------------------------------
@@ -45,17 +45,17 @@ const styles = {
   } as React.CSSProperties,
   heading: {
     ...ui.dialogTitle,
-    marginBottom: pwc.space.md,
+    marginBottom: ds.space.md,
   } as React.CSSProperties,
   body: {
     ...ui.bodyText,
     margin: 0,
-    marginBottom: pwc.space.xl,
+    marginBottom: ds.space.xl,
   } as React.CSSProperties,
   actions: {
     ...ui.dialogActionBar,
     marginTop: 0,
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
 };
 
@@ -129,7 +129,7 @@ export function ConfirmDialog({
   return (
     <div
       style={styles.overlay}
-      className="pwc-dialog-scrim-enter"
+      className="app-dialog-scrim-enter"
       onClick={(e) => {
         // Click-outside cancels, but never while the action is running.
         if (e.target === e.currentTarget && !busy) onCancel();
@@ -140,7 +140,7 @@ export function ConfirmDialog({
       aria-describedby="confirm-dialog-message"
       onKeyDown={onKeyDown}
     >
-      <div style={styles.modal} className="pwc-dialog-enter">
+      <div style={styles.modal} className="app-dialog-enter">
         <h2 style={styles.heading}>{title}</h2>
         <p id="confirm-dialog-message" style={styles.body}>{message}</p>
         <div style={styles.actions}>

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { ApiError, userMessage } from "../lib/errors";
-import { pwc, tokens } from "../lib/theme";
+import { ds, tokens } from "../lib/theme";
 import { ExpandMore, LeftPanelClose } from "../components/iconGlyphs";
 import { ui, uiClass } from "../lib/uiStyles";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
@@ -1253,7 +1253,7 @@ export function ConceptsPage({
           </section>
         )}
 
-        {!notesActive && activeTemplate?.includes("socf") && <details style={{ margin: "8px 0", fontSize: 13, color: pwc.grey700 }}>
+        {!notesActive && activeTemplate?.includes("socf") && <details style={{ margin: "8px 0", fontSize: 13, color: ds.grey700 }}>
           <summary>Cash-flow calculation notes</summary>
           <p>Template subtotals can differ from the source presentation when a payment is adjusted before a subtotal and deducted later.
             Check the payment’s source evidence and final cash totals before accepting the difference.</p>
@@ -1321,7 +1321,7 @@ export function ConceptsPage({
         )}
 
         {activeNotCompared && (
-          <p style={{ ...ui.metadata, margin: `0 0 ${pwc.space.md}px` }} data-testid="human-not-compared">
+          <p style={{ ...ui.metadata, margin: `0 0 ${ds.space.md}px` }} data-testid="human-not-compared">
             {activeNotCompared.reason === "different_variant"
               ? `Not compared · human file uses another layout${activeNotCompared.human_variant ? ` (${activeNotCompared.human_variant})` : ""}`
               : "Not compared · empty in the human file"}
@@ -1626,7 +1626,7 @@ function ConceptTree({
         role="row"
         className="concept-tree-header"
         data-human={human ? "true" : undefined}
-        style={{ ...styles.treeHeaderRow, gridTemplateColumns: treeColumns(showPeriods, human != null), ...(human ? { gap: pwc.space.lg } : null) }}
+        style={{ ...styles.treeHeaderRow, gridTemplateColumns: treeColumns(showPeriods, human != null), ...(human ? { gap: ds.space.lg } : null) }}
       >
         {/* "Line item" (accountant vocabulary), not the internal "Concept"
             codename — plain-language rule (CLAUDE.md "talk like a product
@@ -1813,10 +1813,10 @@ function ConceptMatrixGrid({
         style={{
           display: "grid",
           gridTemplateColumns: gridCols,
-          background: pwc.grey100,
+          background: ds.grey100,
           fontWeight: 400,
           fontSize: 14,
-          borderBottom: `1px solid ${pwc.grey200}`,
+          borderBottom: `1px solid ${ds.grey200}`,
         }}
       >
         <div
@@ -1869,12 +1869,12 @@ function ConceptMatrixGrid({
               key={rn}
               role="row"
               style={{
-                padding: `${pwc.space.xs}px ${pwc.space.md}px`,
-                background: pwc.grey50,
-                fontFamily: pwc.fontBody,
+                padding: `${ds.space.xs}px ${ds.space.md}px`,
+                background: ds.grey50,
+                fontFamily: ds.fontBody,
                 fontSize: 14,
                 fontWeight: 500,
-                borderBottom: `1px solid ${pwc.grey100}`,
+                borderBottom: `1px solid ${ds.grey100}`,
               }}
             >
               {g.label}
@@ -1889,8 +1889,8 @@ function ConceptMatrixGrid({
             style={{
               display: "grid",
               gridTemplateColumns: gridCols,
-              borderBottom: `1px solid ${pwc.grey100}`,
-              fontFamily: pwc.fontBody,
+              borderBottom: `1px solid ${ds.grey100}`,
+              fontFamily: ds.fontBody,
               fontSize: 14,
               alignItems: "center",
             }}
@@ -1903,7 +1903,7 @@ function ConceptMatrixGrid({
               if (isHuman && human) {
                 return (
                   <div key={`${col}-${period}-human`} style={{
-                    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+                    padding: `${ds.space.xs}px ${ds.space.sm}px`,
                     minWidth: 0,
                     // One divider before each component's human columns.
                     ...(period === visiblePeriods[0] ? styles.matrixHumanDivider : null),
@@ -1930,10 +1930,10 @@ function ConceptMatrixGrid({
                   data-comparison-highlight={human && cell && isComparisonHighlighted(human.slots.get(humanSlotKey(cell.uuid, period, activeScope)), human.highlights) || undefined}
                   onClick={() => cell && onSelectRow(cell.uuid)}
                   style={{
-                    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+                    padding: `${ds.space.xs}px ${ds.space.sm}px`,
                     textAlign: "right",
                     minWidth: 0,
-                    background: selected ? pwc.grey50 : "transparent",
+                    background: selected ? ds.grey50 : "transparent",
                     ...(human && cell ? comparisonCellStyle(human.slots.get(humanSlotKey(cell.uuid, period, activeScope)), human.highlights) : null),
                     cursor: cell ? "pointer" : "default",
                   }}
@@ -2050,26 +2050,26 @@ function ConceptRowView({
         gridTemplateColumns: isAbstract
           ? "minmax(0, 1fr)"
           : treeColumns(showPeriods, human != null),
-        gap: pwc.space.lg,
+        gap: ds.space.lg,
         minWidth: 0,
         // Section headers are visually distinct from data rows: tighter,
         // smaller, semibold caption on a grey band — so a run of same-named
         // taxonomy headers ("Statement of cash flows" nested three deep)
         // reads as structure, not as three broken data rows (run-168
         // design critique).
-        padding: `${pwc.space.xs}px ${pwc.space.xl}px`,
+        padding: `${ds.space.xs}px ${ds.space.xl}px`,
         background: isAbstract
-          ? pwc.grey100
+          ? ds.grey100
           : selected
-          ? pwc.grey50
-          : pwc.white,
-        borderBottom: `1px solid ${pwc.grey100}`,
-        fontFamily: pwc.fontBody,
+          ? ds.grey50
+          : ds.white,
+        borderBottom: `1px solid ${ds.grey100}`,
+        fontFamily: ds.fontBody,
         fontSize: 14,
-        fontWeight: isAbstract ? pwc.weight.semibold : pwc.weight.regular,
+        fontWeight: isAbstract ? ds.weight.semibold : ds.weight.regular,
         letterSpacing: isAbstract ? 0.4 : undefined,
         textTransform: isAbstract ? ("uppercase" as const) : undefined,
-        color: isAbstract ? pwc.grey700 : pwc.grey900,
+        color: isAbstract ? ds.grey700 : ds.grey900,
         cursor: isAbstract ? "default" : "pointer",
         alignItems: "center",
       }}
@@ -2095,7 +2095,7 @@ function ConceptRowView({
           data-testid={`label-${row.concept_uuid}`}
           style={
             isAlias
-              ? { fontStyle: "italic", color: pwc.grey700 }
+              ? { fontStyle: "italic", color: ds.grey700 }
               : undefined
           }
         >
@@ -2104,11 +2104,11 @@ function ConceptRowView({
             <span
               data-testid={`alias-marker-${row.concept_uuid}`}
               style={{
-                marginLeft: pwc.space.sm,
+                marginLeft: ds.space.sm,
                 fontSize: 14,
                 fontStyle: "italic",
-                color: pwc.grey700,
-                fontWeight: pwc.weight.regular,
+                color: ds.grey700,
+                fontWeight: ds.weight.regular,
               }}
             >
               (linked)
@@ -2118,7 +2118,7 @@ function ConceptRowView({
             <button
               type="button"
               className="concept-source-jump"
-              style={{ ...styles.sourceJump, marginLeft: pwc.space.sm }}
+              style={{ ...styles.sourceJump, marginLeft: ds.space.sm }}
               aria-label={`Open source for ${label}`}
               onClick={(event) => {
                 event.stopPropagation();
@@ -2260,7 +2260,7 @@ function ReadOnlyValue({
     <span
       data-testid={testId}
       title={value == null ? "Empty read-only value" : "Read-only value"}
-      style={{ ...styles.readonlyValue, color: value == null ? pwc.grey500 : pwc.grey900, fontSize: value == null ? 12 : 14 }}
+      style={{ ...styles.readonlyValue, color: value == null ? ds.grey500 : ds.grey900, fontSize: value == null ? 12 : 14 }}
     >
       {value == null ? <>
         <span aria-hidden="true">—</span>
@@ -2336,10 +2336,10 @@ function SegmentedControl<T extends string>({
             onClick={() => onChange(value)}
             style={{
               ...styles.segmentedButton,
-              borderRight: index < values.length - 1 ? `1px solid ${pwc.grey200}` : "none",
-              fontWeight: pwc.weight.medium,
-              background: active ? pwc.grey100 : pwc.white,
-              color: active ? pwc.black : pwc.grey700,
+              borderRight: index < values.length - 1 ? `1px solid ${ds.grey200}` : "none",
+              fontWeight: ds.weight.medium,
+              background: active ? ds.grey100 : ds.white,
+              color: active ? ds.black : ds.grey700,
             }}
           >
             {value}
@@ -2554,7 +2554,7 @@ function EditableValueCell({
         display: "inline-flex",
         alignItems: compact ? "flex-end" : "center",
         flexDirection: compact ? "column" : "row",
-        gap: compact ? 2 : pwc.space.sm,
+        gap: compact ? 2 : ds.space.sm,
         width: "100%",
         maxWidth: "100%",
       }}
@@ -2565,7 +2565,7 @@ function EditableValueCell({
           role={status === "error" ? "alert" : "status"}
           style={{
             fontSize: 12,
-            color: status === "error" ? pwc.error : pwc.grey700,
+            color: status === "error" ? ds.error : ds.grey700,
           }}
         >
           {badge}
@@ -2596,19 +2596,19 @@ function EditableValueCell({
           minWidth: 0,
           textAlign: "right",
           height: 32,
-          padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+          padding: `${ds.space.xs}px ${ds.space.sm}px`,
           border: `1px solid ${
             status === "error"
-              ? pwc.error
+              ? ds.error
               : highlightEmpty
-              ? pwc.orange400
-              : pwc.grey300
+              ? ds.orange400
+              : ds.grey300
           }`,
-          borderRadius: pwc.radius.md,
-          fontFamily: pwc.fontBody,
+          borderRadius: ds.radius.md,
+          fontFamily: ds.fontBody,
           fontVariantNumeric: "tabular-nums",
           fontSize: 14,
-          background: highlightEmpty ? pwc.orange50 : pwc.white,
+          background: highlightEmpty ? ds.orange50 : ds.white,
           ...comparisonStyle,
         }}
       />
@@ -2619,7 +2619,7 @@ function EditableValueCell({
           style={{
             fontSize: 12,
             lineHeight: 1,
-            color: status === "error" ? pwc.error : pwc.grey500,
+            color: status === "error" ? ds.error : ds.grey500,
           }}
         >
           {badge}
@@ -2636,7 +2636,7 @@ const styles = {
   workspace: {
     minWidth: 0,
     width: "100%",
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
   } as React.CSSProperties,
   // Review workspace shell. No flex-wrap: columns keep their row so the
   // resize handles stay between them; the Results column flexes to fill.
@@ -2646,12 +2646,12 @@ const styles = {
     width: "100%",
     alignItems: "flex-start",
     gap: 0,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
   } as React.CSSProperties,
   column: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
     minWidth: 0,
     position: "sticky" as const,
     top: 116,
@@ -2664,10 +2664,10 @@ const styles = {
   templateRail: {
     flex: "0 0 240px",
     minWidth: 0,
-    paddingRight: pwc.space.md,
+    paddingRight: ds.space.md,
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
     position: "sticky" as const,
     top: 116,
     alignSelf: "flex-start",
@@ -2679,13 +2679,13 @@ const styles = {
     minWidth: 0,
     display: "flex",
     flexDirection: "column" as const,
-    paddingRight: pwc.space.lg,
+    paddingRight: ds.space.lg,
   } as React.CSSProperties,
   // Same one-pixel Grey 100 rule as the Source PDF divider, so both edges of
   // the figures table look alike.
   resultsColDivided: {
-    borderLeft: `1px solid ${pwc.grey100}`,
-    paddingLeft: pwc.space.lg,
+    borderLeft: `1px solid ${ds.grey100}`,
+    paddingLeft: ds.space.lg,
   } as React.CSSProperties,
   // Every review column opens with a header band of this height, so the
   // column titles and the Rows filter share one line and the search box,
@@ -2695,7 +2695,7 @@ const styles = {
     minHeight: REVIEW_HEADER_HEIGHT,
   } as React.CSSProperties,
   columnHeaderTitle: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 16,
     fontWeight: 600,
     color: tokens.color.text.primary,
@@ -2703,9 +2703,9 @@ const styles = {
   } as React.CSSProperties,
   columnHideBtn: {
     ...ui.iconButton,
-    gap: pwc.space.xs,
+    gap: ds.space.xs,
     minHeight: 34,
-    padding: `0 ${pwc.space.sm}px`,
+    padding: `0 ${ds.space.sm}px`,
     fontSize: 13,
     fontWeight: 500,
     color: tokens.color.text.secondary,
@@ -2714,17 +2714,17 @@ const styles = {
     flex: "0 0 40px",
     alignSelf: "stretch",
     minHeight: 240,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
+    border: `1px solid ${ds.grey200}`,
+    borderRadius: ds.radius.md,
     cursor: "pointer",
     display: "flex",
     flexDirection: "column" as const,
     alignItems: "center",
     justifyContent: "space-between",
-    gap: pwc.space.md,
-    padding: `${pwc.space.md}px 0`,
+    gap: ds.space.md,
+    padding: `${ds.space.md}px 0`,
     position: "sticky" as const,
-    top: pwc.space.lg,
+    top: ds.space.lg,
   } as React.CSSProperties,
   collapsedRailChevron: {
     fontSize: 14,
@@ -2734,7 +2734,7 @@ const styles = {
   collapsedRailLabel: {
     writingMode: "vertical-rl" as const,
     transform: "rotate(180deg)",
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 12,
     fontWeight: 500,
     letterSpacing: 0,
@@ -2756,14 +2756,14 @@ const styles = {
     justifyContent: "space-between",
     width: "100%",
     border: "none",
-    background: pwc.grey50,
-    borderBottom: `1px solid ${pwc.grey100}`,
+    background: ds.grey50,
+    borderBottom: `1px solid ${ds.grey100}`,
     cursor: "pointer",
-    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
+    padding: `${ds.space.md}px ${ds.space.lg}px`,
     textAlign: "left" as const,
   } as React.CSSProperties,
   panelHeaderTitle: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
     fontWeight: 600,
     color: tokens.color.text.primary,
@@ -2773,24 +2773,24 @@ const styles = {
     color: tokens.color.icon.rest,
   } as React.CSSProperties,
   panelBody: {
-    padding: pwc.space.lg,
+    padding: ds.space.lg,
   } as React.CSSProperties,
   errorBanner: {
-    marginBottom: pwc.space.md,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    background: pwc.orange50,
+    marginBottom: ds.space.md,
+    padding: `${ds.space.sm}px ${ds.space.md}px`,
+    background: ds.orange50,
     border: "none",
-    borderRadius: pwc.radius.sm,
-    color: pwc.grey800,
+    borderRadius: ds.radius.sm,
+    color: ds.grey800,
     fontSize: 13,
     lineHeight: 1.5,
   } as React.CSSProperties,
   toolbar: {
     minHeight: REVIEW_HEADER_HEIGHT,
-    marginBottom: pwc.space.lg,
+    marginBottom: ds.space.lg,
     display: "flex",
     flexWrap: "wrap",
-    gap: pwc.space.md,
+    gap: ds.space.md,
     alignItems: "center",
     position: "sticky" as const,
     top: 0,
@@ -2799,12 +2799,12 @@ const styles = {
   controlGroup: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
   inlineControlGroup: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
   visuallyHidden: {
     position: "absolute",
@@ -2822,15 +2822,15 @@ const styles = {
     minWidth: 0,
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.sm,
-    marginBottom: pwc.space.lg,
+    gap: ds.space.sm,
+    marginBottom: ds.space.lg,
   } as React.CSSProperties,
   worksheetItem: {
     ...ui.buttonQuiet,
     justifyContent: "flex-start",
     textAlign: "left" as const,
     whiteSpace: "normal" as const,
-    fontWeight: pwc.weight.regular,
+    fontWeight: ds.weight.regular,
     color: tokens.color.text.secondary,
   } as React.CSSProperties,
   worksheetItemActive: {
@@ -2838,44 +2838,44 @@ const styles = {
     justifyContent: "flex-start",
     textAlign: "left" as const,
     whiteSpace: "normal" as const,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
     color: tokens.color.text.primary,
     background: tokens.surface.sunken,
   } as React.CSSProperties,
   editedValuesSummary: {
     maxWidth: 280,
-    color: pwc.grey700,
+    color: ds.grey700,
     fontSize: 12,
     lineHeight: 1.35,
   } as React.CSSProperties,
   attentionControl: {
     minWidth: 36,
     minHeight: 36,
-    padding: `0 ${pwc.space.sm}px`,
-    border: `1px solid ${pwc.grey300}`,
-    borderRadius: pwc.radius.sm,
-    background: pwc.white,
-    color: pwc.orange500,
-    fontFamily: pwc.fontBody,
+    padding: `0 ${ds.space.sm}px`,
+    border: `1px solid ${ds.grey300}`,
+    borderRadius: ds.radius.sm,
+    background: ds.white,
+    color: ds.orange500,
+    fontFamily: ds.fontBody,
     fontSize: 12,
     fontWeight: 500,
     cursor: "pointer",
   } as React.CSSProperties,
   attentionPanel: {
     display: "grid",
-    gap: pwc.space.lg,
-    margin: `-${pwc.space.sm}px 0 ${pwc.space.lg}px`,
-    padding: pwc.space.lg,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    background: pwc.white,
+    gap: ds.space.lg,
+    margin: `-${ds.space.sm}px 0 ${ds.space.lg}px`,
+    padding: ds.space.lg,
+    border: `1px solid ${ds.grey200}`,
+    borderRadius: ds.radius.md,
+    background: ds.white,
   } as React.CSSProperties,
   attentionHeading: {
-    margin: `0 0 ${pwc.space.sm}px`,
-    color: pwc.grey900,
-    fontFamily: pwc.fontHeading,
+    margin: `0 0 ${ds.space.sm}px`,
+    color: ds.grey900,
+    fontFamily: ds.fontHeading,
     fontSize: 13,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: ds.weight.semibold,
   } as React.CSSProperties,
   attentionList: {
     listStyle: "none",
@@ -2883,17 +2883,17 @@ const styles = {
     padding: 0,
   } as React.CSSProperties,
   unmatchedList: {
-    marginTop: pwc.space.lg,
+    marginTop: ds.space.lg,
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xs,
+    gap: ds.space.xs,
   } as React.CSSProperties,
   unmatchedItem: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr) auto",
-    gap: pwc.space.md,
-    padding: `${pwc.space.xs}px 0`,
-    borderBottom: `1px solid ${pwc.grey100}`,
+    gap: ds.space.md,
+    padding: `${ds.space.xs}px 0`,
+    borderBottom: `1px solid ${ds.grey100}`,
     fontSize: 13,
   } as React.CSSProperties,
   // Human values are read-only: same footprint as a calculated value so the
@@ -2902,21 +2902,21 @@ const styles = {
     display: "flex",
     alignItems: "center",
     justifyContent: "flex-end",
-    gap: pwc.space.xs,
+    gap: ds.space.xs,
     width: "100%",
     boxSizing: "border-box" as const,
     minWidth: 0,
     minHeight: 32,
     // Read-only text, not a field: no border, so it never looks editable.
     // The right padding matches the AI input's text inset so digits align.
-    padding: `${pwc.space.xs}px 9px ${pwc.space.xs}px ${pwc.space.xs}px`,
-    fontFamily: pwc.fontBody,
+    padding: `${ds.space.xs}px 9px ${ds.space.xs}px ${ds.space.xs}px`,
+    fontFamily: ds.fontBody,
     fontSize: 14,
     fontVariantNumeric: "tabular-nums",
-    color: pwc.grey900,
+    color: ds.grey900,
   } as React.CSSProperties,
   humanQuiet: {
-    color: pwc.grey500,
+    color: ds.grey500,
   } as React.CSSProperties,
   humanEmpty: {
     display: "inline-block",
@@ -2925,18 +2925,18 @@ const styles = {
   } as React.CSSProperties,
   unmatchedSummary: {
     cursor: "pointer",
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey700,
+    fontWeight: ds.weight.medium,
+    color: ds.grey700,
   } as React.CSSProperties,
   attentionItem: {
     width: "100%",
-    padding: `${pwc.space.sm}px 0`,
+    padding: `${ds.space.sm}px 0`,
     border: "none",
     background: "transparent",
-    color: pwc.grey900,
-    fontFamily: pwc.fontBody,
+    color: ds.grey900,
+    fontFamily: ds.fontBody,
     fontSize: 13,
     textAlign: "left" as const,
     cursor: "pointer",
@@ -2944,10 +2944,10 @@ const styles = {
   // Same geometry as the filing-setup toggles (PreRunPanel).
   segmented: {
     display: "inline-flex",
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
+    border: `1px solid ${ds.grey200}`,
+    borderRadius: ds.radius.md,
     overflow: "hidden",
-    background: pwc.white,
+    background: ds.white,
   } as React.CSSProperties,
   segmentedButton: {
     minHeight: 40,
@@ -2955,35 +2955,35 @@ const styles = {
     border: "none",
     borderRadius: 0,
     cursor: "pointer",
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
   } as React.CSSProperties,
   panelMuted: {
     margin: 0,
-    color: pwc.grey700,
+    color: ds.grey700,
     fontSize: 14,
     lineHeight: 1.5,
   } as React.CSSProperties,
   evidenceStack: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.md,
+    gap: ds.space.md,
   } as React.CSSProperties,
   evidenceGrid: {
     display: "grid",
     gridTemplateColumns: "1fr",
-    gap: pwc.space.md,
+    gap: ds.space.md,
   } as React.CSSProperties,
   evidenceLabel: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 12,
     fontWeight: 500,
-    color: pwc.grey500,
+    color: ds.grey500,
     marginBottom: 2,
   } as React.CSSProperties,
   evidenceText: {
     fontSize: 14,
-    color: pwc.grey900,
+    color: ds.grey900,
     lineHeight: 1.45,
     overflowWrap: "anywhere" as const,
   } as React.CSSProperties,
@@ -2995,27 +2995,27 @@ const styles = {
   treeHeaderRow: {
     display: "grid",
     gridTemplateColumns: "minmax(130px, 1fr) minmax(100px, 150px)",
-    gap: pwc.space.md,
+    gap: ds.space.md,
     minWidth: 0,
-    padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
-    background: pwc.grey50,
-    color: pwc.grey700,
-    borderBottom: `1px solid ${pwc.grey200}`,
+    padding: `${ds.space.lg}px ${ds.space.xl}px`,
+    background: ds.grey50,
+    color: ds.grey700,
+    borderBottom: `1px solid ${ds.grey200}`,
     position: "sticky" as const,
     top: 0,
     zIndex: 4,
   } as React.CSSProperties,
   headerCell: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
   } as React.CSSProperties,
   // Numeric columns (CY / PY / Value) right-align, header included, so
   // magnitudes line up the way accountants read them.
   headerCellNumeric: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
     textAlign: "right" as const,
   } as React.CSSProperties,
   valueCell: {
@@ -3024,7 +3024,7 @@ const styles = {
     justifyContent: "flex-end",
     alignItems: "center",
     minWidth: 0,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontVariantNumeric: "tabular-nums",
   } as React.CSSProperties,
   // Align calculated and linked values with inputs, without a field boundary.
@@ -3035,14 +3035,14 @@ const styles = {
     width: "100%",
     boxSizing: "border-box",
     minHeight: 32,
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+    padding: `${ds.space.xs}px ${ds.space.sm}px`,
     border: "none",
     background: "transparent",
     cursor: "default",
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontVariantNumeric: "tabular-nums",
     fontSize: 14,
-    color: pwc.grey900,
+    color: ds.grey900,
   } as React.CSSProperties,
   stateCell: {
     display: "flex",
@@ -3053,20 +3053,20 @@ const styles = {
   // names the reason the input is highlighted orange.
   requiredChip: {
     fontSize: 14,
-    color: pwc.warningText,
-    fontWeight: pwc.weight.medium,
+    color: ds.warningText,
+    fontWeight: ds.weight.medium,
   } as React.CSSProperties,
   // No-source badge + its filter toggle (UX-QA #6).
   noSourceChip: {
     fontSize: 14,
-    color: pwc.warningText,
-    fontWeight: pwc.weight.medium,
+    color: ds.warningText,
+    fontWeight: ds.weight.medium,
   } as React.CSSProperties,
   sourceJump: {
     padding: 0,
     border: 0,
     background: "transparent",
-    color: pwc.grey500,
+    color: ds.grey500,
     font: "inherit",
     fontSize: 14,
     textDecoration: "none",
@@ -3078,23 +3078,23 @@ const styles = {
     overflowX: "auto",
   } as React.CSSProperties,
   matrixHeaderMovement: {
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    padding: `${ds.space.sm}px ${ds.space.md}px`,
     display: "flex",
     alignItems: "center",
     position: "sticky" as const,
     left: 0,
     zIndex: 3,
-    background: pwc.grey100,
-    borderRight: `1px solid ${pwc.grey200}`,
+    background: ds.grey100,
+    borderRight: `1px solid ${ds.grey200}`,
   } as React.CSSProperties,
   matrixComponentHeader: {
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    padding: `${ds.space.sm}px ${ds.space.md}px`,
     textAlign: "center" as const,
     lineHeight: 1.25,
     whiteSpace: "normal" as const,
     overflowWrap: "anywhere" as const,
-    borderLeft: `1px solid ${pwc.grey200}`,
-    borderBottom: `1px solid ${pwc.grey200}`,
+    borderLeft: `1px solid ${ds.grey200}`,
+    borderBottom: `1px solid ${ds.grey200}`,
     minHeight: 42,
     display: "flex",
     alignItems: "center",
@@ -3105,24 +3105,24 @@ const styles = {
     display: "flex",
     alignItems: "center",
     justifyContent: "flex-end",
-    borderLeft: `1px solid ${pwc.grey200}`,
+    borderLeft: `1px solid ${ds.grey200}`,
   } as React.CSSProperties,
   matrixPeriodHeader: {
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+    padding: `${ds.space.xs}px ${ds.space.sm}px`,
     textAlign: "right" as const,
-    color: pwc.grey500,
-    fontFamily: pwc.fontHeading,
+    color: ds.grey500,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
     fontWeight: 400,
-    borderLeft: `1px solid ${pwc.grey200}`,
+    borderLeft: `1px solid ${ds.grey200}`,
   } as React.CSSProperties,
   matrixMovementCell: {
-    padding: `${pwc.space.xs}px ${pwc.space.md}px`,
+    padding: `${ds.space.xs}px ${ds.space.md}px`,
     position: "sticky" as const,
     left: 0,
     zIndex: 2,
-    background: pwc.white,
-    borderRight: `1px solid ${pwc.grey100}`,
+    background: ds.white,
+    borderRight: `1px solid ${ds.grey100}`,
     lineHeight: 1.35,
   } as React.CSSProperties,
 };

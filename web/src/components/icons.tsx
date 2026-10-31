@@ -52,7 +52,7 @@ export function DisclosureChevron({ open }: { open: boolean }) {
   return (
     <span
       aria-hidden="true"
-      className={`pwc-disclosure-chevron${open ? " is-open" : ""}`}
+      className={`app-disclosure-chevron${open ? " is-open" : ""}`}
       style={{ display: "inline-flex", flexShrink: 0, color: tokens.color.icon.rest }}
     >
       <ChevronRight size={20} />

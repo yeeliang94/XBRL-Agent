@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { CSSProperties, FormEvent } from "react";
-import { pwc, tokens } from "../lib/theme";
+import { ds, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { loginPassword } from "../lib/api";
 import { ErrorCircle } from "../components/iconGlyphs";
@@ -12,38 +12,38 @@ import { ErrorCircle } from "../components/iconGlyphs";
 const styles = {
   page: {
     minHeight: "100vh",
-    background: pwc.grey50,
+    background: ds.grey50,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    padding: pwc.space.xl,
+    padding: ds.space.xl,
   } as CSSProperties,
   card: {
     ...ui.card,
     width: "100%",
     maxWidth: tokens.layout.auth,
-    padding: pwc.space.xxl,
+    padding: ds.space.xxl,
     display: "flex",
     flexDirection: "column",
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
   } as CSSProperties,
   title: {
-    fontFamily: pwc.fontHeading,
-    fontWeight: pwc.weight.semibold,
+    fontFamily: ds.fontHeading,
+    fontWeight: ds.weight.semibold,
     fontSize: 28,
-    color: pwc.grey900,
+    color: ds.grey900,
     margin: 0,
   } as CSSProperties,
   subtitle: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey700,
+    color: ds.grey700,
     margin: 0,
   } as CSSProperties,
   field: {
     display: "flex",
     flexDirection: "column",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as CSSProperties,
   error: {
     ...ui.alertError,
@@ -98,7 +98,7 @@ export function LoginPage({ onAuthenticated }: LoginPageProps) {
 
         {error && (
           <div style={styles.error} role="alert">
-            <span aria-hidden="true" style={ui.alertIcon(pwc.error)}><ErrorCircle size={20} /></span>
+            <span aria-hidden="true" style={ui.alertIcon(ds.error)}><ErrorCircle size={20} /></span>
             <span>{error}</span>
           </div>
         )}

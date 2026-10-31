@@ -1,4 +1,4 @@
-import { pwc, tokens } from "../lib/theme";
+import { ds, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { runStatusDisplay } from "../lib/runStatus";
 import { denominationLabel } from "../lib/vocabulary";
@@ -99,7 +99,7 @@ export function HistoryList({
   }
 
   return (
-    <div className="runs-table-wrap pwc-view-enter" style={styles.container}>
+    <div className="runs-table-wrap app-view-enter" style={styles.container}>
       <table style={styles.table}>
         {/* Fixed column widths — without these the browser picks column
             widths from content, so a long filename could squash the
@@ -274,7 +274,7 @@ const styles = {
     // auto-sizes columns from content and the truncation never kicks in.
     tableLayout: "fixed" as const,
     fontSize: 14,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
   } as React.CSSProperties,
   // Standard density (≈40px rows) via the shared table roles.
   th: {
@@ -282,14 +282,14 @@ const styles = {
   } as React.CSSProperties,
   td: {
     ...ui.td,
-    borderBottom: `1px solid ${pwc.grey100}`,
+    borderBottom: `1px solid ${ds.grey100}`,
     verticalAlign: "middle" as const,
     overflow: "hidden",
   } as React.CSSProperties,
   // Filename cell keeps identical padding when a row becomes active.
   tdFilename: {
     ...ui.td,
-    borderBottom: `1px solid ${pwc.grey100}`,
+    borderBottom: `1px solid ${ds.grey100}`,
     verticalAlign: "middle" as const,
     overflow: "hidden",
   } as React.CSSProperties,
@@ -297,19 +297,19 @@ const styles = {
   // Selection uses a filled tint without an accent rail.
   rowSelected: {
     ...rowBase,
-    background: pwc.orange100,
+    background: ds.orange100,
   } as React.CSSProperties,
   // Filename + optional denomination tag share one truncating flex line.
   filenameRow: {
     display: "flex",
     alignItems: "baseline",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     minWidth: 0,
   } as React.CSSProperties,
   filename: {
-    fontFamily: pwc.fontBody,
-    fontWeight: pwc.weight.regular,
-    color: pwc.grey900,
+    fontFamily: ds.fontBody,
+    fontWeight: ds.weight.regular,
+    color: ds.grey900,
     // Rendered as an <a> for middle-click / open-in-new-tab support, but it
     // should read as a filename, not a blue underlined link.
     textDecoration: "none",
@@ -325,21 +325,21 @@ const styles = {
     textOverflow: "ellipsis",
   } as React.CSSProperties,
   dim: {
-    color: pwc.grey700,
+    color: ds.grey700,
     fontSize: 13,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   inlineMeta: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 12,
-    color: pwc.grey700,
+    color: ds.grey700,
     flexShrink: 0,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   actionLink: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
     color: tokens.color.action.primary,
     textDecoration: "none",
     whiteSpace: "nowrap" as const,
@@ -347,27 +347,27 @@ const styles = {
     display: "inline-block",
   } as React.CSSProperties,
   placeholder: {
-    padding: pwc.space.xl,
+    padding: ds.space.xl,
     textAlign: "center" as const,
-    color: pwc.grey700,
-    fontFamily: pwc.fontBody,
+    color: ds.grey700,
+    fontFamily: ds.fontBody,
     fontSize: 14,
     margin: 0,
   } as React.CSSProperties,
   skeletonRow: {
     display: "flex",
-    gap: pwc.space.xl,
+    gap: ds.space.xl,
     alignItems: "center",
-    padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
-    borderBottom: `1px solid ${pwc.grey100}`,
+    padding: `${ds.space.lg}px ${ds.space.xl}px`,
+    borderBottom: `1px solid ${ds.grey100}`,
   } as React.CSSProperties,
   errorBanner: {
-    padding: pwc.space.lg,
-    background: pwc.orange50,
-    color: pwc.grey800,
-    fontFamily: pwc.fontBody,
+    padding: ds.space.lg,
+    background: ds.orange50,
+    color: ds.grey800,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    borderBottom: `1px solid ${pwc.grey200}`,
+    borderBottom: `1px solid ${ds.grey200}`,
     borderLeft: "none",
   } as React.CSSProperties,
 } as const;

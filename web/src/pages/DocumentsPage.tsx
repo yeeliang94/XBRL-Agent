@@ -3,7 +3,7 @@ import { deleteRun, fetchHomeStats, fetchRuns } from "../lib/api";
 import type { HomeStats } from "../lib/api";
 import type { RunSummaryJson } from "../lib/types";
 import { userMessage } from "../lib/errors";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { PageHeader } from "../components/PageHeader";
 import { HistoryPage } from "./HistoryPage";
@@ -146,7 +146,7 @@ export function DocumentsPage({ documents, section, onSection, onAdd, onOpen }: 
           onSection(next === 0 ? "progress" : "history");
           tabRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
         }}>
-        {key === "progress" ? <>In progress <span style={{ minWidth: 20, color: pwc.grey700, fontVariantNumeric: "tabular-nums" }}>{documents.loading ? "—" : documents.total}</span></> : "History"}
+        {key === "progress" ? <>In progress <span style={{ minWidth: 20, color: ds.grey700, fontVariantNumeric: "tabular-nums" }}>{documents.loading ? "—" : documents.total}</span></> : "History"}
       </button>)}
     </div>
     <section role="tabpanel" id={`documents-${section}-panel`} aria-labelledby={`documents-${section}`}>
@@ -193,6 +193,6 @@ export function DocumentsPage({ documents, section, onSection, onAdd, onOpen }: 
   </div>;
 }
 // One grid for in-progress rows and recent results so their columns line up.
-const rowStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "minmax(0, 1.5fr) minmax(0, 1fr) 160px", gap: 24, alignItems: "center", minHeight: 48, padding: "4px 0", borderBottom: `1px solid ${pwc.grey100}`, fontFamily: pwc.fontBody, fontSize: 14 };
-const headerRowStyle: React.CSSProperties = { ...rowStyle, minHeight: 0, padding: "0 0 8px", borderBottom: `1px solid ${pwc.grey200}`, color: pwc.grey700, fontSize: 12 };
-const nameButtonStyle: React.CSSProperties = { ...ui.buttonQuiet, padding: 0, minHeight: 0, maxWidth: "100%", display: "block", textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: pwc.weight.regular };
+const rowStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "minmax(0, 1.5fr) minmax(0, 1fr) 160px", gap: 24, alignItems: "center", minHeight: 48, padding: "4px 0", borderBottom: `1px solid ${ds.grey100}`, fontFamily: ds.fontBody, fontSize: 14 };
+const headerRowStyle: React.CSSProperties = { ...rowStyle, minHeight: 0, padding: "0 0 8px", borderBottom: `1px solid ${ds.grey200}`, color: ds.grey700, fontSize: 12 };
+const nameButtonStyle: React.CSSProperties = { ...ui.buttonQuiet, padding: 0, minHeight: 0, maxWidth: "100%", display: "block", textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: ds.weight.regular };

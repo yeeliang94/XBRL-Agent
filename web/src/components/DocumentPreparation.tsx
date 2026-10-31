@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "../lib/api";
 import type { PreparationSnapshot } from "../lib/types";
 import { ApiError, userMessage } from "../lib/errors";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { activityWorkspaceStyle, ui } from "../lib/uiStyles";
 import { formatElapsedMs } from "../lib/time";
 import { ElapsedTimer } from "./ElapsedTimer";
@@ -153,10 +153,10 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
   const stepList = (
     <ol aria-label="Document preparation steps" style={{ listStyle: "none", margin: 0, padding: 0 }}>
       {steps.map((step) => (
-        <li key={step.label} style={{ display: "grid", gridTemplateColumns: "16px minmax(0, 1fr)", gap: pwc.space.md, alignItems: "center", minHeight: 48, padding: `${pwc.space.sm}px 0`, borderTop: `1px solid ${pwc.grey100}` }}>
+        <li key={step.label} style={{ display: "grid", gridTemplateColumns: "16px minmax(0, 1fr)", gap: ds.space.md, alignItems: "center", minHeight: 48, padding: `${ds.space.sm}px 0`, borderTop: `1px solid ${ds.grey100}` }}>
           <StatusIcon symbol={stateSymbols[step.state]} />
           <span style={{ minWidth: 0 }}>
-            <span style={{ ...ui.bodyText, display: "block", fontWeight: step.state === "Working" ? pwc.weight.medium : pwc.weight.regular }}>{step.label}</span>
+            <span style={{ ...ui.bodyText, display: "block", fontWeight: step.state === "Working" ? ds.weight.medium : ds.weight.regular }}>{step.label}</span>
           </span>
           <span style={visuallyHidden}>
             {step.state}
@@ -178,8 +178,8 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
   const newestActivity = [...activity].reverse();
   // Same rhythm as Filing setup: a 40px header row, 8 to its content, 16
   // between blocks; the page puts 32 before the next section.
-  return <section aria-label="Document preparation" style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
-    <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.lg }}>
+  return <section aria-label="Document preparation" style={{ display: "flex", flexDirection: "column", gap: ds.space.sm }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: ds.space.lg }}>
     {!missingDocument && <div>
       <PipelineStages
         currentPhase={null}
@@ -195,15 +195,15 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
       <p role="status" aria-live="polite" style={(succeeded || active) && !connectionError ? visuallyHidden : { margin: 0 }}>{statusText}</p>
     )}
     {actionRequired === "retry" ? (
-      <p style={{ margin: 0, color: pwc.grey700 }}>
+      <p style={{ margin: 0, color: ds.grey700 }}>
         {repeatedFailure
             ? "The same step failed after retry. Upload a revised source document to continue."
             : "Retry resumes saved progress."}
       </p>
     ) : null}
     <div className="preparation-workspace" style={{ ...activityWorkspaceStyle, gridTemplateColumns: "minmax(0, 1.55fr) minmax(0, 1fr)" }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.lg }}>
-        <div style={{ display: "flex", alignItems: "center", gap: pwc.space.md, flexWrap: "wrap", minHeight: 40 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: ds.space.lg }}>
+        <div style={{ display: "flex", alignItems: "center", gap: ds.space.md, flexWrap: "wrap", minHeight: 40 }}>
           <h2 style={{ ...ui.sectionTitle, margin: 0 }}>Document preparation</h2>
           <span data-testid="preparation-status" style={ui.metadata}>{snapshot ? labels[snapshot.status] : missingDocument ? "Unavailable" : "Connecting"}</span>
           {snapshot?.started_at != null && <span style={ui.metadata}>{active
@@ -217,7 +217,7 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
         </div>
         {!missingDocument && <>
         {progressSummary && <p style={{ ...ui.bodyText, margin: 0 }}>{progressSummary}</p>}
-        {showPages && <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
+        {showPages && <div style={{ display: "flex", flexDirection: "column", gap: ds.space.sm }}>
           <div role="img" aria-label={mapActive
             ? `${total} source pages. Document mapping ${mapping ? "in progress; animation does not indicate a percentage" : "not active"}.`
             : `${captured} of ${total} pages captured; ${checked} checked. Blocks show totals, not individual page identities.`}
@@ -229,13 +229,13 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
                 borderRadius: 2,
                 position: "relative", overflow: "hidden",
                 // Pages are read in parallel, so the strip shows proportions only.
-                background: i < checked ? pwc.black : i < captured ? pwc.grey300 : pwc.grey100,
-              }}><span className="preparation-map-wave" style={{ position: "absolute", inset: 0, background: pwc.grey300, opacity: 0, animationDelay: `${i / total * 1400}ms` }} /></span>
+                background: i < checked ? ds.black : i < captured ? ds.grey300 : ds.grey100,
+              }}><span className="preparation-map-wave" style={{ position: "absolute", inset: 0, background: ds.grey300, opacity: 0, animationDelay: `${i / total * 1400}ms` }} /></span>
             ))}
           </div>
-          {!mapActive && !succeeded && <div style={{ ...ui.metadata, display: "flex", gap: pwc.space.lg, flexWrap: "wrap" }}>
-            {[["Checked", pwc.black], ["Captured", pwc.grey300], ["Waiting", pwc.grey100]].map(([label, color]) => (
-              <span key={label} style={{ display: "inline-flex", alignItems: "center", gap: pwc.space.xs }}><span aria-hidden="true" style={{ width: 8, height: 10, borderRadius: 1, background: color }} />{label}</span>
+          {!mapActive && !succeeded && <div style={{ ...ui.metadata, display: "flex", gap: ds.space.lg, flexWrap: "wrap" }}>
+            {[["Checked", ds.black], ["Captured", ds.grey300], ["Waiting", ds.grey100]].map(([label, color]) => (
+              <span key={label} style={{ display: "inline-flex", alignItems: "center", gap: ds.space.xs }}><span aria-hidden="true" style={{ width: 8, height: 10, borderRadius: 1, background: color }} />{label}</span>
             ))}
           </div>}
         </div>}
@@ -243,23 +243,23 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
         </>}
       </div>
         {activity.length > 0 && (
-          <div className="preparation-activity" style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm, borderLeft: `1px solid ${pwc.grey200}`, paddingLeft: pwc.space.xl, minWidth: 0 }}>
+          <div className="preparation-activity" style={{ display: "flex", flexDirection: "column", gap: ds.space.sm, borderLeft: `1px solid ${ds.grey200}`, paddingLeft: ds.space.xl, minWidth: 0 }}>
             <h3 style={{ ...ui.subsectionTitle, margin: 0, minHeight: 40, display: "flex", alignItems: "center" }}>{activityLabel}</h3>
             <ol aria-label={activityLabel} style={{ listStyle: "none", margin: 0, padding: 0 }}>
               {/* Newest first, matching the run Activity stream. */}
               {newestActivity.slice(0, 3).map(({ id, text }, i) => (
-                <li key={id} className="activity-sentence-enter" style={{ display: "grid", gridTemplateColumns: "10px minmax(0, 1fr)", gap: pwc.space.sm, minHeight: 40, padding: `${pwc.space.xs}px 0 ${pwc.space.sm}px` }}>
-                  <span aria-hidden="true" style={{ position: "relative", width: 10, marginLeft: 3, borderLeft: `1px solid ${pwc.grey200}` }}>
-                    <span style={{ position: "absolute", top: 6, left: -4, width: 7, height: 7, borderRadius: "50%", background: active && i === 0 ? pwc.orange500 : pwc.grey300 }} />
+                <li key={id} className="activity-sentence-enter" style={{ display: "grid", gridTemplateColumns: "10px minmax(0, 1fr)", gap: ds.space.sm, minHeight: 40, padding: `${ds.space.xs}px 0 ${ds.space.sm}px` }}>
+                  <span aria-hidden="true" style={{ position: "relative", width: 10, marginLeft: 3, borderLeft: `1px solid ${ds.grey200}` }}>
+                    <span style={{ position: "absolute", top: 6, left: -4, width: 7, height: 7, borderRadius: "50%", background: active && i === 0 ? ds.orange500 : ds.grey300 }} />
                   </span>
                   <span style={{ ...ui.bodyText, overflowWrap: "anywhere" }}>{text}</span>
                 </li>
               ))}
             </ol>
             {activity.length > 3 && <details>
-              <summary style={{ ...ui.metadata, cursor: "pointer", padding: `${pwc.space.sm}px 0` }}>Earlier updates</summary>
+              <summary style={{ ...ui.metadata, cursor: "pointer", padding: `${ds.space.sm}px 0` }}>Earlier updates</summary>
               <ol aria-label="Earlier preparation activity" style={{ listStyle: "none", margin: 0, padding: 0 }}>
-                {newestActivity.slice(3).map(({ id, text }) => <li key={id} style={{ ...ui.bodyText, overflowWrap: "anywhere", padding: `${pwc.space.sm}px 0` }}>{text}</li>)}
+                {newestActivity.slice(3).map(({ id, text }) => <li key={id} style={{ ...ui.bodyText, overflowWrap: "anywhere", padding: `${ds.space.sm}px 0` }}>{text}</li>)}
               </ol>
             </details>}
           </div>

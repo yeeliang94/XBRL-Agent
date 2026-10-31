@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from "react";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import type { AgentTabStatus, FilingStandard } from "../lib/types";
 import { isReportType } from "../lib/types";
 import { NON_AGENT_TAB_IDS } from "../lib/agentTabKinds";
@@ -146,7 +146,7 @@ function StatusBadge({ status, flagged = false, role }: { status: AgentTabStatus
   return (
     <span
       data-status={status}
-      className="pwc-status-change"
+      className="app-status-change"
       style={{ display: "inline-flex", width: 18, justifyContent: "center", flexShrink: 0 }}
       aria-label={label}
     >
@@ -430,7 +430,7 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     alignItems: "stretch" as const,
-    background: pwc.white,
+    background: ds.white,
     minWidth: 0,
   },
   tabList: {
@@ -440,50 +440,50 @@ const styles = {
   } as React.CSSProperties,
   navigatorCount: {
     flexShrink: 0,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontVariantNumeric: "tabular-nums",
     fontSize: 12,
-    color: pwc.grey700,
+    color: ds.grey700,
   },
   tabGroup: {
     display: "flex",
     flexDirection: "column" as const,
     gap: 2,
-    padding: `${pwc.space.sm}px 0`,
+    padding: `${ds.space.sm}px 0`,
   },
   groupLabel: {
-    padding: `0 ${pwc.space.sm}px ${pwc.space.xs}px`,
-    fontFamily: pwc.fontHeading,
+    padding: `0 ${ds.space.sm}px ${ds.space.xs}px`,
+    fontFamily: ds.fontHeading,
     fontSize: 12,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey700,
+    fontWeight: ds.weight.medium,
+    color: ds.grey700,
     letterSpacing: "0.02em",
   },
   tab: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.xs + 2,
+    gap: ds.space.xs + 2,
     width: "100%",
     minHeight: 58,
     padding: `8px 9px`,
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 13,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey700,
+    fontWeight: ds.weight.medium,
+    color: ds.grey700,
     background: "transparent",
     border: "none",
-    borderRadius: pwc.radius.md,
+    borderRadius: ds.radius.md,
     cursor: "pointer",
     textAlign: "left" as const,
     minWidth: 0,
   },
   tabActive: {
-    color: pwc.grey900,
-    fontWeight: pwc.weight.medium,
-    background: pwc.grey100,
+    color: ds.grey900,
+    fontWeight: ds.weight.medium,
+    background: ds.grey100,
   },
   tabSkeleton: {
-    color: pwc.grey300,
+    color: ds.grey300,
     cursor: "default",
     opacity: 0.6,
     background: "transparent",
@@ -510,8 +510,8 @@ const styles = {
   tabSubLabel: {
     fontSize: 12,
     fontWeight: 400,
-    color: pwc.grey500,
-    fontFamily: pwc.fontBody,
+    color: ds.grey500,
+    fontFamily: ds.fontBody,
     overflow: "hidden",
     textOverflow: "ellipsis" as const,
     whiteSpace: "nowrap" as const,
@@ -523,21 +523,21 @@ const styles = {
     overflow: "hidden",
     textOverflow: "ellipsis" as const,
     whiteSpace: "nowrap" as const,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 12,
     lineHeight: 1.3,
-    fontWeight: pwc.weight.regular,
-    color: pwc.grey500,
+    fontWeight: ds.weight.regular,
+    color: ds.grey500,
   },
   tabStatus: {
     marginLeft: "auto",
     flexShrink: 0,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 12,
-    color: pwc.grey700,
+    color: ds.grey700,
   },
   tabStatusRunning: {
-    color: pwc.orange700,
+    color: ds.orange700,
   },
 } as const;
 
@@ -555,7 +555,7 @@ const badgeStyles = {
     width: 6,
     height: 6,
     borderRadius: "50%",
-    background: pwc.black,
+    background: ds.black,
   } as React.CSSProperties,
   running: {
     display: "inline-flex",
@@ -564,14 +564,14 @@ const badgeStyles = {
     width: 12,
     height: 12,
     borderRadius: "50%",
-    background: pwc.orange50,
+    background: ds.orange50,
   } as React.CSSProperties,
   runningDot: {
     display: "inline-block",
     width: 8,
     height: 8,
     borderRadius: "50%",
-    background: pwc.orange400,
+    background: ds.orange400,
   } as React.CSSProperties,
   failed: {
     display: "inline-flex",
@@ -586,7 +586,7 @@ const badgeStyles = {
     width: 6,
     height: 6,
     borderRadius: "50%",
-    background: pwc.orange500,
+    background: ds.orange500,
   } as React.CSSProperties,
   cancelled: {
     display: "inline-flex",
@@ -595,13 +595,13 @@ const badgeStyles = {
     width: 12,
     height: 12,
     borderRadius: "50%",
-    background: pwc.grey100,
+    background: ds.grey100,
   } as React.CSSProperties,
   cancelledDot: {
     width: 6,
     height: 6,
     borderRadius: "50%",
-    background: pwc.grey500,
+    background: ds.grey500,
   } as React.CSSProperties,
   aborting: {
     display: "inline-flex",
@@ -617,7 +617,7 @@ const badgeStyles = {
     width: 8,
     height: 8,
     borderRadius: "50%",
-    background: pwc.orange500,
+    background: ds.orange500,
   } as React.CSSProperties,
   pending: {
     display: "inline-flex",
@@ -626,21 +626,21 @@ const badgeStyles = {
     width: 12,
     height: 12,
     borderRadius: "50%",
-    background: pwc.white,
-    border: `1.5px solid ${pwc.grey300}`,
+    background: ds.white,
+    border: `1.5px solid ${ds.grey300}`,
   } as React.CSSProperties,
   pendingDot: {
     width: 4,
     height: 4,
     borderRadius: "50%",
-    background: pwc.grey300,
+    background: ds.grey300,
   } as React.CSSProperties,
   skeleton: {
     display: "inline-block",
     width: 8,
     height: 8,
     borderRadius: "50%",
-    background: pwc.grey300,
+    background: ds.grey300,
   } as React.CSSProperties,
 } as const;
 

@@ -294,7 +294,7 @@ def test_older_models_are_untouched_on_chat_completions():
     "openai.global.gpt-5.6-luna", "openai.gpt-5.4", "openai.global.gpt-5.5-pro",
 ])
 @pytest.mark.parametrize("proxy_url", [
-    "", "https://genai-sharedservice-emea.pwc.com/v1", "http://localhost:4000/v1",
+    "", "https://llm-proxy.example.com/v1", "http://localhost:4000/v1",
 ])
 def test_every_openai_model_uses_responses_on_every_route(
     monkeypatch, model_name, proxy_url,
@@ -316,7 +316,7 @@ def test_claude_on_the_proxy_stays_on_chat_completions():
 
     model = server._create_proxy_model(
         "bedrock.anthropic.claude-sonnet-5",
-        "https://genai-sharedservice-emea.pwc.com/v1",
+        "https://llm-proxy.example.com/v1",
         "sk-test",
     )
     assert type(model) is OpenAIChatModel
@@ -367,7 +367,7 @@ def test_gemini3_on_the_enterprise_proxy_is_refused():
     import server
     with pytest.raises(ValueError, match="thought_signature"):
         server._warn_if_gemini_loses_thought_signatures(
-            "vertex_ai.gemini-3.6-flash", "https://genai-sharedservice-emea.pwc.com/v1",
+            "vertex_ai.gemini-3.6-flash", "https://llm-proxy.example.com/v1",
         )
 
 

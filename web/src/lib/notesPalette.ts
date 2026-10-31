@@ -15,7 +15,7 @@ export interface PaletteSwatch {
 }
 
 // Text colour (TipTap Color → <span style="color: …">). Black is the default
-// body colour, the rest are muted PwC-adjacent accents for emphasis.
+// body colour, the rest are muted accents that match the theme for emphasis.
 export const TEXT_COLORS: ReadonlyArray<PaletteSwatch> = [
   { label: "Default", value: null },
   { label: "Black", value: "#1a1a1a" },

@@ -1,4 +1,4 @@
-import { pwc, tokens } from "../lib/theme";
+import { ds, tokens } from "../lib/theme";
 import { denominationLabel } from "../lib/vocabulary";
 import { ui, uiClass } from "../lib/uiStyles";
 import { runStatusDisplay } from "../lib/runStatus";
@@ -151,19 +151,19 @@ const styles = {
   panel: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
   header: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingBottom: pwc.space.sm,
+    paddingBottom: ds.space.sm,
   } as React.CSSProperties,
   actions: {
     display: "flex",
     alignItems: "center",
     flexWrap: "wrap" as const,
-    gap: pwc.space.md,
+    gap: ds.space.md,
   } as React.CSSProperties,
   heading: {
     ...ui.sectionTitle,
@@ -171,7 +171,7 @@ const styles = {
   viewAll: {
     ...ui.buttonQuiet,
     ...ui.buttonSm,
-    gap: pwc.space.xs,
+    gap: ds.space.xs,
   } as React.CSSProperties,
   // Divided work queue: hairline rules between rows, no nested cards.
   list: {
@@ -182,12 +182,12 @@ const styles = {
   row: {
     width: "100%",
     textAlign: "left" as const,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
     minHeight: 40,
-    padding: `${pwc.space.sm}px ${pwc.space.sm}px`,
+    padding: `${ds.space.sm}px ${ds.space.sm}px`,
     fontSize: 14,
     border: "none",
     borderBottom: `1px solid ${tokens.color.border.subtle}`,
@@ -195,10 +195,10 @@ const styles = {
     cursor: "pointer",
   } as React.CSSProperties,
   filename: {
-    fontFamily: pwc.fontBody,
-    fontWeight: pwc.weight.medium,
+    fontFamily: ds.fontBody,
+    fontWeight: ds.weight.medium,
     fontSize: 14,
-    color: pwc.grey900,
+    color: ds.grey900,
     // Long statement filenames truncate rather than wrapping the row to
     // several lines; full name is on the title attribute.
     whiteSpace: "nowrap" as const,
@@ -208,13 +208,13 @@ const styles = {
     flex: "1 1 240px",
   } as React.CSSProperties,
   profile: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
     color: tokens.color.text.secondary,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   date: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
     color: tokens.color.text.secondary,
     whiteSpace: "nowrap" as const,
@@ -222,16 +222,16 @@ const styles = {
   action: {
     display: "inline-flex",
     alignItems: "center",
-    gap: pwc.space.xs,
-    fontFamily: pwc.fontBody,
+    gap: ds.space.xs,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
     color: tokens.color.action.primary,
     flexShrink: 0,
   } as React.CSSProperties,
   placeholder: {
     margin: 0,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
     color: tokens.color.text.secondary,
   } as React.CSSProperties,

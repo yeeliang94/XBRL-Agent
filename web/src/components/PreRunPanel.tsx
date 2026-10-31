@@ -23,7 +23,7 @@ import {
   REPORT_TYPES,
   isReportType,
 } from "../lib/types";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { CloseIcon, DisclosureChevron } from "./icons";
 import { StatusIcon } from "./StatusIcon";
@@ -83,7 +83,7 @@ const styles = {
     padding: 0,
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xxl,
+    gap: ds.space.xxl,
   } as React.CSSProperties,
   heading: {
     ...ui.sectionTitle,
@@ -94,33 +94,33 @@ const styles = {
   section: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
   sectionHead: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.md,
+    gap: ds.space.md,
     minHeight: 40,
   } as React.CSSProperties,
   sectionBody: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
   } as React.CSSProperties,
   subsection: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
   subsectionTitle: {
     ...ui.bodyText,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
   } as React.CSSProperties,
   exceptionLine: {
     ...ui.bodyText,
     display: "inline-flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
   noteList: {
     listStyle: "none",
@@ -128,18 +128,18 @@ const styles = {
     padding: 0,
     display: "grid",
     gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-    columnGap: pwc.space.xl,
+    columnGap: ds.space.xl,
   } as React.CSSProperties,
   noteRow: {
     display: "grid",
     gridTemplateColumns: "40px minmax(0, 1fr) 40px",
     alignItems: "start",
     minHeight: 40,
-    borderTop: `1px solid ${pwc.grey100}`,
+    borderTop: `1px solid ${ds.grey100}`,
   } as React.CSSProperties,
   noteNumber: {
     ...ui.bodyText,
-    color: pwc.grey700,
+    color: ds.grey700,
     padding: "10px 0",
     fontVariantNumeric: "tabular-nums",
   } as React.CSSProperties,
@@ -153,27 +153,27 @@ const styles = {
     minWidth: 40,
     padding: 0,
     justifyContent: "center",
-    color: pwc.grey700,
+    color: ds.grey700,
   } as React.CSSProperties,
   noteAddRow: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
   sectionLabel: {
     ...ui.bodyText,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
   } as React.CSSProperties,
   setupGroup: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
   } as React.CSSProperties,
   setupGrid: {
     display: "flex",
     flexWrap: "wrap" as const,
-    gap: `${pwc.space.lg}px ${pwc.space.xl}px`,
+    gap: `${ds.space.lg}px ${ds.space.xl}px`,
     alignItems: "flex-start",
   } as React.CSSProperties,
   runButton: {
@@ -181,45 +181,45 @@ const styles = {
     alignSelf: "flex-end" as const,
   } as React.CSSProperties,
   loadingText: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey500,
+    color: ds.grey500,
   } as React.CSSProperties,
   errorText: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey800,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    background: pwc.white,
-    borderRadius: pwc.radius.sm,
+    color: ds.grey800,
+    padding: `${ds.space.sm}px ${ds.space.md}px`,
+    background: ds.white,
+    borderRadius: ds.radius.sm,
     border: "none",
   } as React.CSSProperties,
   progressText: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.grey700,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    background: pwc.grey50,
-    borderRadius: pwc.radius.sm,
+    color: ds.grey700,
+    padding: `${ds.space.sm}px ${ds.space.md}px`,
+    background: ds.grey50,
+    borderRadius: ds.radius.sm,
     border: "none",
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
   scoutProgressPanel: {
-    padding: pwc.space.md,
-    background: pwc.grey50,
-    borderRadius: pwc.radius.sm,
+    padding: ds.space.md,
+    background: ds.grey50,
+    borderRadius: ds.radius.sm,
     border: "none",
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xs,
+    gap: ds.space.xs,
   } as React.CSSProperties,
   scoutProgressHeader: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
 };
 
@@ -566,7 +566,7 @@ function NotesInventoryEditor({
               </button>
             </div>
             {duplicate && (
-              <span style={{ ...ui.bodyText, color: pwc.error }}>
+              <span style={{ ...ui.bodyText, color: ds.error }}>
                 Note {parsed} is already in the list.
               </span>
             )}
@@ -1326,7 +1326,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          gap: pwc.space.md,
+          gap: ds.space.md,
           minHeight: 40,
         }}
       >
@@ -1340,7 +1340,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           data-testid="advanced-toggle"
           title="Models, scan preview, and accuracy grading"
           className={uiClass.btnQuiet}
-          style={{ ...ui.buttonQuiet, ...ui.buttonSm, flexShrink: 0, paddingInline: pwc.space.sm }}
+          style={{ ...ui.buttonQuiet, ...ui.buttonSm, flexShrink: 0, paddingInline: ds.space.sm }}
         >
           <DisclosureChevron open={showAdvanced} />
           Advanced
@@ -1419,7 +1419,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         </div>
         {/* Only an exception earns a sentence: the unit could not be found. */}
         {infopack?.scale_unit === "unknown" && (
-          <span style={{ ...ui.bodyText, color: pwc.orange700 }}>
+          <span style={{ ...ui.bodyText, color: ds.orange700 }}>
             Not found in the document. Select the unit shown in the statements.
           </span>
         )}
@@ -1461,7 +1461,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           verify — never enforced (gotcha #13). */}
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Preview document scan</span>
-        <div style={{ display: "flex", alignItems: "center", gap: pwc.space.sm }}>
+        <div style={{ display: "flex", alignItems: "center", gap: ds.space.sm }}>
           <button
             type="button"
             aria-label="Auto-detect document — preview scan"
@@ -1490,9 +1490,9 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           <p
             role="status"
             style={{
-              fontFamily: pwc.fontBody,
+              fontFamily: ds.fontBody,
               fontSize: 14,
-              color: pwc.error,
+              color: ds.error,
               margin: 0,
             }}
           >
@@ -1503,19 +1503,19 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         {isDetecting && (
           <div style={styles.scoutProgressPanel}>
             <div style={styles.scoutProgressHeader}>
-              <div style={{ display: "flex", alignItems: "center", gap: pwc.space.sm }}>
-                <span className="pwc-spinner" style={{
+              <div style={{ display: "flex", alignItems: "center", gap: ds.space.sm }}>
+                <span className="app-spinner" style={{
                   width: 16, height: 16, borderRadius: "50%",
-                  border: `2px solid ${pwc.grey200}`, borderTop: `2px solid ${pwc.orange500}`,
+                  border: `2px solid ${ds.grey200}`, borderTop: `2px solid ${ds.orange500}`,
                   flexShrink: 0, display: "inline-block",
                 }} />
-                <span style={{ ...ui.bodyText, fontWeight: pwc.weight.medium }}>
+                <span style={{ ...ui.bodyText, fontWeight: ds.weight.medium }}>
                   {scoutProgress || "Starting document scan…"}
                 </span>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: pwc.space.sm }}>
+              <div style={{ display: "flex", alignItems: "center", gap: ds.space.sm }}>
                 {scoutStartTime && (
-                  <span style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey300 }}>
+                  <span style={{ fontFamily: ds.fontBody, fontSize: 12, color: ds.grey300 }}>
                     {elapsedText}
                   </span>
                 )}
@@ -1553,7 +1553,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                 id="scout-log-region"
                 role="region"
                 aria-label="Document pre-scan technical timeline"
-                style={{ marginTop: pwc.space.sm }}
+                style={{ marginTop: ds.space.sm }}
               >
                 <AgentTimeline
                   events={scoutEvents}
@@ -1660,17 +1660,17 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
               {REPORT_CHOICES.map(([key, label]) => {
                 const checked = reportsEnabled.includes(key);
                 return (
-                  <tr key={key} style={{ borderBottom: `1px solid ${pwc.grey100}` }}>
-                    <td style={{ padding: `${pwc.space.sm}px 0`, verticalAlign: "middle" }}>
-                      <label style={{ fontSize: 14, display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer",
-                        color: checked ? pwc.grey900 : pwc.grey700 }}>
+                  <tr key={key} style={{ borderBottom: `1px solid ${ds.grey100}` }}>
+                    <td style={{ padding: `${ds.space.sm}px 0`, verticalAlign: "middle" }}>
+                      <label style={{ fontSize: 14, display: "flex", alignItems: "center", gap: ds.space.sm, cursor: "pointer",
+                        color: checked ? ds.grey900 : ds.grey700 }}>
                         <input type="checkbox" style={ui.checkbox} checked={checked}
                           onChange={e => setReportsEnabled(old => e.target.checked ? [...old, key] : old.filter(r => r !== key))} />
                         <span>{label}</span>
                       </label>
                     </td>
                     {showAdvanced && !preparationStarted && (
-                      <td style={{ padding: `${pwc.space.sm}px 0 ${pwc.space.sm}px ${pwc.space.lg}px`, verticalAlign: "middle" }}>
+                      <td style={{ padding: `${ds.space.sm}px 0 ${ds.space.sm}px ${ds.space.lg}px`, verticalAlign: "middle" }}>
                         <select aria-label={`Model for ${label}`} value={reportsModels[key] ?? ""} disabled={!checked}
                           onChange={e => setReportsModels(old => {
                             const next = { ...old }; if (e.target.value) next[key] = e.target.value; else delete next[key]; return next;

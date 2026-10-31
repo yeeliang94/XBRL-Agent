@@ -4,7 +4,7 @@ import { SettingsModal } from "../components/SettingsModal";
 
 const defaultSettings = {
   model: "vertex_ai.gemini-3-flash-preview",
-  proxy_url: "https://genai-sharedservice-emea.pwc.com",
+  proxy_url: "https://llm-proxy.example.com",
   api_key_set: true,
   api_key_preview: "sk-1234...abcd",
 };

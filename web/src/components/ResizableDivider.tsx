@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 
 interface ResizableDividerProps {
   testId: string;
@@ -86,7 +86,7 @@ const styles = {
     display: "block",
     width: 1,
     minHeight: "100%",
-    background: pwc.grey100,
+    background: ds.grey100,
     transition: "background 120ms ease",
   } as React.CSSProperties,
 } as const;

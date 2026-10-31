@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { formatElapsedMs } from "../lib/time";
 
 interface Props {
@@ -26,9 +26,9 @@ export function ElapsedTimer({ startTime, isRunning }: Props) {
   return (
     <span
       style={{
-        fontFamily: pwc.fontMono,
+        fontFamily: ds.fontMono,
         fontSize: 14,
-        color: pwc.grey700,
+        color: ds.grey700,
       }}
     >
       {formatElapsedMs(elapsed)}

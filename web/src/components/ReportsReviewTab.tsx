@@ -5,7 +5,7 @@ import { NotesEditorToolbar } from "./NotesEditorToolbar";
 import { PdfSourcePane } from "./PdfSourcePane";
 import { StatusIcon } from "./StatusIcon";
 import { apiFetch } from "../lib/api";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { userMessage } from "../lib/errors";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
@@ -20,16 +20,16 @@ interface ReportField {
 interface Report { type: string; label: string; sheet: string; fields: ReportField[] }
 
 const styles = {
-  row: { display: "flex", flexWrap: "wrap" as const, columnGap: pwc.space.lg, rowGap: pwc.space.sm,
-    alignItems: "flex-start", padding: `${pwc.space.sm}px 0`, minWidth: 0 },
-  labelCell: { flex: "1 1 200px", minWidth: 0, display: "flex", gap: pwc.space.sm, alignItems: "center",
+  row: { display: "flex", flexWrap: "wrap" as const, columnGap: ds.space.lg, rowGap: ds.space.sm,
+    alignItems: "flex-start", padding: `${ds.space.sm}px 0`, minWidth: 0 },
+  labelCell: { flex: "1 1 200px", minWidth: 0, display: "flex", gap: ds.space.sm, alignItems: "center",
     flexWrap: "wrap" as const, minHeight: 40 },
-  label: { fontWeight: pwc.weight.medium },
+  label: { fontWeight: ds.weight.medium },
   controlCell: { flex: "2 1 280px", minWidth: 0 },
-  actions: { display: "flex", gap: pwc.space.sm, alignItems: "center", flexWrap: "wrap" as const, marginTop: pwc.space.sm },
-  error: { display: "block", marginTop: pwc.space.sm, fontSize: 13 },
-  paneHeading: { ...ui.reviewPaneHeader, marginBottom: pwc.space.lg },
-  sourceHeading: { ...ui.reviewSourcePaneHeader, marginBottom: pwc.space.lg },
+  actions: { display: "flex", gap: ds.space.sm, alignItems: "center", flexWrap: "wrap" as const, marginTop: ds.space.sm },
+  error: { display: "block", marginTop: ds.space.sm, fontSize: 13 },
+  paneHeading: { ...ui.reviewPaneHeader, marginBottom: ds.space.lg },
+  sourceHeading: { ...ui.reviewSourcePaneHeader, marginBottom: ds.space.lg },
   worksheet: { ...ui.buttonQuiet, width: "100%", justifyContent: "flex-start", textAlign: "left" as const,
     whiteSpace: "normal" as const },
 };
@@ -108,7 +108,7 @@ function ReportFieldEditor({ runId, report, field, onSaved, onDirty, onSource, o
   }
   return <div style={html ? { ...styles.row, display: "block" } : styles.row} onFocus={enter} onBlur={leave}
     onMouseDown={() => { focusedAtPress.current = focused; }} onClick={reselect}>
-    <div data-field-label style={html ? { ...styles.labelCell, marginBottom: pwc.space.sm } : styles.labelCell}>
+    <div data-field-label style={html ? { ...styles.labelCell, marginBottom: ds.space.sm } : styles.labelCell}>
       {html
         ? <span style={styles.label}>{field.label}</span>
         : <label htmlFor={id} style={styles.label}>{field.label}</label>}
@@ -227,21 +227,21 @@ function ReportsReview({ runId, onPreparationBlocked }: ReportsReviewProps) {
       if (saved.kind === "html") setSavedNarrative({ sheet: activeReport.sheet, revision: saved.revision });
     }} />;
   return <div style={{ containerType: "inline-size", containerName: "reports-review", minWidth: 0 }}>
-    <div ref={workspaceRef} className="reports-review-layout" style={{ display: "grid", gridTemplateColumns: `240px minmax(0, 1fr) 9px ${pdfWidth}%`, gap: 0, alignItems: "start", fontFamily: pwc.fontBody, minWidth: 0, "--report-pdf-width": `${pdfWidth}%` } as CSSProperties}>
-    <aside aria-label="Report template navigator" style={{ minWidth: 0, position: "sticky", top: 116, paddingRight: pwc.space.md, maxHeight: "calc(100vh - 116px)", overflowY: "auto" }}>
+    <div ref={workspaceRef} className="reports-review-layout" style={{ display: "grid", gridTemplateColumns: `240px minmax(0, 1fr) 9px ${pdfWidth}%`, gap: 0, alignItems: "start", fontFamily: ds.fontBody, minWidth: 0, "--report-pdf-width": `${pdfWidth}%` } as CSSProperties}>
+    <aside aria-label="Report template navigator" style={{ minWidth: 0, position: "sticky", top: 116, paddingRight: ds.space.md, maxHeight: "calc(100vh - 116px)", overflowY: "auto" }}>
       <div style={styles.paneHeading}><h2 style={{ ...ui.sectionTitle, margin: 0 }}>mTool worksheets</h2></div>
       <nav aria-label="Report sheet navigator" style={{ display: "grid", gap: 4 }}>
         {reports.map(report => <button key={report.type} type="button" aria-current={report.type === activeReport.type ? "true" : undefined}
           disabled={dirty.size > 0 || formatting} style={{ ...styles.worksheet, ...(report.type === activeReport.type
-            ? { background: pwc.grey100, fontWeight: pwc.weight.medium } : {}) }}
+            ? { background: ds.grey100, fontWeight: ds.weight.medium } : {}) }}
           onClick={() => { setActiveType(report.type); setSource(s => ({ pages: [], key: s.key + 1, selected: false })); }}>
           {report.label}
         </button>)}
       </nav>
     </aside>
-    <section key={activeReport.type} className="reports-review-fields" aria-label={activeReport.label} style={{ minWidth: 0, maxWidth: "100%", borderLeft: `1px solid ${pwc.grey100}`, paddingInline: pwc.space.lg }}>
+    <section key={activeReport.type} className="reports-review-fields" aria-label={activeReport.label} style={{ minWidth: 0, maxWidth: "100%", borderLeft: `1px solid ${ds.grey100}`, paddingInline: ds.space.lg }}>
       <div style={styles.paneHeading}><h2 style={{ ...ui.sectionTitle, margin: 0 }}>{activeReport.label}</h2></div>
-      {showFormatAction && <div style={{ ...styles.actions, marginBottom: pwc.space.lg }}>
+      {showFormatAction && <div style={{ ...styles.actions, marginBottom: ds.space.lg }}>
         <button type="button" style={ui.buttonQuiet}
           disabled={dirty.size > 0 || formatting} onClick={async () => {
             setFormatLaunching(true); setFormatError(null);
