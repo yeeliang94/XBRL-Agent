@@ -31,6 +31,7 @@ import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { abortAgent, updateSettings } from "../lib/api";
 import { VariantSelector } from "./VariantSelector";
 import { StatementRunConfig } from "./StatementRunConfig";
+import { PriorYearWorkbook } from "./PriorYearWorkbook";
 import { NotesRunConfig } from "./NotesRunConfig";
 import { AgentTimeline } from "./AgentTimeline";
 import { humanToolName } from "../lib/toolLabels";
@@ -629,6 +630,13 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
   const [filingLevel, setFilingLevel] = useState<FilingLevel>(
     () => _seedFilingLevel(initialConfig),
+  );
+  const [priorYearWorkbook, setPriorYearWorkbook] = useState<string | null>(
+    () => typeof initialConfig?.prior_year_workbook === "string" ? initialConfig.prior_year_workbook : null,
+  );
+  const [priorYearBusy, setPriorYearBusy] = useState(false);
+  const [priorYearLayout, setPriorYearLayout] = useState<string | null>(
+    () => typeof initialConfig?.prior_year_layout === "string" ? initialConfig.prior_year_layout : null,
   );
   const [firstFinancialStatements, setFirstFinancialStatements] = useState(
     () => initialConfig?.first_financial_statements === true,
@@ -1229,6 +1237,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       notes_inventory_overrides: notesInventoryOverrides,
       filing_level: filingLevel,
       first_financial_statements: firstFinancialStatements,
+      prior_year_workbook: firstFinancialStatements ? null : priorYearWorkbook || null,
+      prior_year_layout: firstFinancialStatements ? null : priorYearLayout,
       filing_standard: filingStandard,
       denomination,
       denomination_user_selected: denominationUserSelected,
@@ -1240,7 +1250,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   }, [
     statementsEnabled, variantSelections, modelOverrides, infopack,
     notesInventoryOverrides,
-    filingLevel, firstFinancialStatements, filingStandard, denomination, denominationUserSelected, notesEnabled,
+    filingLevel, firstFinancialStatements, priorYearWorkbook, priorYearLayout, filingStandard, denomination, denominationUserSelected, notesEnabled,
     notesModelOverrides, reportsEnabled, reportsModels,
   ]);
 
@@ -1306,6 +1316,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   // (current behaviour). Notes-only runs are also allowed so an operator
   // can refill just the notes sheets after an earlier face extraction.
   const canRun =
+    (firstFinancialStatements || (!priorYearBusy && priorYearWorkbook !== "")) &&
     (enabledStmts.length > 0 || enabledNotes.length > 0 || reportsEnabled.length > 0) &&
     preparation?.status !== "failed" &&
     preparation?.status !== "cancelled" &&
@@ -1452,6 +1463,9 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         </div>
       </section>
       </div>
+
+      <PriorYearWorkbook sessionId={sessionId} token={priorYearWorkbook} layout={priorYearLayout} onLayoutChange={setPriorYearLayout} enabled={!firstFinancialStatements}
+        config={buildCurrentConfig()} onChange={setPriorYearWorkbook} onBusy={setPriorYearBusy} />
 
       {showAdvanced && (<>
       {(!preparation || preparation.status === "not_started") && <>

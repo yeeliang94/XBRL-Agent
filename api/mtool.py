@@ -617,6 +617,14 @@ def patch_mtool_template(
                 detail="Upload is not a readable .xlsx workbook. Export it from mTool again and choose the new file."
             ) from exc
 
+        if doc["meta"].get("preserve_prior_year"):
+            from concept_model.prior_year import validate_export_source
+            try:
+                with closing(server._open_audit_conn()) as conn:
+                    validate_export_source(conn, run_id, src)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
         # Resolve the column map: explicit wins; else auto-detect.
         #
         # Auto-detection may stand alone only when the detector both is
@@ -946,6 +954,14 @@ def patch_mtool_template(
         summary["period_compatibility"] = period_mismatches
         if period_mismatches and summary["status"] == "ok":
             summary["status"] = "degraded"
+
+        if doc["meta"].get("preserve_prior_year"):
+            from concept_model.prior_year import verify_preservation
+            try:
+                with closing(server._open_audit_conn()) as conn:
+                    summary["prior_year_preservation"] = verify_preservation(conn, run_id, src, final)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         fingerprint = _parse_template_or_422(
             "fingerprint", fingerprint_workbook, data)

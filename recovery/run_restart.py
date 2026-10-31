@@ -165,6 +165,18 @@ def clone_run_as_draft(
         # it for older runs whose config was persisted before preparation
         # completed, so the cloned setup shows the same document map.
         config = dict(parent.config or {})
+        if config.get("prior_year_workbook"):
+            from concept_model.prior_year import workbook_path
+            try:
+                source_workbook = workbook_path(source_dir, config["prior_year_workbook"])
+            except ValueError as exc:
+                raise RunRestartError(str(exc)) from exc
+            copied_dir = target_dir / "prior_year"
+            copied_dir.mkdir()
+            shutil.copy2(source_workbook, copied_dir / source_workbook.name)
+            shutil.copy2(source_workbook.with_suffix(".json"), copied_dir / source_workbook.with_suffix(".json").name)
+            config.pop("prior_year_summary", None)
+
         if reusable is not None and not isinstance(config.get("infopack"), dict):
             config["infopack"] = reusable[0]["infopack"]
 

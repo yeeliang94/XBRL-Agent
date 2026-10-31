@@ -2004,6 +2004,8 @@ def create_reviewer_agent(
     # names it).
     from tools.pdf_search import scanned_pdf_advisory
     system_prompt += scanned_pdf_advisory(deps.pdf_path)
+    from concept_model.prior_year import guidance as prior_year_guidance, register_comparison_tool
+    system_prompt += prior_year_guidance(db_path, run_id)
     from agent_instructions import guidance_for_run
     system_prompt += guidance_for_run(db_path, run_id, "figures_review")
     # Temperature pinned to 1.0 — Gemini 3 through the enterprise proxy
@@ -2477,4 +2479,5 @@ def create_reviewer_agent(
         )
         return _format_verification(results, ctx.deps.original_failed_names)
 
+    register_comparison_tool(agent, db_path, run_id, None)
     return agent, deps

@@ -70,6 +70,7 @@ const NOTES_KEY = "__notes__";
 export { formatAccounting, formatGroupedInput };
 
 export interface ConceptRow {
+  preserve_prior_year?: boolean;
   concept_uuid: string;
   parent_uuid: string | null;
   kind: "ABSTRACT" | "LEAF" | "COMPUTED" | "MATRIX_CELL";
@@ -121,7 +122,7 @@ export interface ConceptRow {
 // treat them like any other row.
 export function rowLacksSource(row: ConceptRow): boolean {
   if (!(row.kind === "LEAF" || row.kind === "MATRIX_CELL")) return false;
-  if (row.is_alias) return false;
+  if (row.is_alias || row.source === "prior_year_workbook") return false;
   if (row.value == null) return false;
   // Mirror the PDF pane's evidence→source fallback (selectedEvidencePages): a
   // page can live in EITHER column, so a row lacks a source only if NEITHER
@@ -267,6 +268,7 @@ function isBlankValue(value: number | null | undefined): boolean {
 // Provenance is retained in the data and explained only in Field details.
 // A recorded value is not a verification verdict.
 function describeValueOrigin(row: ConceptRow): string {
+  if (row.source === "prior_year_workbook") return "Imported from rolled-forward workbook; preserved prior-year input";
   if (row.source?.trim().toLowerCase() === "cascade") return "Calculated from component figures";
   if (row.value_status === "user_override" || row.source?.trim().toLowerCase() === "manual edit") return "Manually edited";
   if (row.kind === "COMPUTED" && row.value != null) return "Calculated from component figures";
@@ -789,6 +791,7 @@ export function ConceptsPage({
       c.scope_facts &&
       Object.values(c.scope_facts).some((periods) => periods?.PY !== undefined)
   );
+  const pyLabel = `${reportingPy ? `PY (${reportingPy})` : "PY"}${concepts.some((c) => Object.values(c.scope_fact_details ?? {}).some((scope) => scope.PY?.source === "prior_year_workbook")) ? " · Imported" : ""}`;
 
   const figureIssueRows = useMemo(() => concepts.filter((row) =>
     row.kind !== "ABSTRACT" && (
@@ -1366,7 +1369,7 @@ export function ConceptsPage({
             showPeriods={hasPyFacts}
             scrollOnSelectRef={scrollSelectionRef}
             cyLabel={reportingCy ? `CY (${reportingCy})` : "CY"}
-            pyLabel={reportingPy ? `PY (${reportingPy})` : "PY"}
+            pyLabel={pyLabel}
             human={tableHuman}
           />
         ) : (
@@ -1380,7 +1383,7 @@ export function ConceptsPage({
             showPeriods={hasPyFacts}
             scrollOnSelectRef={scrollSelectionRef}
             cyLabel={reportingCy ? `CY (${reportingCy})` : "CY"}
-            pyLabel={reportingPy ? `PY (${reportingPy})` : "PY"}
+            pyLabel={pyLabel}
             human={tableHuman}
           />
         )}
@@ -1676,6 +1679,7 @@ function ConceptTree({
 // ---------------------------------------------------------------------------
 
 type MatrixCell = {
+  preservePriorYear: boolean;
   uuid: string;
   values: Record<Period, number | null>;
   editable: boolean;
@@ -1764,6 +1768,7 @@ function ConceptMatrixGrid({
           PY: periodValue(r, activeScope, "PY"),
         },
         editable: r.editable === true,
+        preservePriorYear: r.preserve_prior_year === true,
         // In SOCIE, leading "*" marks the movement row, not every component
         // intersection. Highlighting every blank component as mandatory turns
         // the matrix into a wall of orange even when blanks are legitimate.
@@ -1938,7 +1943,7 @@ function ConceptMatrixGrid({
                     cursor: cell ? "pointer" : "default",
                   }}
                 >
-                  {cell && cell.editable ? (
+                  {cell && cell.editable && !(period === "PY" && cell.preservePriorYear) ? (
                     <EditableValueCell
                       uuid={cell.uuid}
                       ariaLabel={`${g.label}, ${colLabels.get(col) || col}, ${activeScope}, ${period === "CY" ? "current" : "prior"} period`}
@@ -2196,7 +2201,7 @@ function ConceptRowView({
           {showPeriods && (
             <div data-comparison-highlight={human && isComparisonHighlighted(human.slots.get(humanSlotKey(row.concept_uuid, "PY", activeScope)), human.highlights) || undefined}
               style={{ ...styles.valueCell, ...(human ? comparisonCellStyle(human.slots.get(humanSlotKey(row.concept_uuid, "PY", activeScope)), human.highlights) : null) }}>
-              {isComputed ? (
+              {isComputed || row.preserve_prior_year || row.scope_fact_details?.[activeScope]?.PY?.source === "prior_year_workbook" ? (
                 <ReadOnlyValue
                   value={pyValue}
                   testId={`readonly-value-${row.concept_uuid}-PY`}

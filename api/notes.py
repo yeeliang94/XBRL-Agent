@@ -163,6 +163,8 @@ def _numeric_sheet_rows(
 
     from concept_model.periods import run_periods
     periods = run_periods(conn, run_id)
+    from concept_model.prior_year import is_preserved
+    preserve_prior_year = is_preserved(conn, run_id)
     facts: dict[str, dict] = {}
     for f in conn.execute(
         "SELECT concept_uuid, period, entity_scope, value, dimension_key, evidence "
@@ -291,6 +293,7 @@ def _numeric_sheet_rows(
             "row": n["row"],
             "label": n["display_label"] or n["canonical_label"],
             "kind": "numeric",
+            "preserve_prior_year": preserve_prior_year,
             "concept_uuid": n["concept_uuid"],
             "values": scope_values(instances.get("", {}).get("scopes", {})),
             "categories": categories if instances else [],

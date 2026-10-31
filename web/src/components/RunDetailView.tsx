@@ -1195,6 +1195,10 @@ export function RunDetailView({
         </div>
       )}
 
+      {Boolean(detail.config?.prior_year_workbook) && <p role="note" style={styles.dim}>
+        Prior-year figures are preserved from the uploaded workbook, including numeric notes.
+      </p>}
+
       {!reviewWorkspaceActive && !isRunning && failingChecks.length > 0 && (
         <div style={styles.errorBanner} role="alert" data-testid="failed-check-warning">
           <div style={styles.errorBannerBody}>

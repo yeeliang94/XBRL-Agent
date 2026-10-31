@@ -1810,3 +1810,33 @@ test.each(["AUDITORS_REPORT", "STATEMENT_BY_DIRECTORS"] as const)("%s can run in
   startExtraction();
   expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ statements: [], notes_to_run: [], reports_to_run: [report], reports_models: {} }));
 });
+
+test.each([false, true])("rolled-forward workbook is required before starting; column confirmation required: %s", async (requiresConfirmation) => {
+  const token = "a".repeat(64);
+  const metadata = { id: token, filename: "rolled.xlsx", unit: "thousands",
+    summary: { inputs: 12, blank_slots: 3, unresolved_slots: 0, sheets: ["SOFP", "Notes-Issuedcapital"], not_in_file: [], period_issues: [], requires_confirmation: requiresConfirmation, layout_digest: "b".repeat(64), layout: { SOFP: { columns: { current_year: "B", prior_year: "C" } } } } };
+  const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(metadata));
+  const onRun = vi.fn();
+  try {
+    render(<PreRunPanel sessionId="rolled-session" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={onRun} />);
+    const source = await screen.findByRole("combobox", { name: "Prior-year figures" });
+    fireEvent.change(source, { target: { value: "workbook" } });
+    expect(screen.getByRole("button", { name: /start extraction/i })).toBeDisabled();
+    fireEvent.change(screen.getByRole("combobox", { name: "Workbook figures are expressed in" }), { target: { value: "thousands" } });
+    fireEvent.change(screen.getByLabelText("Rolled-forward workbook"), { target: { files: [new File(["fixture"], "rolled.xlsx")] } });
+    await screen.findByText("rolled.xlsx");
+    if (requiresConfirmation) {
+      const confirmation = await screen.findByRole("checkbox", { name: /I checked these year and entity columns/ });
+      expect(screen.getByRole("button", { name: /start extraction/i })).toBeDisabled();
+      fireEvent.click(confirmation);
+    }
+    await waitFor(() => expect(screen.getByRole("button", { name: /start extraction/i })).toBeEnabled());
+    expect(await screen.findByText(/12 prior-year inputs/)).toBeInTheDocument();
+    startExtraction();
+    expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ prior_year_workbook: token, first_financial_statements: false }));
+    fireEvent.click(screen.getByRole("button", { name: "Replace workbook" }));
+    expect(screen.getByRole("button", { name: /start extraction/i })).toBeDisabled();
+    fireEvent.change(source, { target: { value: "report" } });
+    expect(screen.getByRole("button", { name: /start extraction/i })).toBeEnabled();
+  } finally { fetcher.mockRestore(); }
+});

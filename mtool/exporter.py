@@ -148,6 +148,9 @@ def build_fill_doc(
     from concept_model.periods import run_periods
     with sqlite3.connect(str(db_path)) as conn:
         periods = run_periods(conn, run_id)
+        from concept_model.prior_year import is_preserved
+        preserve_prior_year = is_preserved(conn, run_id)
+        output_periods = ("CY",) if preserve_prior_year else periods
 
     # Every conflict in the SAME snapshot the writes come from, so the
     # preflight verdict and the receipt describe one revision of the facts
@@ -194,7 +197,7 @@ def build_fill_doc(
     seen: set[tuple[str, str, str, str]] = set()
 
     for r in rows:
-        if r['period'] not in periods:
+        if r['period'] not in output_periods:
             excluded_out_of_scope += 1
             continue
         if (r['data_type'] or '').lower().endswith('textblockitemtype'):
@@ -316,6 +319,7 @@ def build_fill_doc(
         "filing_standard": filing_standard.lower(),
         "filing_level": filing_level.lower(),
         "first_financial_statements": periods == ('CY',),
+        "preserve_prior_year": preserve_prior_year,
         "denomination": denomination,
         "sheets_covered": sorted(sheets),
         "counts": {
