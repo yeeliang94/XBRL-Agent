@@ -46,7 +46,7 @@ import {
 } from "../lib/cellFormatting";
 import { Indent, indentUnwrappedSubnote } from "../lib/notesIndent";
 import { NotesSection } from "../lib/notesSection";
-import { pwc, tokens } from "../lib/theme";
+import { ds, tokens } from "../lib/theme";
 import { Check, ChevronRight, ContentCopy, Edit } from "./iconGlyphs";
 import { ui, uiClass } from "../lib/uiStyles";
 import {
@@ -825,7 +825,7 @@ export function NotesReviewTab({
           }}
         >
           <aside style={styles.noteRail} aria-label="Notes template navigator">
-            <div style={{ ...ui.reviewPaneHeader, marginBottom: pwc.space.lg }}>
+            <div style={{ ...ui.reviewPaneHeader, marginBottom: ds.space.lg }}>
               <h2 style={{ ...ui.sectionTitle, margin: 0 }}>mTool worksheets</h2>
             </div>
             <div aria-label="Worksheet and source note list" role="region" style={styles.noteRailBody}>
@@ -981,15 +981,15 @@ export function NotesReviewTab({
 
           <section style={styles.editorPane} aria-label="XBRL notes fields">
             {/* Cover the gap below the run tabs as note content scrolls behind the header. */}
-            <div style={{ ...ui.reviewPaneHeader, position: "sticky", top: 116, zIndex: 2, marginBottom: pwc.space.lg, boxShadow: `0 -${pwc.space.lg}px 0 ${pwc.white}`, flexWrap: "wrap", gap: pwc.space.sm }}>
+            <div style={{ ...ui.reviewPaneHeader, position: "sticky", top: 116, zIndex: 2, marginBottom: ds.space.lg, boxShadow: `0 -${ds.space.lg}px 0 ${ds.white}`, flexWrap: "wrap", gap: ds.space.sm }}>
               <h2 style={{ ...ui.sectionTitle, margin: 0 }}>Note content</h2>
-              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: pwc.space.md }}>
-                <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, fontSize: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: ds.space.md }}>
+                <label style={{ display: "flex", alignItems: "center", gap: ds.space.sm, fontSize: 14 }}>
                   <input type="checkbox" style={ui.checkbox} checked={hideEmptyFields} disabled={saveBlocked || moveBusy}
                     onChange={(event) => setHideEmptyFields(event.target.checked)} />
                   Hide empty fields
                 </label>
-                {hasHumanComparison && comparisonHighlights == null && <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, fontSize: 14 }}>
+                {hasHumanComparison && comparisonHighlights == null && <label style={{ display: "flex", alignItems: "center", gap: ds.space.sm, fontSize: 14 }}>
                   <input type="checkbox" style={ui.checkbox} checked={onlyMissedFields} disabled={saveBlocked || moveBusy}
                     onChange={(event) => setOnlyMissedFields(event.target.checked)} />
                   Only missed by AI
@@ -1001,7 +1001,7 @@ export function NotesReviewTab({
                 style={styles.fieldDestinations}
                 aria-label={`Destinations for note ${selectedNote.note_num}`}
               >
-                <span style={{ fontSize: 13, color: pwc.grey700 }}>Fields for source note {selectedSubnote?.subnote_ref ?? selectedNote.note_num}</span>
+                <span style={{ fontSize: 13, color: ds.grey700 }}>Fields for source note {selectedSubnote?.subnote_ref ?? selectedNote.note_num}</span>
                 {visibleDestinations.map((placement) => (
                   <button
                     key={`${placement.sheet}:${placement.row}`}
@@ -1334,7 +1334,7 @@ function SheetSection({
       {(showFormatAction || formatError || formatStatus?.error || skippedFormatRows.length > 0) && (
       <div style={styles.formatActionRow}>
         {(formatError || formatStatus?.error || skippedFormatRows.length > 0) && (
-          <div style={{ ...styles.formatSummary, color: needsRecheck ? pwc.grey700 : pwc.errorText }}
+          <div style={{ ...styles.formatSummary, color: needsRecheck ? ds.grey700 : ds.errorText }}
             role={needsRecheck ? "status" : "alert"} data-testid="notes-format-summary">
             {formatError || (formatStatus?.error
               ? notesFormatErrorMessage(formatStatus?.error_type, formatStatus.error, formatStatus ?? undefined)
@@ -1381,7 +1381,7 @@ function SheetSection({
                 <span key={key} role="columnheader" style={styles.numericColumnHeader}>{humanFigures ? `AI ${comparisonPeriodLabel(key)}` : NUMERIC_VALUE_COLUMNS[key].label}</span>
               ))}
               {humanFigures && numericColumns.map((key, index) => (
-                <span key={`human-${key}`} role="columnheader" style={{ ...styles.numericColumnHeader, ...(index === 0 ? { ...styles.numericHumanDivider, marginTop: -pwc.space.lg, marginBottom: -pwc.space.lg } : null) }}>Human {comparisonPeriodLabel(key)}</span>
+                <span key={`human-${key}`} role="columnheader" style={{ ...styles.numericColumnHeader, ...(index === 0 ? { ...styles.numericHumanDivider, marginTop: -ds.space.lg, marginBottom: -ds.space.lg } : null) }}>Human {comparisonPeriodLabel(key)}</span>
               ))}
             </div>
           )}
@@ -1392,7 +1392,7 @@ function SheetSection({
             </div>
           )}
           {attentionRows?.length === 0 && <p role="status">No placed field issues in this sheet. Check the source inventory for unplaced or unresolved notes.</p>}
-          {visibleRows.length === 0 && (fieldQuery || hideEmptyFields || onlyMissedFields || onlyHighlighted) && <div style={{ padding: pwc.space.md }}>
+          {visibleRows.length === 0 && (fieldQuery || hideEmptyFields || onlyMissedFields || onlyHighlighted) && <div style={{ padding: ds.space.md }}>
             <p role="status" style={styles.dim}>No fields match this view.</p>
             <button type="button" className={uiClass.btnGhost} onClick={onShowAllFields}>Show all fields</button>
           </div>}
@@ -1459,11 +1459,11 @@ function SheetSection({
             // the height of the longer text and never drifts out of line.
             return (
               <section key={`${runId}:${sheet.sheet}:${cell.row}:pair`} aria-label={cell.label}
-                style={{ scrollMarginTop: 176, borderBottom: index < visibleRows.length - 1 ? `1px solid ${pwc.grey100}` : undefined,
+                style={{ scrollMarginTop: 176, borderBottom: index < visibleRows.length - 1 ? `1px solid ${ds.grey100}` : undefined,
                   ...(highlighted ? humanStatus === "missed" ? ui.comparisonAttention : ui.comparisonQuiet : null) }}
                 data-comparison-highlight={highlighted || undefined}
                 data-cell-row={cell.row} data-testid="notes-review-row">
-                <div style={{ display: "flex", alignItems: "center", gap: pwc.space.sm }}>
+                <div style={{ display: "flex", alignItems: "center", gap: ds.space.sm }}>
                   <h3 style={{ ...styles.cellLabel, margin: 0, flex: 1, minWidth: 0 }}>
                     <button type="button" aria-label={`Review ${cell.label}`} aria-expanded={expanded}
                       aria-describedby={[cell.invalid_target ? `${statusId}-filing` : null, marker ? `${statusId}-comparison` : null].filter(Boolean).join(" ") || undefined}
@@ -1482,8 +1482,8 @@ function SheetSection({
                       }}>
                       <ChevronRight size={16} aria-hidden="true" style={{ flexShrink: 0, transform: expanded ? "rotate(90deg)" : undefined }} />
                       <span style={styles.cellLabel}>{cell.label}</span>
-                      <span style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, marginLeft: "auto", fontWeight: 400 }}>
-                        {cell.invalid_target && <span id={`${statusId}-filing`} style={{ color: pwc.warning }}>Not a filing field</span>}
+                      <span style={{ display: "flex", alignItems: "center", gap: ds.space.sm, marginLeft: "auto", fontWeight: 400 }}>
+                        {cell.invalid_target && <span id={`${statusId}-filing`} style={{ color: ds.warning }}>Not a filing field</span>}
                         {marker && <HumanStatusMarker status={humanStatus} />}
                         {retainedForEditing && <span style={styles.dim}>{editing ? "Editing" : "Unsaved"} · outside this filter</span>}
                       </span>
@@ -2138,7 +2138,7 @@ function CellRow({
     >
       {cell.invalid_target && <aside style={{ ...styles.editorDisclosureHeader, ...styles.cellLeft }}>
           <div
-            style={{ ...ui.alertWarning, marginTop: pwc.space.sm, fontSize: 14 }}
+            style={{ ...ui.alertWarning, marginTop: ds.space.sm, fontSize: 14 }}
           >
             <div role="status">
               Not a filing field. Copy it into a writable field, then remove this
@@ -2147,7 +2147,7 @@ function CellRow({
             <button
               type="button"
               className={uiClass.btnGhost}
-              style={{ ...ui.buttonGhost, display: "block", marginTop: pwc.space.sm }}
+              style={{ ...ui.buttonGhost, display: "block", marginTop: ds.space.sm }}
               onClick={() => setConfirmRemove(true)}
               disabled={removeBusy}
             >
@@ -2401,7 +2401,7 @@ function NumericCategoryRow({
         ...styles.numericTableRow,
         gridTemplateColumns,
         minWidth: gridMinWidth,
-        ...(selected ? { background: pwc.grey100 } : {}),
+        ...(selected ? { background: ds.grey100 } : {}),
       }}
       onFocusCapture={() => {
         onActivate?.();
@@ -2465,7 +2465,7 @@ function NumericCategoryRow({
                 // muted. Blank when the human file has nothing there, as in Figures.
                 return <span data-testid={`numeric-human-${cell.row}-${dimensionKey || "base"}-${key}`}
                   data-comparison-highlight={isComparisonHighlighted(slot, comparisonHighlights) || undefined}
-                  style={{ ...styles.numericHumanFigure, ...(slot?.status === "zero_blank" ? { color: pwc.grey500 } : null), ...noteHighlightStyle(slot, comparisonHighlights) }}>
+                  style={{ ...styles.numericHumanFigure, ...(slot?.status === "zero_blank" ? { color: ds.grey500 } : null), ...noteHighlightStyle(slot, comparisonHighlights) }}>
                   <HumanStatusMarker status={slot?.status} />
                   {slot?.human_value == null ? "" : formatGroupedInput(String(slot.human_value))}
                 </span>;
@@ -2578,10 +2578,10 @@ function SaveStatusBadge({ status }: { status: SaveStatus }) {
     failed: "Save failed",
   }[status];
   const color = {
-    dirty: pwc.grey700,
-    saving: pwc.grey700,
-    saved: pwc.success ?? "#2f855a",
-    failed: pwc.error ?? "#c53030",
+    dirty: ds.grey700,
+    saving: ds.grey700,
+    saved: ds.success ?? "#2f855a",
+    failed: ds.error ?? "#c53030",
   }[status];
   return (
     <span style={{ ...styles.statusBadge, color }}>
@@ -2623,7 +2623,7 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     minWidth: 0,
-    padding: `0 ${pwc.space.lg}px ${pwc.space.lg}px 0`,
+    padding: `0 ${ds.space.lg}px ${ds.space.lg}px 0`,
   } as React.CSSProperties,
   noteRailBody: {
     flex: 1,
@@ -2631,7 +2631,7 @@ const styles = {
     overflowY: "auto" as const,
     scrollbarWidth: "thin" as const,
     scrollbarGutter: "stable",
-    paddingRight: pwc.space.xs,
+    paddingRight: ds.space.xs,
   } as React.CSSProperties,
   noteRailHeader: {
     display: "flex",
@@ -2640,20 +2640,20 @@ const styles = {
     padding: "1px 5px 10px",
   } as React.CSSProperties,
   noteRailTitle: {
-    color: pwc.grey900,
-    fontFamily: pwc.fontBody,
+    color: ds.grey900,
+    fontFamily: ds.fontBody,
     fontSize: 16,
-    fontWeight: pwc.weight.semibold,
+    fontWeight: ds.weight.semibold,
   } as React.CSSProperties,
   noteRailCount: {
     margin: "2px 0 0",
-    color: pwc.grey700,
+    color: ds.grey700,
     fontSize: 12,
   } as React.CSSProperties,
   fieldSearch: {
     ...ui.input,
     width: "100%",
-    marginBottom: pwc.space.lg,
+    marginBottom: ds.space.lg,
   } as React.CSSProperties,
   noteRailList: {
     minHeight: 0,
@@ -2682,8 +2682,8 @@ const styles = {
     border: "none",
     borderRadius: tokens.radius.control,
     background: "transparent",
-    color: pwc.grey700,
-    fontWeight: pwc.weight.regular,
+    color: ds.grey700,
+    fontWeight: ds.weight.regular,
     textAlign: "left" as const,
     cursor: "pointer",
   } as React.CSSProperties,
@@ -2691,11 +2691,11 @@ const styles = {
     ...ui.reviewSelection,
   } as React.CSSProperties,
   noteRailNumber: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontVariantNumeric: "tabular-nums",
     fontSize: 12,
     lineHeight: "21px",
-    color: pwc.grey500,
+    color: ds.grey500,
     textAlign: "left" as const,
   } as React.CSSProperties,
   noteRailCopy: {
@@ -2714,7 +2714,7 @@ const styles = {
     whiteSpace: "normal" as const,
     overflowWrap: "anywhere" as const,
     fontSize: 12,
-    color: pwc.grey500,
+    color: ds.grey500,
   } as React.CSSProperties,
   noteRailAttention: {
     width: 16,
@@ -2723,14 +2723,14 @@ const styles = {
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 4,
-    color: pwc.orange700,
-    background: pwc.orange50,
+    color: ds.orange700,
+    background: ds.orange50,
     fontSize: 12,
     fontWeight: 500,
   } as React.CSSProperties,
   subnoteSummary: {
     padding: `2px 6px 2px ${NOTE_RAIL_TITLE_INSET}px`,
-    color: pwc.orange700,
+    color: ds.orange700,
     fontSize: 14,
     fontWeight: 500,
   } as React.CSSProperties,
@@ -2750,14 +2750,14 @@ const styles = {
     border: 0,
     borderRadius: 5,
     background: "transparent",
-    color: pwc.grey700,
-    fontWeight: pwc.weight.regular,
+    color: ds.grey700,
+    fontWeight: ds.weight.regular,
     textAlign: "left" as const,
     cursor: "pointer",
   } as React.CSSProperties,
   subnoteRef: {
-    color: pwc.grey700,
-    fontFamily: pwc.fontBody,
+    color: ds.grey700,
+    fontFamily: ds.fontBody,
     fontVariantNumeric: "tabular-nums",
     fontSize: 12,
     lineHeight: 1.4,
@@ -2774,20 +2774,20 @@ const styles = {
     overflowWrap: "anywhere" as const,
   } as React.CSSProperties,
   subnoteState: {
-    color: pwc.orange700,
+    color: ds.orange700,
     fontSize: 12,
     fontWeight: 500,
     lineHeight: 1.35,
   } as React.CSSProperties,
   subnoteReason: {
-    color: pwc.grey700,
+    color: ds.grey700,
     fontSize: 14,
     lineHeight: 1.35,
     overflowWrap: "anywhere" as const,
   } as React.CSSProperties,
   subnoteUnplaced: {
     padding: "2px 6px 4px 35px",
-    color: pwc.grey700,
+    color: ds.grey700,
     fontSize: 13,
     lineHeight: 1.35,
   } as React.CSSProperties,
@@ -2795,7 +2795,7 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     gap: 2,
-    marginBottom: pwc.space.md,
+    marginBottom: ds.space.md,
   } as React.CSSProperties,
   fieldDestinationButton: {
     display: "flex",
@@ -2803,11 +2803,11 @@ const styles = {
     justifyContent: "space-between",
     gap: 8,
     minHeight: 28,
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+    padding: `${ds.space.xs}px ${ds.space.sm}px`,
     border: 0,
-    borderRadius: pwc.radius.sm,
+    borderRadius: ds.radius.sm,
     background: "transparent",
-    color: pwc.grey700,
+    color: ds.grey700,
     fontSize: 14,
     textAlign: "left" as const,
     overflowWrap: "anywhere" as const,
@@ -2815,14 +2815,14 @@ const styles = {
   } as React.CSSProperties,
   noteRailEmpty: {
     margin: 0,
-    padding: `${pwc.space.md}px ${pwc.space.sm}px`,
-    color: pwc.grey700,
+    padding: `${ds.space.md}px ${ds.space.sm}px`,
+    color: ds.grey700,
     fontSize: 14,
     lineHeight: 1.45,
   } as React.CSSProperties,
   editorPane: {
     minWidth: 0,
-    paddingLeft: pwc.space.lg,
+    paddingLeft: ds.space.lg,
   } as React.CSSProperties,
   workspaceToolbar: {
     flexWrap: "wrap" as const,
@@ -2833,15 +2833,15 @@ const styles = {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: pwc.space.md,
-    padding: `${pwc.space.sm}px 0 ${pwc.space.md}px`,
-    background: pwc.white,
-    borderBottom: `1px solid ${pwc.grey100}`,
+    gap: ds.space.md,
+    padding: `${ds.space.sm}px 0 ${ds.space.md}px`,
+    background: ds.white,
+    borderBottom: `1px solid ${ds.grey100}`,
   } as React.CSSProperties,
   workspaceSheetNav: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.xs,
+    gap: ds.space.xs,
     minWidth: 0,
     overflowX: "auto" as const,
   } as React.CSSProperties,
@@ -2851,13 +2851,13 @@ const styles = {
     justifyContent: "space-between",
     gap: 8,
     minHeight: 34,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    padding: `${ds.space.sm}px ${ds.space.md}px`,
     border: "none",
-    borderRadius: pwc.radius.sm,
+    borderRadius: ds.radius.sm,
     background: "transparent",
-    color: pwc.grey700,
+    color: ds.grey700,
     fontSize: 14,
-    fontWeight: pwc.weight.regular,
+    fontWeight: ds.weight.regular,
     whiteSpace: "normal" as const,
     overflowWrap: "anywhere" as const,
     textAlign: "left" as const,
@@ -2870,13 +2870,13 @@ const styles = {
     justifyContent: "space-between",
     gap: 8,
     minHeight: 34,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    padding: `${ds.space.sm}px ${ds.space.md}px`,
     border: "none",
-    borderRadius: pwc.radius.sm,
-    background: pwc.grey100,
-    color: pwc.grey900,
+    borderRadius: ds.radius.sm,
+    background: ds.grey100,
+    color: ds.grey900,
     fontSize: 14,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
     whiteSpace: "normal" as const,
     overflowWrap: "anywhere" as const,
     textAlign: "left" as const,
@@ -2894,8 +2894,8 @@ const styles = {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: pwc.radius.sm,
-    color: pwc.grey700,
+    borderRadius: ds.radius.sm,
+    color: ds.grey700,
     cursor: "pointer",
     listStyle: "none",
     fontWeight: 500,
@@ -2906,20 +2906,20 @@ const styles = {
     right: 0,
     zIndex: 30,
     width: 210,
-    padding: pwc.space.xs,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    background: pwc.white,
-    boxShadow: pwc.shadow.elevated,
+    padding: ds.space.xs,
+    border: `1px solid ${ds.grey200}`,
+    borderRadius: ds.radius.md,
+    background: ds.white,
+    boxShadow: ds.shadow.elevated,
   } as React.CSSProperties,
   actionsMenuItem: {
     width: "100%",
     minHeight: 36,
-    padding: `0 ${pwc.space.sm}px`,
+    padding: `0 ${ds.space.sm}px`,
     border: "none",
-    borderRadius: pwc.radius.sm,
+    borderRadius: ds.radius.sm,
     background: "transparent",
-    color: pwc.grey900,
+    color: ds.grey900,
     textAlign: "left" as const,
     fontSize: 14,
     cursor: "pointer",
@@ -2932,17 +2932,17 @@ const styles = {
   stylePanel: {
     border: "none",
     borderRadius: 0,
-    background: pwc.grey50,
+    background: ds.grey50,
     padding: 12,
     marginBottom: 12,
   } as React.CSSProperties,
   stylePanelHint: {
     fontSize: 14,
-    color: pwc.grey700,
+    color: ds.grey700,
     margin: "0 0 10px 0",
   } as React.CSSProperties,
   dim: {
-    color: pwc.grey700,
+    color: ds.grey700,
     fontSize: 14,
   } as React.CSSProperties,
   // Only the active sheet is mounted. Keeping this wrapper flat prevents a
@@ -2954,7 +2954,7 @@ const styles = {
   workspaceSheetSection: {
     display: "flex",
     flexDirection: "column" as const,
-    background: pwc.white,
+    background: ds.white,
   } as React.CSSProperties,
   sheetFormatButton: {
     ...ui.buttonGhost,
@@ -2971,14 +2971,14 @@ const styles = {
     alignItems: "center",
     justifyContent: "flex-end",
     flexWrap: "wrap" as const,
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     padding: "8px 12px 16px",
   } as React.CSSProperties,
   formattingBanner: {
     padding: "7px 14px",
-    background: pwc.grey100,
+    background: ds.grey100,
     fontSize: 12,
-    color: pwc.grey700,
+    color: ds.grey700,
   } as React.CSSProperties,
   rowStack: {
     display: "flex",
@@ -2989,39 +2989,39 @@ const styles = {
   fieldDisclosureButton: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     width: "100%",
     minHeight: 40,
     padding: "8px 12px",
     border: 0,
-    background: pwc.white,
+    background: ds.white,
     textAlign: "left" as const,
     cursor: "pointer",
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
   } as React.CSSProperties,
   numericTable: {
     overflowX: "auto" as const,
     padding: "12px 14px",
-    borderTop: `1px solid ${pwc.grey200}`,
+    borderTop: `1px solid ${ds.grey200}`,
   } as React.CSSProperties,
   numericTableHeader: {
     display: "grid",
-    gap: pwc.space.md,
-    padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
-    background: pwc.grey50,
-    color: pwc.grey700,
-    borderBottom: `1px solid ${pwc.grey200}`,
-    fontFamily: pwc.fontHeading,
+    gap: ds.space.md,
+    padding: `${ds.space.lg}px ${ds.space.xl}px`,
+    background: ds.grey50,
+    color: ds.grey700,
+    borderBottom: `1px solid ${ds.grey200}`,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
   } as React.CSSProperties,
   numericColumnHeader: {
     textAlign: "right" as const,
   } as React.CSSProperties,
   numericTableRow: {
-    gap: pwc.space.md,
+    gap: ds.space.md,
     alignItems: "center",
-    padding: `${pwc.space.xs}px ${pwc.space.xl}px`,
+    padding: `${ds.space.xs}px ${ds.space.xl}px`,
   } as React.CSSProperties,
   humanPair: {
     display: "grid",
@@ -3039,7 +3039,7 @@ const styles = {
     gap: "inherit",
   } as React.CSSProperties,
   notePreview: {
-    padding: `${pwc.space.sm}px 12px ${pwc.space.lg}px`,
+    padding: `${ds.space.sm}px 12px ${ds.space.lg}px`,
     minWidth: 0,
   } as React.CSSProperties,
   notePreviewPair: {
@@ -3054,7 +3054,7 @@ const styles = {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
     gap: 12,
-    padding: `${pwc.space.sm}px 12px 0`,
+    padding: `${ds.space.sm}px 12px 0`,
     ...ui.fieldLabel,
   } as React.CSSProperties,
   humanNoteStatusRow: {
@@ -3062,7 +3062,7 @@ const styles = {
     alignItems: "center",
     justifyContent: "flex-end",
     minHeight: 44,
-    padding: `0 ${pwc.space.md}px`,
+    padding: `0 ${ds.space.md}px`,
   } as React.CSSProperties,
   // Human notes grow with their content, just like the extracted notes.
   humanNoteBody: {
@@ -3073,9 +3073,9 @@ const styles = {
   workspaceCellRow: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr)",
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
     padding: 0,
-    background: pwc.white,
+    background: ds.white,
     scrollMarginTop: 176,
   } as React.CSSProperties,
   disclosureHeader: {
@@ -3103,16 +3103,16 @@ const styles = {
   cellLabel: {
     fontWeight: 400,
     fontSize: 14,
-    color: pwc.grey900,
+    color: ds.grey900,
   } as React.CSSProperties,
   styleSourceChip: {
     display: "inline-block",
     marginTop: 4,
     padding: "1px 6px",
     borderRadius: 8,
-    border: `1px solid ${pwc.grey300}`,
-    background: pwc.grey100,
-    color: pwc.grey700,
+    border: `1px solid ${ds.grey300}`,
+    background: ds.grey100,
+    color: ds.grey700,
     fontSize: 12,
     fontWeight: 500,
     letterSpacing: 0.2,
@@ -3121,10 +3121,10 @@ const styles = {
   evidenceBlock: {
     marginTop: 6,
     padding: "4px 6px",
-    background: pwc.grey100,
+    background: ds.grey100,
     borderRadius: 3,
     fontSize: 14,
-    color: pwc.grey700,
+    color: ds.grey700,
     display: "flex",
     flexDirection: "column" as const,
     gap: 2,
@@ -3165,7 +3165,7 @@ const styles = {
   cellToolbar: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     flexWrap: "wrap" as const,
     minHeight: 50,
     padding: "8px 0",
@@ -3177,8 +3177,8 @@ const styles = {
   smallButton: {
     ...ui.buttonSecondary,
     ...ui.buttonSm,
-    gap: pwc.space.xs,
-    paddingLeft: pwc.space.sm,
+    gap: ds.space.xs,
+    paddingLeft: ds.space.sm,
     flexShrink: 0,
   } as React.CSSProperties,
   numericValueCell: {
@@ -3188,16 +3188,16 @@ const styles = {
   numericSaveErrors: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     gridColumn: "1 / -1",
     minWidth: 0,
-    padding: `${pwc.space.xs}px 0`,
+    padding: `${ds.space.xs}px 0`,
   } as React.CSSProperties,
   numericSaveError: {
     display: "flex",
     alignItems: "center",
     flexWrap: "wrap" as const,
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     fontSize: 14,
     textAlign: "left" as const,
   } as React.CSSProperties,
@@ -3205,16 +3205,16 @@ const styles = {
     minWidth: 0,
     fontSize: 14,
     textAlign: "right" as const,
-    color: pwc.grey900,
+    color: ds.grey900,
   } as React.CSSProperties,
   numericHumanDivider: {
     alignSelf: "stretch",
     display: "flex",
     alignItems: "center",
     justifyContent: "flex-end",
-    borderLeft: `1px solid ${pwc.grey200}`,
-    margin: `-${pwc.space.xs}px 0 -${pwc.space.xs}px -${pwc.space.md / 2}px`,
-    paddingLeft: pwc.space.md / 2,
+    borderLeft: `1px solid ${ds.grey200}`,
+    margin: `-${ds.space.xs}px 0 -${ds.space.xs}px -${ds.space.md / 2}px`,
+    paddingLeft: ds.space.md / 2,
   } as React.CSSProperties,
   numericHumanFigure: {
     fontVariantNumeric: "tabular-nums",
@@ -3225,12 +3225,12 @@ const styles = {
     boxSizing: "border-box" as const,
     padding: "4px 8px",
     fontSize: 14,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     textAlign: "right" as const,
     fontVariantNumeric: "tabular-nums",
-    border: `1px solid ${pwc.grey300 ?? "#d1d5db"}`,
-    borderRadius: pwc.radius.sm,
-    color: pwc.grey900,
+    border: `1px solid ${ds.grey300 ?? "#d1d5db"}`,
+    borderRadius: ds.radius.sm,
+    color: ds.grey900,
   } as React.CSSProperties,
   statusBadge: {
     fontSize: 12,
@@ -3240,14 +3240,14 @@ const styles = {
     padding: "2px 5px",
     fontSize: 12,
     fontWeight: 500,
-    color: pwc.grey700,
-    background: pwc.grey100,
-    border: `1px solid ${pwc.grey200}`,
+    color: ds.grey700,
+    background: ds.grey100,
+    border: `1px solid ${ds.grey200}`,
     borderRadius: 3,
   } as React.CSSProperties,
   copiedChip: {
     fontSize: 12,
     fontWeight: 500,
-    color: pwc.success,
+    color: ds.success,
   } as React.CSSProperties,
 } as const;

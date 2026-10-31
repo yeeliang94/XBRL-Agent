@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { userMessage } from "../lib/errors";
 import { deleteHumanFile, type HumanFileRecord, type ComparisonHighlight } from "../lib/humanFile";
@@ -167,55 +167,55 @@ export function HumanComparisonBar({
 
 const styles = {
   bar: {
-    marginBottom: pwc.space.lg,
+    marginBottom: ds.space.lg,
   } as React.CSSProperties,
   row: {
     display: "flex",
     alignItems: "center",
     flexWrap: "wrap",
-    columnGap: pwc.space.lg,
-    rowGap: pwc.space.sm,
+    columnGap: ds.space.lg,
+    rowGap: ds.space.sm,
   } as React.CSSProperties,
   summary: {
     margin: 0,
     display: "flex",
     alignItems: "center",
     flexWrap: "wrap",
-    gap: pwc.space.md,
+    gap: ds.space.md,
     position: "relative",
     flex: "1 1 280px",
     minWidth: 0,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey700,
+    color: ds.grey700,
     fontVariantNumeric: "tabular-nums",
   } as React.CSSProperties,
   summaryValue: {
-    color: pwc.grey900,
-    fontWeight: pwc.weight.medium,
+    color: ds.grey900,
+    fontWeight: ds.weight.medium,
     fontSize: 16,
   } as React.CSSProperties,
   file: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.xs,
+    gap: ds.space.xs,
     minWidth: 0,
     marginLeft: "auto",
   } as React.CSSProperties,
   fileName: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.grey700,
+    color: ds.grey700,
     minWidth: 0,
     maxWidth: 180,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
-    marginRight: pwc.space.xs,
+    marginRight: ds.space.xs,
   } as React.CSSProperties,
-  controls: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: pwc.space.md, marginTop: pwc.space.md } as React.CSSProperties,
+  controls: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: ds.space.md, marginTop: ds.space.md } as React.CSSProperties,
   highlightGroup: { ...ui.segmentControl, flexWrap: "wrap", maxWidth: "100%" } as React.CSSProperties,
-  onlyHighlighted: { display: "flex", alignItems: "center", gap: pwc.space.sm, fontSize: 14, minHeight: 40 } as React.CSSProperties,
-  scorePanel: { position: "absolute", top: "100%", left: 0, zIndex: 40, width: 300, maxWidth: "calc(100vw - 64px)", padding: pwc.space.md, background: pwc.white, border: `1px solid ${pwc.grey300}`, borderRadius: pwc.radius.md, boxShadow: pwc.shadow.elevated } as React.CSSProperties,
-  scoreValues: { display: "grid", gridTemplateColumns: "1fr auto", gap: `${pwc.space.sm}px ${pwc.space.md}px`, margin: 0, fontSize: 14, fontVariantNumeric: "tabular-nums" } as React.CSSProperties,
+  onlyHighlighted: { display: "flex", alignItems: "center", gap: ds.space.sm, fontSize: 14, minHeight: 40 } as React.CSSProperties,
+  scorePanel: { position: "absolute", top: "100%", left: 0, zIndex: 40, width: 300, maxWidth: "calc(100vw - 64px)", padding: ds.space.md, background: ds.white, border: `1px solid ${ds.grey300}`, borderRadius: ds.radius.md, boxShadow: ds.shadow.elevated } as React.CSSProperties,
+  scoreValues: { display: "grid", gridTemplateColumns: "1fr auto", gap: `${ds.space.sm}px ${ds.space.md}px`, margin: 0, fontSize: 14, fontVariantNumeric: "tabular-nums" } as React.CSSProperties,
 };

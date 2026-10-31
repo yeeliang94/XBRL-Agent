@@ -4,7 +4,7 @@ import { parseThemeOptions, type ClipboardFormatOptions } from "../lib/clipboard
 import { previewNotesAppearance, type PreparedNoteOutput } from "../lib/notesOutput";
 import { userMessage } from "../lib/errors";
 import { guardNavigationHistory } from "../lib/navigationHistory";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { ClipboardFormatControls } from "./ClipboardFormatControls";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -117,17 +117,17 @@ export function NotesAppearanceSettings({ onBusyChange }: { onBusyChange?: (busy
       message="Restore the shared house style, including no table borders or header fill. This removes all shared appearance overrides. Existing run overrides are kept."
       confirmLabel="Reset appearance" busy={phase === "saving"} busyLabel="Saving…" onConfirm={resetAll} onCancel={() => setResetOpen(false)} />
     <div style={{ ...ui.sectionHeader, alignItems: "center" }}>
-      <h2 style={{ fontSize: 16, margin: 0, fontWeight: pwc.weight.semibold }}>Notes appearance</h2>
+      <h2 style={{ fontSize: 16, margin: 0, fontWeight: ds.weight.semibold }}>Notes appearance</h2>
       <button type="button" className={uiClass.btnSecondary} style={ui.buttonSecondary}
         disabled={!house || phase === "saving"} onClick={() => setResetOpen(true)}>Reset to house style</button>
     </div>
-    {error && <p role="alert" style={{ color: pwc.error }}>{error}</p>}
+    {error && <p role="alert" style={{ color: ds.error }}>{error}</p>}
     {!fmt || !house ? <p role="status">{error ? "Appearance settings could not be loaded." : "Loading appearance…"}</p> : <>
       <div className="notes-appearance-layout" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))", gap: 32, alignItems: "start" }}>
         <ClipboardFormatControls value={fmt} house={house} overrides={overrides} onChange={update} onReset={resetField}
           idPrefix="settings-notes" disabled={phase === "saving"} />
-        <div style={{ minWidth: 0 }}><h3 style={{ fontSize: 14, fontWeight: pwc.weight.semibold, margin: "0 0 12px", minHeight: 21 }}>mTool notes preview</h3>
-          <div style={{ border: `1px solid ${pwc.grey300}`, minWidth: 0 }}>
+        <div style={{ minWidth: 0 }}><h3 style={{ fontSize: 14, fontWeight: ds.weight.semibold, margin: "0 0 12px", minHeight: 21 }}>mTool notes preview</h3>
+          <div style={{ border: `1px solid ${ds.grey300}`, minWidth: 0 }}>
             {output ? <PreparedNotesHtml output={output} /> : <p role={previewError ? "alert" : "status"} style={{ padding: 16 }}>{previewError ?? "Preparing preview…"}</p>}
           </div>
         </div>
@@ -140,7 +140,7 @@ export function NotesAppearanceSettings({ onBusyChange }: { onBusyChange?: (busy
           <li>Notes that exceed Excel’s limit show reduced styling or a size warning before export.</li>
         </ul>
       </details>
-      <p role="status" aria-live="polite" style={{ color: pwc.grey700, fontSize: 13, minHeight: 20 }}>{phase === "pending" || phase === "saving" ? "Saving…" : "Changes save automatically"}</p>
+      <p role="status" aria-live="polite" style={{ color: ds.grey700, fontSize: 13, minHeight: 20 }}>{phase === "pending" || phase === "saving" ? "Saving…" : "Changes save automatically"}</p>
     </>}
   </section>;
 }

@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 import { TopNav } from "../components/TopNav";
 import { ui } from "../lib/uiStyles";
-import { pwc, tokens } from "../lib/theme";
+import { ds, tokens } from "../lib/theme";
 
 const css = readFileSync("src/index.css", "utf8");
 const notesCss = readFileSync("src/components/NotesReviewTab.css", "utf8");
@@ -14,8 +14,8 @@ describe("focused-workspace shell", () => {
     expect(ui.appTopbar.position).toBe("sticky");
     expect(ui.reviewPaneHeader).toMatchObject({ minHeight: 44, padding: "0 4px" });
     expect(ui.reviewSourcePaneHeader).toMatchObject({ ...ui.reviewPaneHeader, paddingInline: 16 });
-    expect(tokens.surface.canvas).toBe(pwc.white);
-    expect(tokens.surface.navigation).toBe(pwc.grey50);
+    expect(tokens.surface.canvas).toBe(ds.white);
+    expect(tokens.surface.navigation).toBe(ds.grey50);
   });
 
   test("top-level destinations remain links with stable URLs and current state", () => {

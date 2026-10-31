@@ -1,5 +1,5 @@
 import type { AdvancedSetting } from "../lib/types";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 
 // ---------------------------------------------------------------------------
@@ -162,37 +162,37 @@ export function AdvancedSettingsSection({ rows, edits, onEdit, readOnly }: Props
 const styles = {
   group: {
     border: "none",
-    margin: `${pwc.space.lg}px 0 0`,
+    margin: `${ds.space.lg}px 0 0`,
     padding: 0,
   } as React.CSSProperties,
   groupTitle: {
     ...ui.subsectionTitle,
     padding: 0,
-    marginBottom: pwc.space.md,
+    marginBottom: ds.space.md,
   } as React.CSSProperties,
   field: {
     display: "flex",
     flexDirection: "column",
-    marginBottom: pwc.space.lg,
+    marginBottom: ds.space.lg,
   } as React.CSSProperties,
   checkboxLabel: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     cursor: "pointer",
   } as React.CSSProperties,
   label: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontWeight: 500,
     fontSize: 14,
-    color: pwc.grey700,
+    color: ds.grey700,
     display: "block",
-    marginBottom: pwc.space.xs,
+    marginBottom: ds.space.xs,
   } as React.CSSProperties,
   helper: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.grey700,
-    margin: `${pwc.space.xs}px 0`,
+    color: ds.grey700,
+    margin: `${ds.space.xs}px 0`,
   } as React.CSSProperties,
 };

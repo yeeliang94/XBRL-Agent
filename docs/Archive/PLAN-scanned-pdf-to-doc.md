@@ -163,7 +163,7 @@ pass already established.
 
 - [x] 🟩 **Step 8: "Readable Doc" nav + page shell** — `AppView "doc-convert"` +
   `/readable-doc` route (appReducer + App.tsx URL sync) + TopNav item +
-  `pages/ReadableDocPage.tsx`. Inline styles + pwc tokens.
+  `pages/ReadableDocPage.tsx`. Inline styles + ds tokens.
 - [x] 🟩 **Step 9: Progress + Readable View + copy** — POST then **poll** status
   (deviation: poll instead of consuming the SSE stream — simpler for a single
   standalone job; the SSE endpoint still exists). Progress bar "Converting page
@@ -172,7 +172,7 @@ pass already established.
   endpoint, shown only on `done`.
   - **Verify:** ✅ `web/src/__tests__/ReadableDocPage.test.tsx` (4) + typecheck
     clean + App/AppRouting (17) + **full frontend suite 721 passed**. Browser:
-    page renders with correct PwC styling, no console errors, and a **real
+    page renders with correct theme styling, no console errors, and a **real
     end-to-end conversion through the live backend** (upload→convert→view→docx)
     succeeded.
 

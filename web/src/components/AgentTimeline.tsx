@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { ReasoningBlock, SSEEvent, ToolTimelineEntry } from "../lib/types";
 import { ToolCallCard } from "./ToolCallCard";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { STATUS_SYMBOLS, runStatusDisplay } from "../lib/runStatus";
 import { StatusIcon } from "./StatusIcon";
@@ -56,28 +56,28 @@ const styles = {
     padding: 0,
   } as React.CSSProperties,
   empty: {
-    padding: `${pwc.space.xxl}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontBody,
+    padding: `${ds.space.xxl}px ${ds.space.lg}px`,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.grey500,
+    color: ds.grey500,
     textAlign: "left" as const,
   } as React.CSSProperties,
   terminalRow: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     padding: "10px 0",
     marginTop: 0,
     borderRadius: 0,
     border: "none",
-    borderTop: `1px solid ${pwc.grey100}`,
-    background: pwc.white,
+    borderTop: `1px solid ${ds.grey100}`,
+    background: ds.white,
   } as React.CSSProperties,
   terminalMain: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     minWidth: 0,
   } as React.CSSProperties,
   terminalDot: {
@@ -88,10 +88,10 @@ const styles = {
     flexShrink: 0,
   } as React.CSSProperties,
   terminalLabel: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    fontWeight: pwc.weight.regular,
-    color: pwc.grey900,
+    fontWeight: ds.weight.regular,
+    color: ds.grey900,
   } as React.CSSProperties,
   // Status is carried by the dot, icon and text. Direction A does not add a
   // coloured edge to terminal rows.
@@ -105,18 +105,18 @@ const styles = {
     marginTop: 0,
     padding: "10px 0",
     borderRadius: 0,
-    background: pwc.white,
+    background: ds.white,
     border: "none",
-    borderTop: `1px solid ${pwc.grey100}`,
-    fontFamily: pwc.fontBody,
+    borderTop: `1px solid ${ds.grey100}`,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.grey800,
+    color: ds.grey800,
   } as React.CSSProperties,
   warningsTitle: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 12,
     fontWeight: 600,
-    color: pwc.grey800,
+    color: ds.grey800,
     marginBottom: 4,
   } as React.CSSProperties,
   warningsList: {
@@ -126,10 +126,10 @@ const styles = {
   reasoningRow: {
     display: "grid",
     gridTemplateColumns: "7px minmax(0, 1fr)",
-    gap: pwc.space.md,
+    gap: ds.space.md,
     padding: "10px 0",
-    borderTop: `1px solid ${pwc.grey100}`,
-    background: pwc.white,
+    borderTop: `1px solid ${ds.grey100}`,
+    background: ds.white,
   } as React.CSSProperties,
   reasoningRail: {
     display: "flex",
@@ -140,8 +140,8 @@ const styles = {
     width: 7,
     height: 7,
     borderRadius: "50%",
-    background: pwc.orange500,
-    boxShadow: `0 0 0 3px ${pwc.orange50}`,
+    background: ds.orange500,
+    boxShadow: `0 0 0 3px ${ds.orange50}`,
     flexShrink: 0,
   } as React.CSSProperties,
   reasoningBody: {
@@ -151,25 +151,25 @@ const styles = {
     display: "flex",
     alignItems: "baseline",
     flexWrap: "wrap" as const,
-    gap: pwc.space.xs,
-    marginBottom: pwc.space.xs,
-    fontFamily: pwc.fontBody,
+    gap: ds.space.xs,
+    marginBottom: ds.space.xs,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    fontWeight: pwc.weight.regular,
-    color: pwc.grey900,
+    fontWeight: ds.weight.regular,
+    color: ds.grey900,
   } as React.CSSProperties,
   reasoningMeta: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
     fontWeight: 400,
-    color: pwc.grey500,
+    color: ds.grey500,
   } as React.CSSProperties,
   reasoningText: {
     margin: 0,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
     lineHeight: 1.6,
-    color: pwc.grey700,
+    color: ds.grey700,
     whiteSpace: "pre-wrap" as const,
     overflowWrap: "anywhere" as const,
   } as React.CSSProperties,
@@ -212,7 +212,7 @@ function ReasoningRow({ block, isRunning }: { block: ReasoningBlock; isRunning: 
           className={isActive ? "reasoning-stream-pulse" : undefined}
           style={{
             ...styles.reasoningDot,
-            background: isActive ? pwc.orange500 : pwc.grey300,
+            background: isActive ? ds.orange500 : ds.grey300,
             boxShadow: "none",
           }}
         />
@@ -260,7 +260,7 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
             <div style={styles.terminalMain}>
               <span
                 aria-hidden="true"
-                style={{ ...styles.terminalDot, background: pwc.grey300 }}
+                style={{ ...styles.terminalDot, background: ds.grey300 }}
               />
               <span style={styles.terminalLabel}>{event.event === "run_complete" ? "Run finished" : "Workstream finished"}</span>
             </div>
@@ -339,7 +339,7 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
         <div style={styles.terminalMain}>
           <span
             aria-hidden="true"
-            style={{ ...styles.terminalDot, background: pwc.error, boxShadow: `0 0 0 3px ${pwc.errorBg}` }}
+            style={{ ...styles.terminalDot, background: ds.error, boxShadow: `0 0 0 3px ${ds.errorBg}` }}
           />
           <span style={styles.terminalLabel}>{err ?? "Failed"}</span>
         </div>
@@ -360,7 +360,7 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
       <div style={styles.terminalMain}>
         <span
           aria-hidden="true"
-          style={{ ...styles.terminalDot, background: pwc.error, boxShadow: `0 0 0 3px ${pwc.errorBg}` }}
+          style={{ ...styles.terminalDot, background: ds.error, boxShadow: `0 0 0 3px ${ds.errorBg}` }}
         />
         <span style={styles.terminalLabel}>{msg}</span>
       </div>
@@ -460,7 +460,7 @@ export function AgentTimeline({ events, toolTimeline, reasoningBlocks, isRunning
           />
         ) : row.kind === "status" ? (
           <div key={`status:${row.at}:${row.order}`} style={{ padding: "8px 16px", fontSize: 13, overflowWrap: "anywhere" }}>
-            <span style={{ color: pwc.grey500, marginRight: 8 }}>{row.at ? `${new Date(row.at).toISOString().slice(11, 19)} UTC` : "Time unavailable"}</span>
+            <span style={{ color: ds.grey500, marginRight: 8 }}>{row.at ? `${new Date(row.at).toISOString().slice(11, 19)} UTC` : "Time unavailable"}</span>
             {row.message}
           </div>
         ) : (

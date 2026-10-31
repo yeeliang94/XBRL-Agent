@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import { ui, uiClass } from "../lib/uiStyles";
-import { pwc, tokens, component } from "../lib/theme";
+import { ds, tokens, component } from "../lib/theme";
 
 // Pinning tests for the shared inline primitives. They assert the canonical
 // metrics so a future component reaches for the primitive instead of
@@ -9,7 +9,7 @@ import { pwc, tokens, component } from "../lib/theme";
 
 describe("ui.statTile — canonical KPI tile", () => {
   test("uses the flat whitespace-led treatment from Direction A", () => {
-    expect(ui.statTile.padding).toBe(`${pwc.space.sm}px 0`);
+    expect(ui.statTile.padding).toBe(`${ds.space.sm}px 0`);
     expect(ui.statTile.border).toBe("none");
     expect(ui.statTile.borderTop).toBeUndefined();
     expect(ui.statTile.borderRadius).toBe(0);
@@ -19,7 +19,7 @@ describe("ui.statTile — canonical KPI tile", () => {
 
 describe("ui.cardInset — dense inset box", () => {
   test("uses the 12px inset token", () => {
-    expect(ui.cardInset.padding).toBe(pwc.space.md); // 12
+    expect(ui.cardInset.padding).toBe(ds.space.md); // 12
   });
 });
 
@@ -42,8 +42,8 @@ describe("ui.iconButton — shared glyph control", () => {
 describe("buttons — four roles, canonical geometry", () => {
   test("primary uses the accessible action role, not signature orange", () => {
     expect(ui.buttonPrimary.background).toBe(tokens.color.action.primary);
-    expect(ui.buttonPrimary.background).not.toBe(pwc.orange500);
-    expect(ui.buttonPrimary.color).toBe(pwc.white);
+    expect(ui.buttonPrimary.background).not.toBe(ds.orange500);
+    expect(ui.buttonPrimary.color).toBe(ds.white);
   });
 
   test("Subtle and Ghost converged into the single Quiet role", () => {
@@ -55,9 +55,9 @@ describe("buttons — four roles, canonical geometry", () => {
   });
 
   test("destructive is an orange outline with accessible orange text", () => {
-    expect(ui.buttonDanger.color).toBe(pwc.orange700);
-    expect(ui.buttonDanger.borderColor).toBe(pwc.orange500);
-    expect(ui.buttonDanger.background).toBe(pwc.white);
+    expect(ui.buttonDanger.color).toBe(ds.orange700);
+    expect(ui.buttonDanger.borderColor).toBe(ds.orange500);
+    expect(ui.buttonDanger.background).toBe(ds.white);
   });
 
   test("one 40px control height; nothing below WCAG 24px", () => {
@@ -75,8 +75,8 @@ describe("buttons — four roles, canonical geometry", () => {
   test("buttons and inputs use the 8px control radius", () => {
     expect(ui.buttonPrimary.borderRadius).toBe(8);
     expect(ui.input.borderRadius).toBe(8);
-    expect(ui.select).toMatchObject({ height: 40, minHeight: 40, fontSize: 14, borderRadius: 8, borderColor: pwc.grey300 });
-    expect(ui.checkbox).toMatchObject({ width: 18, height: 18, borderRadius: 4, margin: 0, flexShrink: 0, border: `1px solid ${pwc.grey300}`, background: pwc.white });
+    expect(ui.select).toMatchObject({ height: 40, minHeight: 40, fontSize: 14, borderRadius: 8, borderColor: ds.grey300 });
+    expect(ui.checkbox).toMatchObject({ width: 18, height: 18, borderRadius: 4, margin: 0, flexShrink: 0, border: `1px solid ${ds.grey300}`, background: ds.white });
     expect(ui.alertInfo.borderRadius).toBe(8);
   });
 
@@ -107,9 +107,9 @@ describe("ui.tab — shared surface tab", () => {
     expect(ui.tab.borderBottom).toBeUndefined();
     expect(ui.tab.marginBottom).toBeUndefined();
     expect(ui.tabActive.borderBottom).toBeUndefined();
-    expect(ui.tabActive.background).toBe(pwc.grey100);
-    expect(ui.tabActive.fontWeight).toBe(pwc.weight.medium);
-    expect(uiClass.tab).toBe("pwc-tab");
+    expect(ui.tabActive.background).toBe(ds.grey100);
+    expect(ui.tabActive.fontWeight).toBe(ds.weight.medium);
+    expect(uiClass.tab).toBe("app-tab");
   });
 });
 
@@ -121,8 +121,8 @@ describe("ui.dialog / ui.scrim — shared modal primitives", () => {
   });
 
   test("dialog is the modal-elevation exception to flat surfaces", () => {
-    expect(ui.dialog.boxShadow).toBe(pwc.shadow.modal);
-    expect(ui.dialog.borderRadius).toBe(pwc.radius.lg);
+    expect(ui.dialog.boxShadow).toBe(ds.shadow.modal);
+    expect(ui.dialog.borderRadius).toBe(ds.radius.lg);
   });
 
   test("action bar aligns actions to the decision region's end", () => {
@@ -132,8 +132,8 @@ describe("ui.dialog / ui.scrim — shared modal primitives", () => {
 
 describe("ui.borderedGroup — static grouping primitive", () => {
   test("bordered, flat, panel radius", () => {
-    expect(ui.borderedGroup.border).toBe(`1px solid ${pwc.grey200}`);
-    expect(ui.borderedGroup.borderRadius).toBe(pwc.radius.lg);
+    expect(ui.borderedGroup.border).toBe(`1px solid ${ds.grey200}`);
+    expect(ui.borderedGroup.borderRadius).toBe(ds.radius.lg);
     expect(ui.borderedGroup.boxShadow).toBeUndefined();
   });
 });
@@ -142,18 +142,18 @@ describe("table densities — header and body share the density", () => {
   // Cells pad on the right only so the first column shares the page's left
   // edge with the title and controls above the table.
   test("standard density: 10px vertical rhythm (≈40px rows), flush left", () => {
-    expect(ui.th.padding).toBe(`8px ${pwc.space.lg}px 8px 0`);
-    expect(ui.td.padding).toBe(`10px ${pwc.space.lg}px 10px 0`);
+    expect(ui.th.padding).toBe(`8px ${ds.space.lg}px 8px 0`);
+    expect(ui.td.padding).toBe(`10px ${ds.space.lg}px 10px 0`);
   });
 
   test("compact density: 8/12 (≈28–32px rows), flush left", () => {
-    expect(ui.thDense.padding).toBe(`${pwc.space.sm}px ${pwc.space.md}px ${pwc.space.sm}px 0`);
-    expect(ui.tdDense.padding).toBe(`${pwc.space.sm}px ${pwc.space.md}px ${pwc.space.sm}px 0`);
+    expect(ui.thDense.padding).toBe(`${ds.space.sm}px ${ds.space.md}px ${ds.space.sm}px 0`);
+    expect(ui.tdDense.padding).toBe(`${ds.space.sm}px ${ds.space.md}px ${ds.space.sm}px 0`);
   });
 
   test("comfortable density: 14/16 (≈48px rows), flush left", () => {
-    expect(ui.thComfortable.padding).toBe(`8px ${pwc.space.lg}px 8px 0`);
-    expect(ui.tdComfortable.padding).toBe(`14px ${pwc.space.lg}px 14px 0`);
+    expect(ui.thComfortable.padding).toBe(`8px ${ds.space.lg}px 8px 0`);
+    expect(ui.tdComfortable.padding).toBe(`14px ${ds.space.lg}px 14px 0`);
   });
 
   test("headers are sentence case — no tracked uppercase", () => {
@@ -184,7 +184,7 @@ describe("semantic design-system roles", () => {
   });
 
   test("empty state offers a quiet divided region", () => {
-    expect(ui.emptyState.borderTop).toBe(`1px solid ${pwc.grey200}`);
+    expect(ui.emptyState.borderTop).toBe(`1px solid ${ds.grey200}`);
     expect(ui.emptyState.color).toBe(tokens.color.text.secondary);
   });
 });

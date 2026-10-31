@@ -52,3 +52,9 @@ ab_work/
 /docs/PRD*.md
 /docs/HANDOFF*.md
 /docs/AGENT-BRIEF*.md
+
+# Private material kept local only (removed from history 2026-10-31)
+.codex-remote-attachments/
+/docs/updates/
+/docs/GUIDE-mtool-broken-file-windows-retest.md
+/docs/MTOOL-WINDOWS-TX27-TEST-PLAN.md

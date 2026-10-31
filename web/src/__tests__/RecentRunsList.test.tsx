@@ -99,7 +99,7 @@ describe("RecentRunsList", () => {
   test("rows stay transparent and use their own clean work-queue interaction", () => {
     render(<RecentRunsList {...makeProps()} />);
     const row = screen.getByRole("button", { name: /DRAFT-2024\.pdf/i });
-    expect(row.classList.contains("pwc-table-row")).toBe(false);
+    expect(row.classList.contains("app-table-row")).toBe(false);
     expect(row.classList.contains("recent-run-row")).toBe(true);
     expect(row.style.background).toBe("transparent");
     expect(screen.getByText("Continue setup")).toHaveClass("recent-run-action");

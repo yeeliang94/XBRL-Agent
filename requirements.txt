@@ -20,7 +20,7 @@ PyMuPDF>=1.24.0
 openai>=1.0.0
 litellm[proxy]
 beautifulsoup4>=4.12.0
-# Windows corporate proxies (e.g. PwC genai-sharedservice-emea) present a
+# Windows corporate proxies (e.g. an enterprise LLM proxy) present a
 # MITM cert chain rooted at an internal CA that lives in the Windows cert
 # store, not in certifi. truststore.inject_into_ssl() (called at startup
 # in server.py) makes Python's ssl module read the OS cert store so httpx

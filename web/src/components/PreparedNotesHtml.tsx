@@ -1,6 +1,6 @@
 import type { PreparedNoteOutput } from "../lib/notesOutput";
 import { outputNotice } from "../lib/notesOutput";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { useMemo } from "react";
 
 /** Columns that hold text in at least one row. Word and mTool tables space
@@ -40,7 +40,7 @@ export function PreparedNotesHtml({ output }: { output: PreparedNoteOutput }) {
   const notice = outputNotice(output);
   const html = useMemo(() => readablePreviewHtml(output.html), [output.html]);
   return <>
-    {notice && <p role="status" style={{ fontSize: 13, margin: "0 0 8px", color: pwc.grey700 }}>{notice}</p>}
+    {notice && <p role="status" style={{ fontSize: 13, margin: "0 0 8px", color: ds.grey700 }}>{notice}</p>}
     <div className="notes-output-preview" data-output-revision={output.revision}
       style={{ fontFamily: "Arial, sans-serif", color: "#000000", background: "#ffffff", padding: 12, minWidth: 0, overflowWrap: "anywhere" }}
       dangerouslySetInnerHTML={{ __html: html }} />

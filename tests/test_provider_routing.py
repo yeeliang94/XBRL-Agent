@@ -121,7 +121,7 @@ def test_gemini3_on_enterprise_proxy_is_refused(monkeypatch):
     with pytest.raises(ValueError, match="thought_signature"):
         server._create_proxy_model(
             "vertex_ai.gemini-3-flash-preview",
-            proxy_url="https://genai-sharedservice-emea.pwc.com/v1",
+            proxy_url="https://llm-proxy.example.com/v1",
             api_key="enterprise-key",
         )
 
@@ -136,7 +136,7 @@ def test_gemini_on_enterprise_proxy_stays_on_proxy_when_unblocked(monkeypatch):
 
     model = server._create_proxy_model(
         "vertex_ai.gemini-3-flash-preview",
-        proxy_url="https://genai-sharedservice-emea.pwc.com/v1",
+        proxy_url="https://llm-proxy.example.com/v1",
         api_key="enterprise-key",
     )
     assert type(model).__module__ == "pydantic_ai.models.openai"

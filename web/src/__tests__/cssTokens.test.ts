@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, test, expect } from "vitest";
-import { pwc, tokens } from "../lib/theme";
+import { ds, tokens } from "../lib/theme";
 
 // Read the CSS files at test time. Paths are relative to the vitest cwd (the
 // web/ package root). `fs` is typed by src/node-shims.d.ts so this compiles
@@ -18,7 +18,7 @@ import { pwc, tokens } from "../lib/theme";
 const indexCss = readFileSync("src/index.css", "utf8").toUpperCase();
 const notesCss = readFileSync("src/components/NotesReviewTab.css", "utf8").toUpperCase();
 
-// pwc token name -> the colour value index.css must contain
+// ds token name -> the colour value index.css must contain
 const INDEX_TOKENS = [
   "orange50", // form-control focus halo
   "grey50", // body bg, secondary/quiet-surface hover, row/tab hover
@@ -40,11 +40,11 @@ const NOTES_TOKENS = [
 
 describe("CSS interaction colours stay in sync with theme tokens", () => {
   test.each(INDEX_TOKENS)("index.css uses theme token %s", (token) => {
-    expect(indexCss).toContain((pwc[token] as string).toUpperCase());
+    expect(indexCss).toContain((ds[token] as string).toUpperCase());
   });
 
   test.each(NOTES_TOKENS)("NotesReviewTab.css uses theme token %s", (token) => {
-    expect(notesCss).toContain((pwc[token] as string).toUpperCase());
+    expect(notesCss).toContain((ds[token] as string).toUpperCase());
   });
 
   test("index.css primary-button hover uses the semantic action hover role", () => {
@@ -58,12 +58,12 @@ describe("CSS interaction colours stay in sync with theme tokens", () => {
   test("activity states use canonical theme colours", () => {
     expect(indexCss).not.toContain("#D04A02");
     expect(indexCss).not.toContain("#252525");
-    expect(indexCss).toContain(pwc.orange500.toUpperCase());
-    expect(indexCss).toContain(pwc.grey900.toUpperCase());
+    expect(indexCss).toContain(ds.orange500.toUpperCase());
+    expect(indexCss).toContain(ds.grey900.toUpperCase());
   });
 
   test("interactive cards respond with border/surface, never a lift", () => {
-    const cardHover = indexCss.slice(indexCss.indexOf(".PWC-CARD"));
+    const cardHover = indexCss.slice(indexCss.indexOf(".APP-CARD"));
     const hoverBlock = cardHover.slice(0, cardHover.indexOf("}") + 400);
     expect(hoverBlock).not.toContain("TRANSLATEY(-");
     expect(indexCss).not.toContain("TRANSFORM: TRANSLATEY(-2PX)");

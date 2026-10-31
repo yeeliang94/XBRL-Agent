@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { userMessage } from "../lib/errors";
 import type { CompleteData } from "../lib/types";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { formatElapsedMs } from "../lib/time";
 import { runStatusDisplay } from "../lib/runStatus";
@@ -44,16 +44,16 @@ const styles = {
   } as React.CSSProperties,
   aiDisclaimer: {
     margin: 0,
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px`,
-    background: pwc.grey50,
-    borderBottom: `1px solid ${pwc.grey200}`,
-    fontFamily: pwc.fontBody,
+    padding: `${ds.space.sm}px ${ds.space.lg}px`,
+    background: ds.grey50,
+    borderBottom: `1px solid ${ds.grey200}`,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.grey700,
+    color: ds.grey700,
   } as React.CSSProperties,
   tabBar: {
     display: "flex",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
   tabActive: {
     ...ui.tab,
@@ -65,32 +65,32 @@ const styles = {
     fontSize: 14,
   } as React.CSSProperties,
   content: {
-    padding: pwc.space.xl,
+    padding: ds.space.xl,
   } as React.CSSProperties,
   // Summary tab
   cardGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
   } as React.CSSProperties,
   card: {
     background: "transparent",
     borderRadius: 0,
-    padding: `${pwc.space.sm}px 0`,
+    padding: `${ds.space.sm}px 0`,
     textAlign: "left" as const,
   } as React.CSSProperties,
   cardLabel: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 12,
-    color: pwc.grey500,
-    marginBottom: pwc.space.xs,
+    color: ds.grey500,
+    marginBottom: ds.space.xs,
   } as React.CSSProperties,
   cardValue: {
-    fontFamily: pwc.fontMono,
+    fontFamily: ds.fontMono,
     fontSize: 16,
     // Metric values at regular weight (design .ui-card .v — no Light 300).
-    fontWeight: pwc.weight.regular,
-    color: pwc.grey900,
+    fontWeight: ds.weight.regular,
+    color: ds.grey900,
   } as React.CSSProperties,
   successBadge: {
     ...ui.badgeSuccess,
@@ -102,58 +102,58 @@ const styles = {
   table: {
     width: "100%",
     borderCollapse: "collapse" as const,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
   } as React.CSSProperties,
   th: {
-    background: pwc.grey100,
-    fontFamily: pwc.fontHeading,
+    background: ds.grey100,
+    fontFamily: ds.fontHeading,
     fontWeight: 400,
-    color: pwc.grey900,
+    color: ds.grey900,
     fontSize: 13,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    padding: `${ds.space.sm}px ${ds.space.md}px`,
     textAlign: "left" as const,
-    borderBottom: `1px solid ${pwc.grey200}`,
+    borderBottom: `1px solid ${ds.grey200}`,
   } as React.CSSProperties,
   td: {
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    borderBottom: `1px solid ${pwc.grey200}`,
-    color: pwc.grey800,
+    padding: `${ds.space.sm}px ${ds.space.md}px`,
+    borderBottom: `1px solid ${ds.grey200}`,
+    color: ds.grey800,
   } as React.CSSProperties,
   tdEmpty: {
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    borderBottom: `1px solid ${pwc.grey200}`,
-    color: pwc.grey500,
-    background: pwc.orange50,
+    padding: `${ds.space.sm}px ${ds.space.md}px`,
+    borderBottom: `1px solid ${ds.grey200}`,
+    color: ds.grey500,
+    background: ds.orange50,
   } as React.CSSProperties,
   loading: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey500,
+    color: ds.grey500,
     textAlign: "center" as const,
-    padding: pwc.space.xl,
+    padding: ds.space.xl,
   } as React.CSSProperties,
   fetchError: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.error,
+    color: ds.error,
     textAlign: "center" as const,
-    padding: pwc.space.xl,
+    padding: ds.space.xl,
   } as React.CSSProperties,
   retryButton: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 13,
-    color: pwc.orange500,
+    color: ds.orange500,
     background: "none",
     border: "none",
     cursor: "pointer",
     textDecoration: "underline",
-    marginTop: pwc.space.sm,
+    marginTop: ds.space.sm,
   } as React.CSSProperties,
   // Downloads
   downloadRow: {
     display: "flex",
-    gap: pwc.space.md,
+    gap: ds.space.md,
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
   downloadButton: {
@@ -163,45 +163,45 @@ const styles = {
     ...ui.buttonPrimary,
   } as React.CSSProperties,
   downloadSection: {
-    marginBottom: pwc.space.lg,
+    marginBottom: ds.space.lg,
   } as React.CSSProperties,
   reconcileBanner: {
-    margin: `${pwc.space.md}px 0`,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    background: pwc.orange50,
+    margin: `${ds.space.md}px 0`,
+    padding: `${ds.space.sm}px ${ds.space.md}px`,
+    background: ds.orange50,
     border: "none",
-    borderRadius: pwc.radius.sm,
-    color: pwc.grey800,
+    borderRadius: ds.radius.sm,
+    color: ds.grey800,
     fontSize: 13,
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
   reconcileLink: {
     marginLeft: "auto",
     background: "none",
     border: "none",
-    color: pwc.orange500,
+    color: ds.orange500,
     fontWeight: 500,
     fontSize: 13,
     cursor: "pointer",
   } as React.CSSProperties,
   reviewActionBar: {
-    margin: `${pwc.space.lg}px ${pwc.space.xl}px 0`,
-    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
-    background: pwc.grey50,
+    margin: `${ds.space.lg}px ${ds.space.xl}px 0`,
+    padding: `${ds.space.md}px ${ds.space.lg}px`,
+    background: ds.grey50,
     border: "none",
-    borderRadius: pwc.radius.md,
+    borderRadius: ds.radius.md,
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: pwc.space.md,
+    gap: ds.space.md,
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
   reviewActionCopy: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.grey800,
+    color: ds.grey800,
   } as React.CSSProperties,
   reviewActionButton: {
     ...ui.buttonPrimary,
@@ -210,7 +210,7 @@ const styles = {
   reviewActionGroup: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
   reviewActionSecondary: {
@@ -218,11 +218,11 @@ const styles = {
     ...ui.buttonSm,
   } as React.CSSProperties,
   downloadSectionLabel: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 12,
     fontWeight: 500,
-    color: pwc.grey500,
-    marginBottom: pwc.space.sm,
+    color: ds.grey500,
+    marginBottom: ds.space.sm,
   } as React.CSSProperties,
 };
 
@@ -381,19 +381,19 @@ function SummaryTab({ complete, runStartTime }: { complete: CompleteData; runSta
         </div>
       </div>
 
-      <details style={{ marginTop: pwc.space.lg }}>
+      <details style={{ marginTop: ds.space.lg }}>
         <summary
           style={{
             cursor: "pointer",
-            fontFamily: pwc.fontHeading,
+            fontFamily: ds.fontHeading,
             fontSize: 13,
-            fontWeight: pwc.weight.medium,
-            color: pwc.grey700,
+            fontWeight: ds.weight.medium,
+            color: ds.grey700,
           }}
         >
           AI usage
         </summary>
-        <div style={{ ...styles.cardGrid, marginTop: pwc.space.md }}>
+        <div style={{ ...styles.cardGrid, marginTop: ds.space.md }}>
           <div style={styles.card}>
             <div style={styles.cardLabel}>Total tokens</div>
             <div style={styles.cardValue}>{complete.total_tokens.toLocaleString()}</div>
@@ -470,7 +470,7 @@ function DataPreviewTab({
         {rows.map((row, i) => {
           const isEmpty = row.value === null || row.value === undefined || row.value === "";
           return (
-            <tr key={`${row.label}-${i}`} style={{ background: i % 2 === 0 ? pwc.white : pwc.grey50 }}>
+            <tr key={`${row.label}-${i}`} style={{ background: i % 2 === 0 ? ds.white : ds.grey50 }}>
               <td style={isEmpty ? styles.tdEmpty : styles.td}>{row.label}</td>
               <td style={isEmpty ? styles.tdEmpty : styles.td}>
                 {isEmpty ? "—" : String(row.value)}
@@ -522,7 +522,7 @@ function DownloadsTab({ runId, sessionId, statementsCompleted }: { runId?: numbe
   return (
     <div>
       {error && (
-        <div style={{ ...styles.fetchError, textAlign: "left" as const, marginBottom: pwc.space.md }}>
+        <div style={{ ...styles.fetchError, textAlign: "left" as const, marginBottom: ds.space.md }}>
           {error}
         </div>
       )}
@@ -545,19 +545,19 @@ function DownloadsTab({ runId, sessionId, statementsCompleted }: { runId?: numbe
       {/* Diagnostics — the developer artifacts (raw JSON + the AI conversation
           log), tucked into a collapsed disclosure so they don't sit next to
           the file the user actually files (Phase 4). */}
-      <details style={{ marginTop: pwc.space.md }}>
+      <details style={{ marginTop: ds.space.md }}>
         <summary
           style={{
             cursor: "pointer",
-            fontFamily: pwc.fontHeading,
+            fontFamily: ds.fontHeading,
             fontSize: 13,
-            fontWeight: pwc.weight.medium,
-            color: pwc.grey700,
+            fontWeight: ds.weight.medium,
+            color: ds.grey700,
           }}
         >
           Diagnostics
         </summary>
-        <div style={{ marginTop: pwc.space.sm }}>
+        <div style={{ marginTop: ds.space.sm }}>
           {hasMulti ? (
             statementsCompleted.map((stmt) => (
               <div key={stmt} style={styles.downloadSection}>

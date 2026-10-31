@@ -91,7 +91,7 @@ the canonical run path remain unchanged.
 | Hover/status | 140ms standard easing | Navigation, buttons, status arrival. |
 | View/reveal | 180ms standard or emphasized easing | Page/tab entry, disclosure/editor/tool detail. |
 | Larger causal change | 240ms emphasized easing | Progress fill or pane-state feedback only. |
-| Active work | Restrained opacity loop while genuinely working/loading. | `.pwc-working-indicator`, `.pwc-skeleton`, `.pwc-spinner`. |
+| Active work | Restrained opacity loop while genuinely working/loading. | `.app-working-indicator`, `.app-skeleton`, `.app-spinner`. |
 
 Motion uses transform and opacity. The prior `max-height` reveal is removed.
 Navigation selection and pipeline text update immediately; animation never

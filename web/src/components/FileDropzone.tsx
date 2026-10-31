@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import { pwc, tokens } from "../lib/theme";
+import { ds, tokens } from "../lib/theme";
 import { UploadFile } from "./iconGlyphs";
 import { ui, uiClass } from "../lib/uiStyles";
 
@@ -135,21 +135,21 @@ const styles = {
     flexDirection: "column" as const,
     alignItems: "center",
     justifyContent: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     minHeight: 230,
     borderWidth: 1.5,
     borderStyle: "dashed",
-    borderColor: pwc.grey300,
-    borderRadius: pwc.radius.lg,
+    borderColor: ds.grey300,
+    borderRadius: ds.radius.lg,
     padding: 34,
     textAlign: "center" as const,
-    background: pwc.white,
+    background: ds.white,
     cursor: "pointer",
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
   } as React.CSSProperties,
   dropZoneDragging: {
-    borderColor: pwc.orange500,
-    background: pwc.orange50,
+    borderColor: ds.orange500,
+    background: ds.orange50,
   } as React.CSSProperties,
   dropZoneDisabled: {
     cursor: "not-allowed",
@@ -168,10 +168,10 @@ const styles = {
     color: tokens.color.icon.active,
   } as React.CSSProperties,
   dropText: {
-    fontFamily: pwc.fontBody,
-    color: pwc.black,
+    fontFamily: ds.fontBody,
+    color: ds.black,
     fontSize: 16,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
     margin: 0,
   } as React.CSSProperties,
   chooseButton: {

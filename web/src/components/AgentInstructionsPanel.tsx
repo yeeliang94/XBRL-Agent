@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { getAgentInstructions, getInstructionSources, saveAgentInstructions } from "../lib/api";
 import type { InstructionSourceGroup, TeamGuidanceSettings } from "../lib/types";
 import { ui, uiClass } from "../lib/uiStyles";
-import { pwc, tokens } from "../lib/theme";
+import { ds, tokens } from "../lib/theme";
 import { ApiError } from "../lib/errors";
 import { guardNavigationHistory } from "../lib/navigationHistory";
 
@@ -115,7 +115,7 @@ function InstructionSources() {
   useEffect(() => { void load(); }, []);
   const group = groups?.find(item => item.role === role);
   const source = group?.sources.find(item => item.name === name) ?? group?.sources[0];
-  return <div style={{ ...styles.stack, marginTop: pwc.space.lg }}>
+  return <div style={{ ...styles.stack, marginTop: ds.space.lg }}>
     <h3 style={styles.heading}>Application instruction sources</h3>
     <p style={styles.meta}>Read-only source components. Each run also adds its filing context, source information, and team guidance.</p>
     {error && <><p role="alert">{error}</p><button type="button" style={ui.buttonSecondary} onClick={() => void load()}>Retry sources</button></>}
@@ -135,12 +135,12 @@ function InstructionSources() {
 }
 
 const styles = {
-  stack: { display: "grid", gap: pwc.space.lg, minWidth: 0 } as React.CSSProperties,
-  field: { display: "grid", gap: pwc.space.sm } as React.CSSProperties,
-  heading: { margin: 0, fontSize: 16, fontWeight: pwc.weight.semibold },
+  stack: { display: "grid", gap: ds.space.lg, minWidth: 0 } as React.CSSProperties,
+  field: { display: "grid", gap: ds.space.sm } as React.CSSProperties,
+  heading: { margin: 0, fontSize: 16, fontWeight: ds.weight.semibold },
   meta: { margin: 0, fontSize: 13, color: tokens.color.text.secondary },
   textarea: { ...ui.textarea, minHeight: 180, width: "100%", lineHeight: 1.5 } as React.CSSProperties,
-  actions: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: pwc.space.md, flexWrap: "wrap" } as React.CSSProperties,
-  summary: { cursor: "pointer", fontSize: 14, fontWeight: pwc.weight.medium },
-  source: { margin: 0, padding: 16, border: `1px solid ${pwc.grey200}`, borderRadius: 8, fontFamily: pwc.fontBody, fontSize: 14, lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 480, overflow: "auto" } as React.CSSProperties,
+  actions: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: ds.space.md, flexWrap: "wrap" } as React.CSSProperties,
+  summary: { cursor: "pointer", fontSize: 14, fontWeight: ds.weight.medium },
+  source: { margin: 0, padding: 16, border: `1px solid ${ds.grey200}`, borderRadius: 8, fontFamily: ds.fontBody, fontSize: 14, lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 480, overflow: "auto" } as React.CSSProperties,
 };

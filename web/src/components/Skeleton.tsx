@@ -1,4 +1,4 @@
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 
 // ---------------------------------------------------------------------------
 // Skeleton — a grey placeholder bar in the shape of the coming content, used
@@ -18,17 +18,17 @@ interface Props {
   style?: React.CSSProperties;
 }
 
-export function Skeleton({ width = "100%", height = 14, radius = pwc.radius.sm, style }: Props) {
+export function Skeleton({ width = "100%", height = 14, radius = ds.radius.sm, style }: Props) {
   return (
     <span
       aria-hidden="true"
-      className="pwc-skeleton"
+      className="app-skeleton"
       style={{
         display: "block",
         width,
         height,
         borderRadius: radius,
-        background: pwc.grey100,
+        background: ds.grey100,
         ...style,
       }}
     />

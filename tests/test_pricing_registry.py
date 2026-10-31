@@ -153,10 +153,10 @@ def test_run_detail_marks_a_cost_derived_from_a_placeholder_rate(
     assert by_stmt["SOPL"]["pricing_unconfirmed"] is False
 
 
-def test_proxy_openai_models_stay_flagged_until_pwc_rates_are_known():
+def test_proxy_openai_models_stay_flagged_until_proxy_rates_are_known():
     """The enterprise proxy may bill at its own rate card, so a vendor list
     price is not yet a confirmed cost for these. Drop the flag only when
-    somebody has the PwC rates."""
+    somebody has the enterprise proxy rates."""
     for model_id in _ids():
         if model_id.startswith("openai.global."):
             assert pricing.pricing_is_unconfirmed(model_id), model_id

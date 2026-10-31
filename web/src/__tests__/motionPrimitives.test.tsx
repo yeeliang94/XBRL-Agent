@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, test, expect, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { Disclosure } from "../components/Disclosure";
 import { Skeleton } from "../components/Skeleton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -16,30 +16,30 @@ afterEach(cleanup);
 
 describe("motion tokens", () => {
   test("theme exposes a motion budget", () => {
-    expect(pwc.motion.duration).toEqual({
+    expect(ds.motion.duration).toEqual({
       instant: "100ms",
       fast: "140ms",
       base: "180ms",
       slow: "240ms",
     });
-    expect(pwc.motion.easing).toContain("cubic-bezier");
-    expect(pwc.motion.easingEmphasized).toContain("cubic-bezier");
+    expect(ds.motion.easing).toContain("cubic-bezier");
+    expect(ds.motion.easingEmphasized).toContain("cubic-bezier");
   });
 
   test("index.css owns performant state motion and reduced-motion parity", () => {
     const css = readFileSync("src/index.css", "utf8");
-    expect(css).toContain(`--motion-instant: ${pwc.motion.duration.instant}`);
-    expect(css).toContain(`--motion-fast: ${pwc.motion.duration.fast}`);
-    expect(css).toContain(`--motion-base: ${pwc.motion.duration.base}`);
-    expect(css).toContain(`--motion-slow: ${pwc.motion.duration.slow}`);
-    expect(css).toContain(`--motion-standard: ${pwc.motion.easing}`);
-    expect(css).toContain(`--motion-emphasized: ${pwc.motion.easingEmphasized}`);
+    expect(css).toContain(`--motion-instant: ${ds.motion.duration.instant}`);
+    expect(css).toContain(`--motion-fast: ${ds.motion.duration.fast}`);
+    expect(css).toContain(`--motion-base: ${ds.motion.duration.base}`);
+    expect(css).toContain(`--motion-slow: ${ds.motion.duration.slow}`);
+    expect(css).toContain(`--motion-standard: ${ds.motion.easing}`);
+    expect(css).toContain(`--motion-emphasized: ${ds.motion.easingEmphasized}`);
     expect(css).toContain("prefers-reduced-motion: reduce");
-    expect(css).toContain(".pwc-view-enter");
-    expect(css).toContain(".pwc-disclosure-content");
+    expect(css).toContain(".app-view-enter");
+    expect(css).toContain(".app-disclosure-content");
     expect(css).toContain("transform:");
     expect(css).toContain("opacity:");
-    expect(css).toContain(".pwc-btn-primary,");
+    expect(css).toContain(".app-btn-primary,");
     expect(css).toContain(':where(button, a[href], summary, [role="button"], [role="tab"])');
     expect(css).toContain(':where(button, a[href], summary, [role="button"], [role="tab"]):active');
     expect(css).not.toContain("box-shadow: inset 0 -3px 0 #FD5108");
@@ -59,7 +59,7 @@ describe("Disclosure", () => {
     expect(screen.queryByText("hidden body")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /technical details/i }));
     const body = screen.getByText("hidden body").parentElement;
-    expect(body?.classList.contains("pwc-disclosure-content")).toBe(true);
+    expect(body?.classList.contains("app-disclosure-content")).toBe(true);
   });
 
   test("respects controlled open prop", () => {
@@ -78,7 +78,7 @@ describe("Skeleton", () => {
     const bar = container.firstChild as HTMLElement;
     expect(bar).toBeTruthy();
     expect(bar.getAttribute("aria-hidden")).toBe("true");
-    expect(bar.classList.contains("pwc-skeleton")).toBe(true);
+    expect(bar.classList.contains("app-skeleton")).toBe(true);
   });
 });
 
@@ -105,7 +105,7 @@ describe("ConfirmDialog", () => {
     );
     expect(screen.getByText("Delete this run?")).toBeTruthy();
     expect(screen.getByText("This permanently removes the run.")).toBeTruthy();
-    expect(screen.getByRole("dialog").querySelector(".pwc-dialog-enter")).toBeTruthy();
+    expect(screen.getByRole("dialog").querySelector(".app-dialog-enter")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(onConfirm).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));

@@ -1,5 +1,5 @@
 import type { TokenData } from "../lib/types";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { AnimatedNumber } from "./AnimatedNumber";
 
 interface Props {
@@ -14,43 +14,43 @@ const styles = {
     borderRadius: 0,
     border: "none",
     boxShadow: "none",
-    padding: `${pwc.space.lg}px 0`,
+    padding: `${ds.space.lg}px 0`,
   } as React.CSSProperties,
   waiting: {
-    background: pwc.grey50,
+    background: ds.grey50,
     borderRadius: 0,
     border: "none",
-    padding: pwc.space.lg,
+    padding: ds.space.lg,
     textAlign: "center" as const,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey500,
+    color: ds.grey500,
   } as React.CSSProperties,
   row: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
   metrics: {
     display: "flex",
-    gap: pwc.space.xl,
+    gap: ds.space.xl,
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
   metric: {
     textAlign: "center" as const,
   } as React.CSSProperties,
   metricLabel: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 12,
-    color: pwc.grey500,
+    color: ds.grey500,
   } as React.CSSProperties,
   metricValue: {
-    fontFamily: pwc.fontMono,
+    fontFamily: ds.fontMono,
     fontSize: 16,
-    fontWeight: pwc.weight.regular,
-    color: pwc.grey900,
+    fontWeight: ds.weight.regular,
+    color: ds.grey900,
   } as React.CSSProperties,
   costSection: {
     textAlign: "right" as const,
@@ -59,24 +59,24 @@ const styles = {
     alignItems: "flex-end",
   } as React.CSSProperties,
   costLabel: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 12,
-    color: pwc.grey500,
+    color: ds.grey500,
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.xs,
+    gap: ds.space.xs,
   } as React.CSSProperties,
   costValue: {
-    fontFamily: pwc.fontMono,
+    fontFamily: ds.fontMono,
     fontSize: 16,
-    fontWeight: pwc.weight.regular,
-    color: pwc.success,
+    fontWeight: ds.weight.regular,
+    color: ds.success,
   } as React.CSSProperties,
   // Usage arrives at model-response boundaries rather than per streamed word.
   costCaption: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 12,
-    color: pwc.grey500,
+    color: ds.grey500,
     marginTop: 2,
     maxWidth: 220,
     textAlign: "right" as const,
@@ -86,7 +86,7 @@ const styles = {
     width: 8,
     height: 8,
     borderRadius: "50%",
-    background: pwc.orange400,
+    background: ds.orange400,
     display: "inline-block",
   } as React.CSSProperties,
 };
@@ -94,7 +94,7 @@ const styles = {
 export function TokenDashboard({ tokens, isRunning, embedded = false }: Props) {
   if (!tokens) {
     return (
-      <div style={embedded ? { ...styles.waiting, border: "none", padding: pwc.space.md } : styles.waiting}>
+      <div style={embedded ? { ...styles.waiting, border: "none", padding: ds.space.md } : styles.waiting}>
         Waiting for token data...
       </div>
     );
@@ -114,7 +114,7 @@ export function TokenDashboard({ tokens, isRunning, embedded = false }: Props) {
   ];
 
   return (
-    <div style={embedded ? { ...styles.container, border: "none", boxShadow: "none", padding: pwc.space.lg } : styles.container}>
+    <div style={embedded ? { ...styles.container, border: "none", boxShadow: "none", padding: ds.space.lg } : styles.container}>
       <div style={styles.row}>
         <div style={styles.metrics}>
           {metrics.map((m) => (

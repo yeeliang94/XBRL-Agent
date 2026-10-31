@@ -139,13 +139,13 @@ def test_post_settings_writes_local_file(tmp_path, monkeypatch):
     resp = client.post("/api/settings", json={
         "model": "vertex_ai.gemini-3-flash-preview",
         "api_key": "test-key-123",
-        "proxy_url": "https://genai-sharedservice-emea.pwc.com",
+        "proxy_url": "https://llm-proxy.example.com",
     })
     assert resp.status_code == 200
     saved = __import__("json").loads(settings_file.read_text())
     assert saved["TEST_MODEL"] == "vertex_ai.gemini-3-flash-preview"
     assert saved["GOOGLE_API_KEY"] == "test-key-123"
-    assert saved["LLM_PROXY_URL"] == "https://genai-sharedservice-emea.pwc.com"
+    assert saved["LLM_PROXY_URL"] == "https://llm-proxy.example.com"
     assert not env_file.exists()
 
 

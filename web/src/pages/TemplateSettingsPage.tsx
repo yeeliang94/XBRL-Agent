@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { ApiError, userMessage } from "../lib/errors";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { PageHeader } from "../components/PageHeader";
 import { templateGroupLabel, templatePickerLabel } from "../lib/sheetLabels";
@@ -150,18 +150,18 @@ export function TemplateSettingsPage() {
       <PageHeader title="Field labels" />
       {error && (
         <div role="alert" style={ui.alertError}>
-          <span aria-hidden="true" style={ui.alertIcon(pwc.error)}><ErrorCircle size={20} /></span>
+          <span aria-hidden="true" style={ui.alertIcon(ds.error)}><ErrorCircle size={20} /></span>
           <div>{error}</div>
         </div>
       )}
       {loading ? (
-        <div style={{ color: pwc.grey700, padding: `${pwc.space.md}px 0` }}>
+        <div style={{ color: ds.grey700, padding: `${ds.space.md}px 0` }}>
           Loading templates…
         </div>
       ) : templates.length === 0 ? (
         <div
           data-testid="ts-empty"
-          style={{ color: pwc.grey700, padding: `${pwc.space.md}px 0` }}
+          style={{ color: ds.grey700, padding: `${ds.space.md}px 0` }}
         >
           No templates yet. Run an extraction first — the templates it uses will
           appear here for you to relabel.
@@ -218,7 +218,7 @@ export function TemplateSettingsPage() {
       </p>
       <div
         role="table"
-        className="pwc-view-enter"
+        className="app-view-enter"
         style={styles.tableWrap}
       >
         {concepts.length === 0 ? (
@@ -287,15 +287,15 @@ function TemplateConceptRow({
       style={{
         display: "grid",
         gridTemplateColumns: "minmax(0, 1fr) auto",
-        gap: pwc.space.lg,
+        gap: ds.space.lg,
         minHeight: 40,
-        padding: `${pwc.space.xs}px 0 ${pwc.space.xs}px ${isAbstract ? pwc.space.sm : 0}px`,
-        borderBottom: `1px solid ${pwc.grey100}`,
-        background: isAbstract ? pwc.grey50 : pwc.white,
+        padding: `${ds.space.xs}px 0 ${ds.space.xs}px ${isAbstract ? ds.space.sm : 0}px`,
+        borderBottom: `1px solid ${ds.grey100}`,
+        background: isAbstract ? ds.grey50 : ds.white,
         alignItems: "center",
-        fontFamily: pwc.fontBody,
+        fontFamily: ds.fontBody,
         fontSize: 14,
-        fontWeight: isAbstract ? pwc.weight.medium : pwc.weight.regular,
+        fontWeight: isAbstract ? ds.weight.medium : ds.weight.regular,
         lineHeight: 1.5,
       }}
     >
@@ -330,7 +330,7 @@ function TemplateConceptRow({
           </div>
         )}
       </div>
-      {!isAbstract && <div style={{ display: "flex", gap: pwc.space.sm, justifyContent: "flex-end", flexWrap: "wrap" }}>
+      {!isAbstract && <div style={{ display: "flex", gap: ds.space.sm, justifyContent: "flex-end", flexWrap: "wrap" }}>
         {!isAbstract && !editing && (
           <>
             {concept.display_label && (
@@ -350,7 +350,7 @@ function TemplateConceptRow({
               onClick={startEditing}
               aria-label={`Rename ${label}`}
               className={`${uiClass.btnQuiet} ts-row-action`}
-              style={{ ...ui.buttonQuiet, padding: `0 ${pwc.space.sm}px`, gap: pwc.space.xs }}
+              style={{ ...ui.buttonQuiet, padding: `0 ${ds.space.sm}px`, gap: ds.space.xs }}
             >
               <Edit size={20} />
               Rename
@@ -389,38 +389,38 @@ const styles = {
     ...ui.pageWide,
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xl,
+    gap: ds.space.xl,
   } as React.CSSProperties,
   toolbar: {
     ...ui.filterToolbar,
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
   } as React.CSSProperties,
   field: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
   legend: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     margin: 0,
-    color: pwc.grey700,
-    fontFamily: pwc.fontBody,
+    color: ds.grey700,
+    fontFamily: ds.fontBody,
     fontSize: 13,
   } as React.CSSProperties,
   legendSwatch: {
     display: "inline-block",
     width: 28,
     height: 12,
-    background: pwc.grey100,
+    background: ds.grey100,
     borderRadius: 2,
     flexShrink: 0,
   } as React.CSSProperties,
   // Neutral edited marker: standard symbol + explicit label, no chip.
   edited: {
     display: "block",
-    color: pwc.grey700,
+    color: ds.grey700,
     fontSize: 12,
     lineHeight: 1.5,
   } as React.CSSProperties,
@@ -429,8 +429,8 @@ const styles = {
     overflow: "hidden",
   } as React.CSSProperties,
   emptyRow: {
-    color: pwc.grey700,
-    padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
+    color: ds.grey700,
+    padding: `${ds.space.lg}px ${ds.space.xl}px`,
     fontSize: 14,
   } as React.CSSProperties,
 } as const;

@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { userMessage } from "../lib/errors";
 import type { UploadResponse } from "../lib/types";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ElapsedTimer } from "./ElapsedTimer";
 import { FileDropzone } from "./FileDropzone";
 
@@ -31,42 +31,42 @@ const styles = {
   } as React.CSSProperties,
   runButton: {
     padding: "10px 24px",
-    backgroundColor: pwc.black,
-    color: pwc.white,
+    backgroundColor: ds.black,
+    color: ds.white,
     border: "none",
-    borderRadius: pwc.radius.md,
+    borderRadius: ds.radius.md,
     fontSize: 14,
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontWeight: 500,
     cursor: "pointer",
   } as React.CSSProperties,
   runningRow: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
   spinner: {
     width: 20,
     height: 20,
-    border: `3px solid ${pwc.grey200}`,
-    borderTop: `3px solid ${pwc.orange500}`,
+    border: `3px solid ${ds.grey200}`,
+    borderTop: `3px solid ${ds.orange500}`,
     borderRadius: "50%",
   } as React.CSSProperties,
   error: {
-    fontFamily: pwc.fontBody,
-    color: pwc.errorText,
+    fontFamily: ds.fontBody,
+    color: ds.errorText,
     fontSize: 14,
-    marginTop: pwc.space.sm,
+    marginTop: ds.space.sm,
   } as React.CSSProperties,
   uploading: {
-    fontFamily: pwc.fontBody,
-    color: pwc.grey700,
+    fontFamily: ds.fontBody,
+    color: ds.grey700,
     fontSize: 14,
-    marginTop: pwc.space.sm,
+    marginTop: ds.space.sm,
   } as React.CSSProperties,
   uploadHint: {
-    fontFamily: pwc.fontBody,
-    color: pwc.grey700,
+    fontFamily: ds.fontBody,
+    color: ds.grey700,
     fontSize: 13,
   } as React.CSSProperties,
 };
@@ -143,7 +143,7 @@ export function UploadPanel({ onUpload, onUploadFiles, isRunning, filename, star
         // The file name is the page title, so only the live timer remains.
         <div style={styles.fileRow}>
           <div style={styles.runningRow}>
-            <div data-testid="run-spinner" className="pwc-spinner" style={styles.spinner} />
+            <div data-testid="run-spinner" className="app-spinner" style={styles.spinner} />
             {startTime && <ElapsedTimer startTime={startTime} isRunning={isRunning} />}
           </div>
         </div>

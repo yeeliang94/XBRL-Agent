@@ -1,5 +1,5 @@
 import React from "react";
-import { pwc } from "./../lib/theme";
+import { ds } from "./../lib/theme";
 import type { AgentTabStatus } from "./../lib/types";
 import { STATUS_SYMBOLS, type StatusSymbol } from "./../lib/runStatus";
 import { StatusIcon } from "./StatusIcon";
@@ -110,12 +110,12 @@ export function NotesSubTabBar({
 function chipStyle(active: boolean): React.CSSProperties {
   return {
     padding: "4px 10px",
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 12,
     fontWeight: active ? 600 : 500,
-    color: active ? pwc.black : pwc.grey700,
-    background: active ? pwc.grey50 : pwc.white,
-    border: `1px solid ${active ? pwc.grey300 : pwc.grey200}`,
+    color: active ? ds.black : ds.grey700,
+    background: active ? ds.grey50 : ds.white,
+    border: `1px solid ${active ? ds.grey300 : ds.grey200}`,
     borderRadius: 999,
     cursor: "pointer",
     whiteSpace: "nowrap",
@@ -127,9 +127,9 @@ const styles = {
     display: "flex",
     gap: 6,
     alignItems: "center",
-    padding: `${pwc.space.xs}px ${pwc.space.md}px`,
-    borderBottom: `1px solid ${pwc.grey200}`,
-    background: pwc.grey50,
+    padding: `${ds.space.xs}px ${ds.space.md}px`,
+    borderBottom: `1px solid ${ds.grey200}`,
+    background: ds.grey50,
     overflowX: "auto" as const,
   } as React.CSSProperties,
   wrappingBar: {
@@ -137,10 +137,10 @@ const styles = {
     flexWrap: "wrap",
     gap: 6,
     alignItems: "center",
-    padding: `${pwc.space.xs}px ${pwc.space.md}px`,
-    borderBottom: `1px solid ${pwc.grey200}`,
-    background: pwc.grey50,
+    padding: `${ds.space.xs}px ${ds.space.md}px`,
+    borderBottom: `1px solid ${ds.grey200}`,
+    background: ds.grey50,
   } as React.CSSProperties,
   chipIcon: { marginRight: 4, verticalAlign: "-2px" } as React.CSSProperties,
-  failed: { color: pwc.error } as React.CSSProperties,
+  failed: { color: ds.error } as React.CSSProperties,
 };

@@ -17,7 +17,7 @@ describe("UploadPanel — P1 enhancements", () => {
     );
     const spinner = container.querySelector("[data-testid='run-spinner']");
     expect(spinner).toBeInTheDocument();
-    expect(spinner).toHaveClass("pwc-spinner");
+    expect(spinner).toHaveClass("app-spinner");
   });
 
   test("shows ElapsedTimer when isRunning=true with startTime", () => {

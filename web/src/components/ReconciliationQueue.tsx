@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { ApiError, userMessage } from "../lib/errors";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 
 // ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ export function ReconciliationQueue({
     return (
       <div
         data-testid="reconciliation-queue-error"
-        style={{ color: pwc.error, padding: pwc.space.md }}
+        style={{ color: ds.error, padding: ds.space.md }}
       >
         Failed to load conflicts: {loadError}
       </div>
@@ -129,9 +129,9 @@ export function ReconciliationQueue({
         <div
           data-testid="reconciliation-action-error"
           style={{
-            color: pwc.error,
+            color: ds.error,
             fontSize: 12,
-            marginBottom: pwc.space.sm,
+            marginBottom: ds.space.sm,
           }}
         >
           {actionError}
@@ -141,10 +141,10 @@ export function ReconciliationQueue({
         <div
           data-testid="reconciliation-empty"
           style={{
-            color: pwc.grey700,
+            color: ds.grey700,
             fontSize: 13,
             lineHeight: 1.5,
-            padding: `${pwc.space.sm}px 0`,
+            padding: `${ds.space.sm}px 0`,
           }}
         >
           No open conflicts.
@@ -161,9 +161,9 @@ export function ReconciliationQueue({
                   : undefined
               }
               style={{
-                padding: `${pwc.space.md}px 0`,
-                borderTop: `1px solid ${pwc.grey100}`,
-                marginBottom: pwc.space.sm,
+                padding: `${ds.space.md}px 0`,
+                borderTop: `1px solid ${ds.grey100}`,
+                marginBottom: ds.space.sm,
                 cursor: onSelectConcept ? "pointer" : "default",
               }}
             >
@@ -172,12 +172,12 @@ export function ReconciliationQueue({
                   fontSize: 13,
                   fontWeight: 400,
                   lineHeight: 1.4,
-                  color: pwc.grey900,
+                  color: ds.grey900,
                 }}
               >
                 {c.canonical_label || c.concept_uuid}
               </div>
-              <div style={{ fontSize: 12, color: pwc.grey700 }}>
+              <div style={{ fontSize: 12, color: ds.grey700 }}>
                 {c.kind}
                 {c.residual !== null && (
                   <> · residual {c.residual.toFixed(2)}</>
@@ -186,7 +186,7 @@ export function ReconciliationQueue({
               {c.detail && (
                 <div style={{ fontSize: 12, marginTop: 2 }}>{c.detail}</div>
               )}
-              <div style={{ marginTop: pwc.space.sm, display: "flex", gap: pwc.space.sm }}>
+              <div style={{ marginTop: ds.space.sm, display: "flex", gap: ds.space.sm }}>
                 <button
                   data-testid={`resolve-btn-${c.id}`}
                   className={uiClass.btnPrimary}
@@ -198,7 +198,7 @@ export function ReconciliationQueue({
                   style={{
                     ...ui.buttonPrimary,
                     minHeight: 30,
-                    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+                    padding: `${ds.space.xs}px ${ds.space.sm}px`,
                     fontSize: 12,
                   }}
                 >
@@ -214,7 +214,7 @@ export function ReconciliationQueue({
                   style={{
                     ...ui.buttonSecondary,
                     minHeight: 30,
-                    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+                    padding: `${ds.space.xs}px ${ds.space.sm}px`,
                     fontSize: 12,
                   }}
                 >
@@ -237,17 +237,17 @@ export function ReconciliationQueue({
       data-testid="reconciliation-queue"
       style={{
         ...ui.card,
-        padding: pwc.space.lg,
+        padding: ds.space.lg,
       }}
     >
       <h2
         style={{
           margin: 0,
-          marginBottom: pwc.space.md,
-          fontFamily: pwc.fontHeading,
-          color: pwc.grey900,
+          marginBottom: ds.space.md,
+          fontFamily: ds.fontHeading,
+          color: ds.grey900,
           fontSize: 14,
-          fontWeight: pwc.weight.semibold,
+          fontWeight: ds.weight.semibold,
         }}
       >
         Reconciliation queue ({conflicts.length})

@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import { userMessage } from "../lib/errors";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { changePassword } from "../lib/api";
 
@@ -14,14 +14,14 @@ import { changePassword } from "../lib/api";
 const MIN_LEN = 8;
 
 const styles = {
-  fieldGroup: { marginBottom: pwc.space.lg } as React.CSSProperties,
+  fieldGroup: { marginBottom: ds.space.lg } as React.CSSProperties,
   label: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontWeight: 500,
     fontSize: 14,
-    color: pwc.grey700,
+    color: ds.grey700,
     display: "block",
-    marginBottom: pwc.space.xs,
+    marginBottom: ds.space.xs,
   } as React.CSSProperties,
   // Adopt the shared input primitive (Phase 6 layout normalization: 11/16
   // padding, 44px min-height, grey300 border) instead of the off-spec local one.
@@ -31,31 +31,31 @@ const styles = {
     boxSizing: "border-box" as const,
   } as React.CSSProperties,
   helperText: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.grey700,
-    marginTop: pwc.space.xs,
+    color: ds.grey700,
+    marginTop: ds.space.xs,
   } as React.CSSProperties,
   errorText: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.errorText,
-    marginTop: pwc.space.sm,
+    color: ds.errorText,
+    marginTop: ds.space.sm,
   } as React.CSSProperties,
   successText: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.successText,
-    marginTop: pwc.space.sm,
+    color: ds.successText,
+    marginTop: ds.space.sm,
   } as React.CSSProperties,
   actions: {
     display: "flex",
     alignItems: "center",
     justifyContent: "flex-end",
-    gap: pwc.space.md,
-    marginTop: pwc.space.xl,
-    paddingTop: pwc.space.lg,
-    borderTop: `1px solid ${pwc.grey200}`,
+    gap: ds.space.md,
+    marginTop: ds.space.xl,
+    paddingTop: ds.space.lg,
+    borderTop: `1px solid ${ds.grey200}`,
   } as React.CSSProperties,
   saveButton: { ...ui.buttonPrimary, ...ui.buttonSm } as React.CSSProperties,
 };

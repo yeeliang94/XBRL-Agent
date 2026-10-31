@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { STATUS_SYMBOLS, type StatusSymbol } from "../lib/runStatus";
 import { StatusIcon } from "./StatusIcon";
@@ -95,7 +95,7 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
   return (
     <div style={embedded ? styles.embeddedContainer : styles.container}>
       {partial && (
-        <p style={{ fontFamily: pwc.fontBody, fontSize: 14, color: pwc.warningText, margin: `0 0 ${pwc.space.md}px 0` }}>
+        <p style={{ fontFamily: ds.fontBody, fontSize: 14, color: ds.warningText, margin: `0 0 ${ds.space.md}px 0` }}>
           Group filing: cross-checks currently validate consolidated (Group) figures only. Standalone (Company) columns are not yet checked.
         </p>
       )}
@@ -115,13 +115,13 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                 <span style={ui.status}><StatusIcon symbol={display.symbol} />{display.label}</span>
                 {/* Routine passes stay one line; their figures open on demand. */}
                 {check.status === "passed" && (
-                  <button type="button" className="pwc-btn-quiet" style={{ ...ui.buttonQuiet, marginRight: -15 }}
+                  <button type="button" className="app-btn-quiet" style={{ ...ui.buttonQuiet, marginRight: -15 }}
                     aria-expanded={openPassed.has(check.name)}
                     onClick={() => setOpenPassed((open) => { const next = new Set(open); if (next.has(check.name)) next.delete(check.name); else next.add(check.name); return next; })}>
                     {openPassed.has(check.name) ? "Hide figures" : "Show figures"}
                   </button>
                 )}
-                {target && check.status !== "passed" && <button type="button" className="pwc-btn-quiet" style={{ ...ui.buttonQuiet, marginRight: -15 }} onClick={() => onSelectTarget!(check.target_sheet!, check.target_row!)}>Review figures</button>}
+                {target && check.status !== "passed" && <button type="button" className="app-btn-quiet" style={{ ...ui.buttonQuiet, marginRight: -15 }} onClick={() => onSelectTarget!(check.target_sheet!, check.target_row!)}>Review figures</button>}
               </div>
               {(check.status !== "passed" || openPassed.has(check.name)) && <>
               {hasValues ? (
@@ -194,46 +194,46 @@ const styles = {
     tableLayout: "fixed" as const,
     borderCollapse: "collapse" as const,
     fontSize: 14,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
   } as React.CSSProperties,
-  checkList: { display: "grid", gap: 0, minWidth: 0, borderTop: `1px solid ${pwc.grey200}` } as React.CSSProperties,
-  check: { borderBottom: `1px solid ${pwc.grey200}`, padding: `${pwc.space.sm}px 0 ${pwc.space.lg}px`, minWidth: 0 } as React.CSSProperties,
-  checkHeader: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: pwc.space.md, minHeight: 48 } as React.CSSProperties,
-  checkTitle: { flex: "1 1 300px", fontFamily: pwc.fontHeading, fontSize: 14, fontWeight: pwc.weight.medium, margin: 0, overflowWrap: "anywhere" } as React.CSSProperties,
+  checkList: { display: "grid", gap: 0, minWidth: 0, borderTop: `1px solid ${ds.grey200}` } as React.CSSProperties,
+  check: { borderBottom: `1px solid ${ds.grey200}`, padding: `${ds.space.sm}px 0 ${ds.space.lg}px`, minWidth: 0 } as React.CSSProperties,
+  checkHeader: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: ds.space.md, minHeight: 48 } as React.CSSProperties,
+  checkTitle: { flex: "1 1 300px", fontFamily: ds.fontHeading, fontSize: 14, fontWeight: ds.weight.medium, margin: 0, overflowWrap: "anywhere" } as React.CSSProperties,
   tableRegion: { overflowX: "auto", maxWidth: "100%" } as React.CSSProperties,
-  figureLabel: { textAlign: "left", fontWeight: pwc.weight.regular, padding: `${pwc.space.sm}px ${pwc.space.md}px ${pwc.space.sm}px 0`, borderBottom: `1px solid ${pwc.grey100}`, overflowWrap: "anywhere" } as React.CSSProperties,
-  sourceLabel: { color: pwc.grey700, fontSize: 12, marginTop: pwc.space.xs } as React.CSSProperties,
-  number: { ...ui.numeric, padding: `${pwc.space.sm}px ${pwc.space.md}px`, borderBottom: `1px solid ${pwc.grey100}`, whiteSpace: "nowrap" } as React.CSSProperties,
-  checkFooter: { display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: pwc.space.sm, paddingTop: pwc.space.md, fontSize: 13 } as React.CSSProperties,
-  note: { color: pwc.grey700, fontSize: 13, margin: 0 } as React.CSSProperties,
-  footerNote: { color: pwc.grey700 } as React.CSSProperties,
-  technicalDetails: { paddingTop: pwc.space.sm, fontSize: 13, color: pwc.grey700, overflowWrap: "anywhere" } as React.CSSProperties,
-  detailText: { margin: `${pwc.space.sm}px 0 0`, lineHeight: 1.5, overflowWrap: "anywhere" } as React.CSSProperties,
+  figureLabel: { textAlign: "left", fontWeight: ds.weight.regular, padding: `${ds.space.sm}px ${ds.space.md}px ${ds.space.sm}px 0`, borderBottom: `1px solid ${ds.grey100}`, overflowWrap: "anywhere" } as React.CSSProperties,
+  sourceLabel: { color: ds.grey700, fontSize: 12, marginTop: ds.space.xs } as React.CSSProperties,
+  number: { ...ui.numeric, padding: `${ds.space.sm}px ${ds.space.md}px`, borderBottom: `1px solid ${ds.grey100}`, whiteSpace: "nowrap" } as React.CSSProperties,
+  checkFooter: { display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: ds.space.sm, paddingTop: ds.space.md, fontSize: 13 } as React.CSSProperties,
+  note: { color: ds.grey700, fontSize: 13, margin: 0 } as React.CSSProperties,
+  footerNote: { color: ds.grey700 } as React.CSSProperties,
+  technicalDetails: { paddingTop: ds.space.sm, fontSize: 13, color: ds.grey700, overflowWrap: "anywhere" } as React.CSSProperties,
+  detailText: { margin: `${ds.space.sm}px 0 0`, lineHeight: 1.5, overflowWrap: "anywhere" } as React.CSSProperties,
   // Sentence-case headers (design-system Tables), compact density.
   th: {
     ...ui.thDense,
     background: "transparent",
-    borderBottom: `2px solid ${pwc.grey200}`,
+    borderBottom: `2px solid ${ds.grey200}`,
   } as React.CSSProperties,
   empty: {
-    padding: pwc.space.xl,
+    padding: ds.space.xl,
     textAlign: "center" as const,
   } as React.CSSProperties,
   emptyText: {
-    fontFamily: pwc.fontBody,
-    color: pwc.grey500,
+    fontFamily: ds.fontBody,
+    color: ds.grey500,
     fontSize: 14,
   } as React.CSSProperties,
   warningsSection: {
-    marginTop: pwc.space.lg,
+    marginTop: ds.space.lg,
     border: "none",
-    borderRadius: pwc.radius.md,
+    borderRadius: ds.radius.md,
   } as React.CSSProperties,
   warningSummary: {
     cursor: "pointer",
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey900,
+    color: ds.grey900,
   } as React.CSSProperties,
   warningList: {
     listStyle: "none",
@@ -241,19 +241,19 @@ const styles = {
     margin: 0,
   } as React.CSSProperties,
   warningItem: {
-    padding: `${pwc.space.sm}px 0`,
-    borderTop: `1px solid ${pwc.grey200}`,
+    padding: `${ds.space.sm}px 0`,
+    borderTop: `1px solid ${ds.grey200}`,
   } as React.CSSProperties,
   warningName: {
-    fontFamily: pwc.fontMono,
+    fontFamily: ds.fontMono,
     fontSize: 13,
-    color: pwc.grey900,
+    color: ds.grey900,
   } as React.CSSProperties,
   warningMessage: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey700,
-    marginTop: pwc.space.xs,
+    color: ds.grey700,
+    marginTop: ds.space.xs,
     lineHeight: 1.45,
   } as React.CSSProperties,
 } as const;

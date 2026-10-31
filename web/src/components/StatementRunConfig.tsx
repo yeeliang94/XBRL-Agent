@@ -1,7 +1,7 @@
 import { ui } from "../lib/uiStyles";
 import type { StatementType, ModelEntry, FilingStandard } from "../lib/types";
 import { STATEMENT_TYPES, statementLabel } from "../lib/types";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 
 interface Props {
   enabled: Record<StatementType, boolean>;
@@ -24,38 +24,38 @@ const styles = {
     borderCollapse: "collapse" as const,
   } as React.CSSProperties,
   row: {
-    borderBottom: `1px solid ${pwc.grey100}`,
+    borderBottom: `1px solid ${ds.grey100}`,
   } as React.CSSProperties,
   cell: {
-    padding: `${pwc.space.sm}px 0`,
+    padding: `${ds.space.sm}px 0`,
     verticalAlign: "middle" as const,
   } as React.CSSProperties,
   modelCell: {
-    padding: `${pwc.space.sm}px 0 ${pwc.space.sm}px ${pwc.space.lg}px`,
+    padding: `${ds.space.sm}px 0 ${ds.space.sm}px ${ds.space.lg}px`,
     verticalAlign: "middle" as const,
   } as React.CSSProperties,
   label: {
-    fontFamily: pwc.fontBody,
-    fontWeight: pwc.weight.regular,
+    fontFamily: ds.fontBody,
+    fontWeight: ds.weight.regular,
     fontSize: 14,
-    color: pwc.grey900,
+    color: ds.grey900,
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     cursor: "pointer",
   } as React.CSSProperties,
   labelDisabled: {
-    fontFamily: pwc.fontBody,
-    fontWeight: pwc.weight.regular,
+    fontFamily: ds.fontBody,
+    fontWeight: ds.weight.regular,
     fontSize: 14,
-    color: pwc.grey700,
+    color: ds.grey700,
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     cursor: "pointer",
   } as React.CSSProperties,
   stmtName: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
     color: "inherit",
   } as React.CSSProperties,

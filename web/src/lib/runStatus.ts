@@ -1,4 +1,4 @@
-import { pwc } from "./theme";
+import { ds } from "./theme";
 import { humanize } from "./vocabulary";
 
 // ---------------------------------------------------------------------------
@@ -57,35 +57,35 @@ export interface RunStatusDisplay {
 const FALLBACK: RunStatusDisplay = {
   label: "Unknown",
   symbol: STATUS_SYMBOLS.inactive,
-  accent: pwc.grey500,
-  color: pwc.grey700,
-  bg: pwc.grey100,
+  accent: ds.grey500,
+  color: ds.grey700,
+  bg: ds.grey100,
 };
 
 const RUN_STATUS_MAP: Record<string, RunStatusDisplay> = {
   // PLAN-persistent-draft-uploads.md (Phase D): drafts are unstarted
   // uploads — "waiting" rather than success/failure.
-  draft:                  { label: "Waiting",               symbol: STATUS_SYMBOLS.inactive,   accent: pwc.grey500,   color: pwc.grey700,     bg: pwc.grey100 },
-  running:                { label: "Working",               symbol: STATUS_SYMBOLS.inProgress, accent: pwc.orange500, color: pwc.orange500,   bg: pwc.orange50 },
-  completed:              { label: "Complete",              symbol: STATUS_SYMBOLS.success,    accent: pwc.success,   color: pwc.success,     bg: pwc.successBg },
-  completed_with_errors:  { label: "Needs review",          symbol: STATUS_SYMBOLS.attention,  accent: pwc.warning,   color: pwc.warningText, bg: pwc.warningBg },
+  draft:                  { label: "Waiting",               symbol: STATUS_SYMBOLS.inactive,   accent: ds.grey500,   color: ds.grey700,     bg: ds.grey100 },
+  running:                { label: "Working",               symbol: STATUS_SYMBOLS.inProgress, accent: ds.orange500, color: ds.orange500,   bg: ds.orange50 },
+  completed:              { label: "Complete",              symbol: STATUS_SYMBOLS.success,    accent: ds.success,   color: ds.success,     bg: ds.successBg },
+  completed_with_errors:  { label: "Needs review",          symbol: STATUS_SYMBOLS.attention,  accent: ds.warning,   color: ds.warningText, bg: ds.warningBg },
   // RUN-REVIEW P0-1 (2026-04-26): correction agent hit its turn budget
   // without converging — needs a human. The distinct label keeps it apart
   // from a hard failure.
-  correction_exhausted:   { label: "Needs review",          symbol: STATUS_SYMBOLS.attention,  accent: pwc.error,     color: pwc.errorText,   bg: pwc.warningBg },
-  failed:                 { label: "Failed",                symbol: STATUS_SYMBOLS.failure,    accent: pwc.error,     color: pwc.error,       bg: pwc.errorBg },
-  aborted:                { label: "Stopped",               symbol: STATUS_SYMBOLS.inactive,    accent: pwc.grey500,   color: pwc.grey700,     bg: pwc.grey100 },
+  correction_exhausted:   { label: "Needs review",          symbol: STATUS_SYMBOLS.attention,  accent: ds.error,     color: ds.errorText,   bg: ds.warningBg },
+  failed:                 { label: "Failed",                symbol: STATUS_SYMBOLS.failure,    accent: ds.error,     color: ds.error,       bg: ds.errorBg },
+  aborted:                { label: "Stopped",               symbol: STATUS_SYMBOLS.inactive,    accent: ds.grey500,   color: ds.grey700,     bg: ds.grey100 },
 };
 
 const AGENT_STATUS_MAP: Record<string, RunStatusDisplay> = {
-  running:    { label: "Working",   symbol: STATUS_SYMBOLS.inProgress, accent: pwc.orange500, color: pwc.orange500, bg: pwc.orange50 },
+  running:    { label: "Working",   symbol: STATUS_SYMBOLS.inProgress, accent: ds.orange500, color: ds.orange500, bg: ds.orange50 },
   // Coordinator-emitted "succeeded" is the per-agent equivalent of run-level
   // "completed" — render as Completed so the UI uses one consistent verb.
-  succeeded:  { label: "Complete",  symbol: STATUS_SYMBOLS.success,    accent: pwc.success,   color: pwc.success,   bg: pwc.successBg },
-  completed:  { label: "Complete",  symbol: STATUS_SYMBOLS.success,    accent: pwc.success,   color: pwc.success,   bg: pwc.successBg },
-  failed:     { label: "Failed",    symbol: STATUS_SYMBOLS.failure,    accent: pwc.error,     color: pwc.error,     bg: pwc.errorBg },
-  cancelled:  { label: "Stopped",   symbol: STATUS_SYMBOLS.inactive,    accent: pwc.grey500,   color: pwc.grey700,   bg: pwc.grey100 },
-  aborted:    { label: "Stopped",   symbol: STATUS_SYMBOLS.inactive,    accent: pwc.grey500,   color: pwc.grey700,   bg: pwc.grey100 },
+  succeeded:  { label: "Complete",  symbol: STATUS_SYMBOLS.success,    accent: ds.success,   color: ds.success,   bg: ds.successBg },
+  completed:  { label: "Complete",  symbol: STATUS_SYMBOLS.success,    accent: ds.success,   color: ds.success,   bg: ds.successBg },
+  failed:     { label: "Failed",    symbol: STATUS_SYMBOLS.failure,    accent: ds.error,     color: ds.error,     bg: ds.errorBg },
+  cancelled:  { label: "Stopped",   symbol: STATUS_SYMBOLS.inactive,    accent: ds.grey500,   color: ds.grey700,   bg: ds.grey100 },
+  aborted:    { label: "Stopped",   symbol: STATUS_SYMBOLS.inactive,    accent: ds.grey500,   color: ds.grey700,   bg: ds.grey100 },
 };
 
 /** Look up a run-level status. Unknown values get a clearly-labeled fallback

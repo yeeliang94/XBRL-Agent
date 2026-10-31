@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { RUN_STATUS_FILTER_OPTIONS } from "../lib/runStatus";
 import type { FilingStandard, RunsFilterParams } from "../lib/types";
@@ -199,7 +199,7 @@ const styles = {
     position: "sticky" as const,
     top: 0,
     zIndex: 5,
-    padding: `${pwc.space.md}px 0`,
+    padding: `${ds.space.md}px 0`,
     background: "transparent",
     border: "none",
     borderRadius: 0,
@@ -207,7 +207,7 @@ const styles = {
   actions: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     gridColumn: "1 / -1",
     justifyContent: "flex-end",
   } as React.CSSProperties,
@@ -218,13 +218,13 @@ const styles = {
   label: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.sm,
-    fontFamily: pwc.fontBody,
+    gap: ds.space.sm,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey700,
+    color: ds.grey700,
   } as React.CSSProperties,
   labelText: {
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
     letterSpacing: 0,
   } as React.CSSProperties,
   input: {

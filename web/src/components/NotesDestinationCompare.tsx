@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { isBlankHtml, moveNotesCell, type NotesCell, type NotesSheet } from "../lib/notesCells";
 import { notesSheetDisplayName } from "../lib/sheetLabels";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 
 /** Both coordinates and revisions are reviewed before a single atomic move. */
@@ -28,10 +28,10 @@ export function NotesDestinationCompare({ runId, sourceSheet, source, sheets, di
   // The server repeats the empty/revision checks under its write lock.
   const occupied = destination?.occupied ?? false;
   const sourceIsBlank = useMemo(() => isBlankHtml(source.html), [source.html]);
-  return <details onToggle={(event) => setOpen(event.currentTarget.open)} style={{ borderBottom: `1px solid ${pwc.grey200}`, padding: 12 }}>
+  return <details onToggle={(event) => setOpen(event.currentTarget.open)} style={{ borderBottom: `1px solid ${ds.grey200}`, padding: 12 }}>
     <summary style={{ cursor: "pointer", fontSize: 13 }}>Compare destination</summary>
     {open && <>
-    <p style={{ fontSize: 12, color: pwc.grey700 }}>Current: {notesSheetDisplayName(sourceSheet)} · row {source.row} · {source.label}</p>
+    <p style={{ fontSize: 12, color: ds.grey700 }}>Current: {notesSheetDisplayName(sourceSheet)} · row {source.row} · {source.label}</p>
     <label style={ui.fieldLabel}>Find an alternative field
       <input aria-label="Search destination fields" type="search" value={query} onChange={(event) => setQuery(event.target.value)} style={{ ...ui.input, width: "100%" }} />
     </label>
@@ -43,7 +43,7 @@ export function NotesDestinationCompare({ runId, sourceSheet, source, sheets, di
     </select>
     {destination && <>
       <p style={{ fontSize: 12 }}>{occupied ? "This field already has content. Choose an empty field to move." : "Empty destination. Moving leaves the current field empty and keeps its source evidence."}</p>
-      {occupied && <div className="tiptap" style={{ maxHeight: 220, overflow: "auto", padding: 12, border: `1px solid ${pwc.grey200}` }} dangerouslySetInnerHTML={{ __html: destination.cell.html }} />}
+      {occupied && <div className="tiptap" style={{ maxHeight: 220, overflow: "auto", padding: 12, border: `1px solid ${ds.grey200}` }} dangerouslySetInnerHTML={{ __html: destination.cell.html }} />}
       <button type="button" style={{ ...ui.buttonGhost, marginTop: 8 }} disabled={disabled || busy || moved || occupied || source.content_revision == null || sourceIsBlank}
         onClick={async () => {
           if (source.content_revision == null) return;
@@ -63,7 +63,7 @@ export function NotesDestinationCompare({ runId, sourceSheet, source, sheets, di
         }}>{moved ? "Moved" : busy ? "Moving…" : "Move to this empty field"}</button>
     </>}
     {disabled && <p role="status" style={{ fontSize: 12 }}>Finish editing and save before moving.</p>}
-    {error && <p role="alert" style={{ color: pwc.error }}>{error}</p>}
+    {error && <p role="alert" style={{ color: ds.error }}>{error}</p>}
     </>}
   </details>;
 }

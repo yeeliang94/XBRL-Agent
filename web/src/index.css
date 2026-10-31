@@ -322,19 +322,19 @@ h2 {
 
 /* One shared motion vocabulary. State truth is immediate; these hooks only
    help users relate the arriving content to the action that caused it. */
-.pwc-view-enter,
+.app-view-enter,
 .page-header,
-.pwc-empty-state {
+.app-empty-state {
   animation: fade-in var(--motion-base) var(--motion-standard) both;
 }
-.pwc-reveal,
-details[open] > .pwc-disclosure-content {
+.app-reveal,
+details[open] > .app-disclosure-content {
   animation: reveal-content var(--motion-base) var(--motion-emphasized) both;
 }
-.pwc-status-change {
+.app-status-change {
   animation: status-arrive var(--motion-fast) var(--motion-standard) both;
 }
-.pwc-toast-enter {
+.app-toast-enter {
   animation: slide-in-right var(--motion-base) var(--motion-standard) both;
 }
 .reasoning-stream-enter {
@@ -384,30 +384,30 @@ details[open] > .pwc-disclosure-content {
   .preparation-map-wave { animation: none !important; }
   .preparation-page-strip > span { transition: none !important; }
 }
-.pwc-dialog-scrim-enter {
+.app-dialog-scrim-enter {
   animation: scrim-in var(--motion-fast) var(--motion-standard) both;
 }
-.pwc-dialog-enter {
+.app-dialog-enter {
   animation: dialog-in var(--motion-fast) var(--motion-standard) both;
 }
-.pwc-progress-fill {
+.app-progress-fill {
   transform-origin: left center;
   transition: transform var(--motion-slow) var(--motion-emphasized);
 }
-.pwc-disclosure-chevron {
+.app-disclosure-chevron {
   transition: transform var(--motion-fast) var(--motion-standard);
 }
-.pwc-disclosure-chevron.is-open {
+.app-disclosure-chevron.is-open {
   transform: rotate(90deg);
 }
-details[open] > summary .pwc-disclosure-chevron {
+details[open] > summary .app-disclosure-chevron {
   transform: rotate(90deg);
 }
-.pwc-skeleton {
+.app-skeleton {
   animation: skeleton-shimmer 1.8s var(--motion-standard) infinite;
   will-change: opacity;
 }
-.pwc-spinner {
+.app-spinner {
   animation: spin 800ms linear infinite;
   will-change: transform;
 }
@@ -473,60 +473,60 @@ input[type="search"]:focus {
    Inline styles can't express :hover, so components add the matching class
    alongside their inline style object. Primary uses the accessible action
    roles (color.action.primary/hover), not signature orange. */
-.pwc-btn-primary,
-.pwc-btn-secondary,
-.pwc-btn-quiet,
-.pwc-btn-danger {
+.app-btn-primary,
+.app-btn-secondary,
+.app-btn-quiet,
+.app-btn-danger {
   transition: background var(--motion-fast) var(--motion-standard),
     border-color var(--motion-fast) var(--motion-standard),
     color var(--motion-fast) var(--motion-standard),
     box-shadow var(--motion-fast) var(--motion-standard),
     transform var(--motion-instant) var(--motion-standard);
 }
-.pwc-btn-primary:hover:not(:disabled) {
+.app-btn-primary:hover:not(:disabled) {
   background: #000000 !important;
   border-color: #000000 !important;
   opacity: 0.86;
 }
-.pwc-btn-secondary:hover:not(:disabled) {
+.app-btn-secondary:hover:not(:disabled) {
   background: #F5F7F8 !important;
   border-color: #6B7280 !important;
 }
-.pwc-btn-quiet:hover:not(:disabled) {
+.app-btn-quiet:hover:not(:disabled) {
   background: #EEEFF1 !important;
 }
-.pwc-btn-danger:hover:not(:disabled) {
+.app-btn-danger:hover:not(:disabled) {
   background: #FFF5ED !important;
   border-color: #FD5108 !important;
 }
 /* Pressed feedback: a 1px settle while the pointer is down. Instant (not
    transitioned) so it reads as a physical click; released state springs back
    through the button's own transition. Cards never move — buttons may. */
-.pwc-btn-primary:active:not(:disabled),
-.pwc-btn-secondary:active:not(:disabled),
-.pwc-btn-quiet:active:not(:disabled),
-.pwc-btn-danger:active:not(:disabled) {
+.app-btn-primary:active:not(:disabled),
+.app-btn-secondary:active:not(:disabled),
+.app-btn-quiet:active:not(:disabled),
+.app-btn-danger:active:not(:disabled) {
   transform: translateY(1px);
 }
-.pwc-btn-primary:disabled,
-.pwc-btn-secondary:disabled,
-.pwc-btn-quiet:disabled,
-.pwc-btn-danger:disabled {
+.app-btn-primary:disabled,
+.app-btn-secondary:disabled,
+.app-btn-quiet:disabled,
+.app-btn-danger:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
 /* Interactive grouped rows use a quiet surface response. Direction A cards
    have no decorative boundary and never gain one on hover. */
-.pwc-card {
+.app-card {
   transition: background var(--motion-fast) var(--motion-standard);
 }
-.pwc-card:hover {
+.app-card:hover {
   background: #F5F7F8;
 }
 
 /* Quiet table-row hover. */
-.pwc-table-row:hover {
+.app-table-row:hover {
   background: #F5F7F8;
 }
 
@@ -586,10 +586,10 @@ input[type="search"]:focus {
   background: #F5F7F8 !important;
 }
 
-.pwc-table-row,
+.app-table-row,
 .agent-tab,
 .file-drop-zone,
-.pwc-tab,
+.app-tab,
 .notes-subtab,
 .segmented-control-button,
 .review-collapsed-rail,
@@ -623,18 +623,18 @@ input[type="search"]:focus {
 
 /* Shared surface-tab states. Selection uses fill and weight, never an accent
    underline or edge. */
-.pwc-tab:hover:not([aria-selected="true"]):not([aria-current="page"]) {
+.app-tab:hover:not([aria-selected="true"]):not([aria-current="page"]) {
   color: #000000;
   background: #F5F7F8 !important;
 }
-.pwc-tab[aria-selected="true"],
-.pwc-tab[aria-current="page"] {
+.app-tab[aria-selected="true"],
+.app-tab[aria-current="page"] {
   background: #EEEFF1 !important; /* grey100 — the one selected surface */
 }
 
 /* Pointer-selected tabs keep the quiet selected surface. Keyboard focus still
    receives the global two-part outline after any key interaction. */
-.settings-page .pwc-tab[data-pointer-focus="true"]:focus-visible {
+.settings-page .app-tab[data-pointer-focus="true"]:focus-visible {
   outline: none !important;
 }
 
@@ -751,14 +751,14 @@ details[open] > summary::after {
    perceptible when backgrounds are stripped; focus falls back to the OS
    outline automatically. */
 @media (forced-colors: active) {
-  .pwc-btn-primary,
-  .pwc-btn-secondary,
-  .pwc-btn-quiet,
-  .pwc-btn-danger,
-  .pwc-tab {
+  .app-btn-primary,
+  .app-btn-secondary,
+  .app-btn-quiet,
+  .app-btn-danger,
+  .app-tab {
     border: 1px solid ButtonBorder;
   }
-  .pwc-card {
+  .app-card {
     border: 1px solid CanvasText;
   }
 }
@@ -1079,16 +1079,16 @@ details[open] > summary::after {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pwc-status-change,
-  .pwc-view-enter,
-  .pwc-reveal,
+  .app-status-change,
+  .app-view-enter,
+  .app-reveal,
   .reasoning-stream-enter,
   .reasoning-stream-pulse,
   .reasoning-stream-cursor,
   .activity-sentence-enter,
   .activity-sentence-pulse,
   .page-header,
-  .pwc-empty-state {
+  .app-empty-state {
     animation: none !important;
   }
 }

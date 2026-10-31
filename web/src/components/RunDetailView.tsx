@@ -1,6 +1,6 @@
 import { guardNavigationHistory } from "../lib/navigationHistory";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useId, lazy, Suspense } from "react";
-import { pwc, tokens } from "../lib/theme";
+import { ds, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 const ReportsReviewTab = lazy(() => import("./ReportsReviewTab"));
 
@@ -369,7 +369,7 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
   const agentEnded = ["failed", "cancelled", "aborted"].includes(agent.status);
 
   return (
-    <article role="tabpanel" id={panelId} aria-labelledby={tabId} data-testid="run-detail-agent" className="pwc-view-enter" style={styles.agentDetail}>
+    <article role="tabpanel" id={panelId} aria-labelledby={tabId} data-testid="run-detail-agent" className="app-view-enter" style={styles.agentDetail}>
       <div style={styles.agentHeaderButton}>
         <div style={styles.agentTitleRow}>
           {/* Same plain-language title as the workstream list; no statement
@@ -1337,7 +1337,7 @@ export function RunDetailView({
       {/* Keep the same navigation visible on every run section. Overview is
           the primary landing surface; the remaining tabs are review tools. */}
         <div ref={tabAnchorRef} aria-hidden="true" data-testid="run-tab-anchor"
-          style={{ height: 0, marginBottom: -pwc.space.lg }} />
+          style={{ height: 0, marginBottom: -ds.space.lg }} />
         <div
           ref={tabBarRef}
           style={styles.tabBar}
@@ -1353,7 +1353,7 @@ export function RunDetailView({
                   role="tab"
                   aria-selected={active}
                   tabIndex={active ? 0 : -1}
-                  className="pwc-tab"
+                  className="app-tab"
                   disabled={notesPreparationBlocked && !active}
                   onClick={() => selectTab(t.key)}
                   onKeyDown={(e) => onTabKeyDown(e, i)}
@@ -1452,7 +1452,7 @@ export function RunDetailView({
               : Object.values(detail.agent_instructions.texts).every(text => !text.trim())
                 ? <p style={{ ...styles.dim, margin: 0 }}>No team guidance was applied.</p>
                 : Object.entries(detail.agent_instructions.texts).filter(([, text]) => text.trim()).map(([scope, text]) => (
-                  <div key={scope} style={{ marginTop: pwc.space.md }}>
+                  <div key={scope} style={{ marginTop: ds.space.md }}>
                     <strong>{({ all: "All extraction and review agents", figures: "Figures extraction and review", notes: "Notes extraction and review", figures_extraction: "Figures extraction only", figures_review: "Figures review only", notes_extraction: "Notes extraction only", notes_review: "Notes review only" } as Record<string, string>)[scope] ?? scope}</strong>
                     <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 320, overflow: "auto" }}>{text}</p>
                   </div>
@@ -1509,9 +1509,9 @@ export function RunDetailView({
               did, not token/latency internals. */}
           <details style={styles.perfDetails} data-testid="run-detail-telemetry">
             <summary style={styles.perfSummary}>Performance details</summary>
-            <div style={{ marginTop: pwc.space.md, display: "flex", flexDirection: "column", gap: pwc.space.lg, minWidth: 0 }}>
+            <div style={{ marginTop: ds.space.md, display: "flex", flexDirection: "column", gap: ds.space.lg, minWidth: 0 }}>
               {rollup && (
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: pwc.space.md }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: ds.space.md }}>
                   <MetricTile label="Total tokens" value={rollup.total_tokens.toLocaleString()} />
                   <MetricTile
                     label="Reasoning tokens"
@@ -1558,7 +1558,7 @@ export function RunDetailView({
           >
             <summary style={styles.perfSummary}>Notes audit details</summary>
             {notesAuditOpen && (
-              <div style={{ marginTop: pwc.space.md, display: "grid", gap: pwc.space.lg }}>
+              <div style={{ marginTop: ds.space.md, display: "grid", gap: ds.space.lg }}>
                 <NotesIntegrityPanel runId={detail.id} />
                 <NotesTablesPanel runId={detail.id} />
                 <NotesReviewerPanel runId={detail.id} />
@@ -1594,7 +1594,7 @@ export function RunDetailView({
           {/* Source-PDF verification for the selected check's target cell.
               Rendered only once a target is selected. */}
           {selectedTarget && (
-            <div style={{ marginTop: pwc.space.md }}>
+            <div style={{ marginTop: ds.space.md }}>
               <PdfSourcePane runId={detail.id} pages={pdfPages} />
             </div>
           )}
@@ -1605,7 +1605,7 @@ export function RunDetailView({
         <section style={styles.section} role="tabpanel" data-testid="run-detail-review">
           <ReviewTab runId={detail.id} onSelectTarget={handleSelectTarget} />
           {selectedTarget && (
-            <div style={{ marginTop: pwc.space.md }}>
+            <div style={{ marginTop: ds.space.md }}>
               <PdfSourcePane runId={detail.id} pages={pdfPages} />
             </div>
           )}
@@ -1706,7 +1706,7 @@ function MetricTile({
   secondary?: boolean;
 }) {
   const accent =
-    tone === "success" ? pwc.successText : tone === "warning" ? pwc.warningText : undefined;
+    tone === "success" ? ds.successText : tone === "warning" ? ds.warningText : undefined;
   return (
     <div style={styles.metricTile}>
       <div style={styles.metricLabel}>{label}</div>
@@ -1728,7 +1728,7 @@ const styles = {
   container: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
   } as React.CSSProperties,
   crossCheckScroller: {
     overflowX: "auto" as const,
@@ -1739,11 +1739,11 @@ const styles = {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    gap: pwc.space.md,
+    gap: ds.space.md,
     minHeight: 40,
   } as React.CSSProperties,
   recheckSummary: {
-    color: pwc.grey900,
+    color: ds.grey900,
     fontSize: 14,
   } as React.CSSProperties,
   // One header geometry on every run tab so the title and the tab bar never
@@ -1752,10 +1752,10 @@ const styles = {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
     flexWrap: "wrap" as const,
     minHeight: 44,
-    paddingBottom: pwc.space.sm,
+    paddingBottom: ds.space.sm,
     borderBottom: "none",
   } as React.CSSProperties,
   headerText: {
@@ -1763,11 +1763,11 @@ const styles = {
     flex: "1 1 360px",
   } as React.CSSProperties,
   kicker: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 12,
-    fontWeight: pwc.weight.medium,
-    color: pwc.orange500,
-    marginBottom: pwc.space.xs,
+    fontWeight: ds.weight.medium,
+    color: ds.orange500,
+    marginBottom: ds.space.xs,
   } as React.CSSProperties,
   filename: {
     ...ui.pageTitle,
@@ -1776,38 +1776,38 @@ const styles = {
   } as React.CSSProperties,
   reviewContextProfile: {
     display: "inline",
-    marginLeft: pwc.space.sm,
-    fontFamily: pwc.fontBody,
+    marginLeft: ds.space.sm,
+    fontFamily: ds.fontBody,
     fontSize: 12,
-    color: pwc.grey700,
+    color: ds.grey700,
   } as React.CSSProperties,
   metaRow: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
-    marginTop: pwc.space.xs,
+    gap: ds.space.sm,
+    marginTop: ds.space.xs,
   } as React.CSSProperties,
   filingProfile: {
     ...ui.metadata,
-    color: pwc.grey700,
-    marginTop: pwc.space.xs,
+    color: ds.grey700,
+    marginTop: ds.space.xs,
   } as React.CSSProperties,
   dim: {
-    color: pwc.grey700,
+    color: ds.grey700,
     fontSize: 14,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
   } as React.CSSProperties,
   aiDisclaimer: {
-    margin: `${pwc.space.sm}px 0 0`,
-    fontFamily: pwc.fontBody,
+    margin: `${ds.space.sm}px 0 0`,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey700,
+    color: ds.grey700,
   } as React.CSSProperties,
   actions: {
     display: "flex",
     alignItems: "center",
     flexWrap: "wrap" as const,
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
   // Finished-but-flagged summary. The tint and explicit copy carry meaning;
   // Direction A forbids accent edge rules.
@@ -1816,11 +1816,11 @@ const styles = {
     justifyContent: "space-between",
     alignItems: "center",
     flexWrap: "wrap" as const,
-    gap: pwc.space.md,
-    padding: pwc.space.md,
-    background: pwc.orange50,
+    gap: ds.space.md,
+    padding: ds.space.md,
+    background: ds.orange50,
     border: "none",
-    borderRadius: pwc.radius.md,
+    borderRadius: ds.radius.md,
   } as React.CSSProperties,
   errorBannerBody: {
     display: "flex",
@@ -1830,14 +1830,14 @@ const styles = {
     flex: "1 1 320px",
   } as React.CSSProperties,
   errorBannerTitle: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey800,
+    color: ds.grey800,
   } as React.CSSProperties,
   errorBannerText: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey700,
+    color: ds.grey700,
     lineHeight: 1.5,
     overflowWrap: "anywhere",
   } as React.CSSProperties,
@@ -1846,31 +1846,31 @@ const styles = {
     alignItems: "center",
     justifyContent: "space-between",
     flexWrap: "wrap",
-    gap: pwc.space.md,
-    padding: `${pwc.space.sm}px 0`,
-    borderTop: `1px solid ${pwc.grey200}`,
-    borderBottom: `1px solid ${pwc.grey200}`,
-    color: pwc.grey900,
-    fontFamily: pwc.fontBody,
+    gap: ds.space.md,
+    padding: `${ds.space.sm}px 0`,
+    borderTop: `1px solid ${ds.grey200}`,
+    borderBottom: `1px solid ${ds.grey200}`,
+    color: ds.grey900,
+    fontFamily: ds.fontBody,
     fontSize: 14,
   } as React.CSSProperties,
   runActions: {
     display: "flex",
     alignItems: "center",
     flexWrap: "wrap" as const,
-    gap: pwc.space.md,
+    gap: ds.space.md,
   } as React.CSSProperties,
   // Overview rhythm (same as Setup): 32 between groups, 40px headers,
   // 8 from a header to its content.
   overview: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xxl,
+    gap: ds.space.xxl,
   } as React.CSSProperties,
   overviewGroup: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
   overviewHeading: {
     ...ui.sectionTitle,
@@ -1881,35 +1881,35 @@ const styles = {
   overviewRecord: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
   } as React.CSSProperties,
   overviewSummary: {
     ...ui.sectionTitle,
     minHeight: 40,
   } as React.CSSProperties,
   overviewDisclosureBody: {
-    paddingTop: pwc.space.sm,
+    paddingTop: ds.space.sm,
   } as React.CSSProperties,
   nextList: {
     listStyle: "none",
     margin: 0,
     padding: 0,
-    borderBottom: `1px solid ${pwc.grey100}`,
+    borderBottom: `1px solid ${ds.grey100}`,
   } as React.CSSProperties,
   nextRow: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: pwc.space.md,
+    gap: ds.space.md,
     minHeight: 48,
     flexWrap: "wrap",
-    paddingBlock: pwc.space.sm,
-    borderTop: `1px solid ${pwc.grey100}`,
+    paddingBlock: ds.space.sm,
+    borderTop: `1px solid ${ds.grey100}`,
   } as React.CSSProperties,
   nextText: {
     ...ui.bodyText,
     display: "inline-flex",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     minWidth: 0,
     flex: "1 1 280px",
     alignItems: "flex-start",
@@ -1927,7 +1927,7 @@ const styles = {
   } as React.CSSProperties,
   runActionButtons: {
     display: "flex",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
   // Data-dense surface tabs: compact selected fill, no accent edge line.
@@ -1937,20 +1937,20 @@ const styles = {
     scrollMarginTop: ui.appTopbar.height,
     zIndex: 15,
     background: tokens.surface.canvas,
-    paddingBlock: pwc.space.xs,
+    paddingBlock: ds.space.xs,
     display: "flex",
-    gap: pwc.space.xs,
+    gap: ds.space.xs,
     flexWrap: "nowrap" as const,
     overflowX: "auto" as const,
   } as React.CSSProperties,
   tabGroup: {
     display: "inline-flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
   tabGroupLabel: {
     ...ui.microLabel,
-    marginLeft: pwc.space.md,
+    marginLeft: ds.space.md,
   } as React.CSSProperties,
   tab: {
     ...ui.tab,
@@ -1966,55 +1966,55 @@ const styles = {
   sectionFull: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
   metricStrip: {
     display: "flex",
-    gap: pwc.space.xxxl,
+    gap: ds.space.xxxl,
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
   // Label above value, matching the work-queue counts.
   metricTile: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xs,
+    gap: ds.space.xs,
     minWidth: 0,
   } as React.CSSProperties,
   metricValue: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 16,
-    fontWeight: pwc.weight.regular,
-    color: pwc.grey900,
+    fontWeight: ds.weight.regular,
+    color: ds.grey900,
     fontVariantNumeric: "tabular-nums" as const,
   } as React.CSSProperties,
   metricValueSecondary: {
-    color: pwc.grey700,
+    color: ds.grey700,
   } as React.CSSProperties,
   metricLabel: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.grey700,
+    color: ds.grey700,
   } as React.CSSProperties,
   section: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as React.CSSProperties,
   sectionHeading: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 16,
-    fontWeight: pwc.weight.semibold,
-    color: pwc.black,
+    fontWeight: ds.weight.semibold,
+    color: ds.black,
     margin: 0,
   } as React.CSSProperties,
   // Button-flavoured variant of sectionHeading used for collapsible
   // sections. Strips all default button chrome so it visually matches an
   // <h4> while staying semantically a control with aria-expanded.
   collapsibleSectionHeading: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
     fontWeight: 600,
-    color: pwc.grey700,
+    color: ds.grey700,
     margin: 0,
     background: "transparent",
     border: "none",
@@ -2022,54 +2022,54 @@ const styles = {
     cursor: "pointer",
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.xs,
+    gap: ds.space.xs,
     textAlign: "left" as const,
     width: "fit-content",
   } as React.CSSProperties,
   dl: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xs,
+    gap: ds.space.xs,
     margin: 0,
   } as React.CSSProperties,
   dlRow: {
     display: "grid",
     gridTemplateColumns: "160px minmax(0, 1fr)",
-    gap: pwc.space.md,
-    fontFamily: pwc.fontBody,
+    gap: ds.space.md,
+    fontFamily: ds.fontBody,
     fontSize: 14,
     lineHeight: 1.5,
   } as React.CSSProperties,
   dt: {
     fontWeight: 400,
-    color: pwc.grey700,
+    color: ds.grey700,
   } as React.CSSProperties,
   dd: {
     margin: 0,
-    color: pwc.grey900,
+    color: ds.grey900,
   } as React.CSSProperties,
   perfDetails: {
-    marginTop: pwc.space.lg,
-    borderTop: `1px solid ${pwc.grey200}`,
-    paddingTop: pwc.space.md,
+    marginTop: ds.space.lg,
+    borderTop: `1px solid ${ds.grey200}`,
+    paddingTop: ds.space.md,
   } as React.CSSProperties,
   perfSummary: {
     cursor: "pointer",
     minHeight: 40,
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey900,
+    fontWeight: ds.weight.medium,
+    color: ds.grey900,
   } as React.CSSProperties,
   // One Grey 100 divider between the workstream list and its detail, as in
   // the live run and the Notes workspace.
   agentDetail: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.lg,
-    background: pwc.white,
-    borderLeft: `1px solid ${pwc.grey100}`,
-    paddingLeft: pwc.space.xl,
+    gap: ds.space.lg,
+    background: ds.white,
+    borderLeft: `1px solid ${ds.grey100}`,
+    paddingLeft: ds.space.xl,
     alignSelf: "stretch",
   } as React.CSSProperties,
   agentHeaderButton: {
@@ -2086,12 +2086,12 @@ const styles = {
     color: "inherit",
   } as React.CSSProperties,
   agentBody: {
-    marginTop: pwc.space.md,
+    marginTop: ds.space.md,
   } as React.CSSProperties,
   agentSummary: {
     display: "grid",
     gap: 4,
-    color: pwc.grey700,
+    color: ds.grey700,
     fontSize: 14,
     lineHeight: 1.55,
   } as React.CSSProperties,
@@ -2100,46 +2100,46 @@ const styles = {
     display: "grid",
     gap: 4,
     padding: "10px 0",
-    color: pwc.grey900,
-    borderTop: `1px solid ${pwc.grey100}`,
+    color: ds.grey900,
+    borderTop: `1px solid ${ds.grey100}`,
     fontSize: 14,
     lineHeight: 1.55,
     whiteSpace: "pre-wrap" as const,
     overflowWrap: "anywhere" as const,
   } as React.CSSProperties,
   agentTechnicalDetails: {
-    borderTop: `1px solid ${pwc.grey100}`,
-    paddingTop: pwc.space.md,
+    borderTop: `1px solid ${ds.grey100}`,
+    paddingTop: ds.space.md,
   } as React.CSSProperties,
   agentTitleRow: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
   agentStatement: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontWeight: 500,
     fontSize: 14,
-    color: pwc.grey900,
+    color: ds.grey900,
   } as React.CSSProperties,
   agentVariant: {
-    color: pwc.grey500,
+    color: ds.grey500,
     fontSize: 14,
   } as React.CSSProperties,
   // Plain-English gloss next to the statement code (UX-QA #12).
   agentSubtitle: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey700,
+    color: ds.grey700,
   } as React.CSSProperties,
   // v17 (item 9): muted mono chip naming the failure class on failed rows.
   agentErrorType: {
-    color: pwc.grey500,
-    fontFamily: pwc.fontMono,
+    color: ds.grey500,
+    fontFamily: ds.fontMono,
     fontSize: 12,
-    border: `1px solid ${pwc.grey300}`,
-    borderRadius: pwc.radius.sm,
+    border: `1px solid ${ds.grey300}`,
+    borderRadius: ds.radius.sm,
     padding: "1px 6px",
   } as React.CSSProperties,
   // Proportional, not monospace (UX-QA #12): the model · turns · duration meta
@@ -2147,53 +2147,53 @@ const styles = {
   // align, so the body font is friendlier for the accountant/PM audience.
   formattingCalls: {
     display: "grid",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     margin: 0,
-    paddingLeft: pwc.space.lg,
+    paddingLeft: ds.space.lg,
     fontSize: 13,
-    color: pwc.grey700,
+    color: ds.grey700,
   } as React.CSSProperties,
-  formattingCallName: { fontFamily: pwc.fontMono, fontSize: 12, color: pwc.grey900 } as React.CSSProperties,
+  formattingCallName: { fontFamily: ds.fontMono, fontSize: 12, color: ds.grey900 } as React.CSSProperties,
   formattingCallError: { marginTop: 2, whiteSpace: "pre-wrap" as const } as React.CSSProperties,
   agentErrorLabel: {
     fontSize: 13,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey700,
+    fontWeight: ds.weight.medium,
+    color: ds.grey700,
   } as React.CSSProperties,
   agentMetaRow: {
     display: "flex",
     alignItems: "center",
     flexWrap: "wrap" as const,
-    gap: pwc.space.md,
-    paddingBottom: pwc.space.sm,
-    fontFamily: pwc.fontBody,
+    gap: ds.space.md,
+    paddingBottom: ds.space.sm,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    color: pwc.grey700,
+    color: ds.grey700,
   } as React.CSSProperties,
   liveSummary: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: pwc.space.md,
+    gap: ds.space.md,
     flexWrap: "wrap" as const,
-    marginTop: pwc.space.lg,
-    padding: `${pwc.space.md}px 0`,
+    marginTop: ds.space.lg,
+    padding: `${ds.space.md}px 0`,
     borderTop: `1px solid ${tokens.color.border.subtle}`,
     borderBottom: `1px solid ${tokens.color.border.subtle}`,
   } as React.CSSProperties,
   liveSummaryText: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xs,
+    gap: ds.space.xs,
     minWidth: 0,
   } as React.CSSProperties,
   liveSummaryStage: {
     display: "inline-flex",
     alignItems: "center",
-    gap: pwc.space.sm,
-    fontFamily: pwc.fontBody,
+    gap: ds.space.sm,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
     color: tokens.color.text.primary,
   } as React.CSSProperties,
   liveSummaryCount: {

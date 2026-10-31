@@ -2,7 +2,7 @@ import { ui } from "../lib/uiStyles";
 import type { NotesTemplateType, ModelEntry, FilingStandard } from "../lib/types";
 import { NOTES_TEMPLATE_TYPES, NOTES_TEMPLATE_LABELS } from "../lib/types";
 import { notesTabLabel } from "../lib/appReducer";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 
 interface Props {
   enabled: Record<NotesTemplateType, boolean>;
@@ -27,23 +27,23 @@ const styles = {
     borderCollapse: "collapse" as const,
   } as React.CSSProperties,
   row: {
-    borderBottom: `1px solid ${pwc.grey100}`,
+    borderBottom: `1px solid ${ds.grey100}`,
   } as React.CSSProperties,
   cell: {
-    padding: `${pwc.space.sm}px 0`,
+    padding: `${ds.space.sm}px 0`,
     verticalAlign: "middle" as const,
   } as React.CSSProperties,
   modelCell: {
-    padding: `${pwc.space.sm}px 0 ${pwc.space.sm}px ${pwc.space.lg}px`,
+    padding: `${ds.space.sm}px 0 ${ds.space.sm}px ${ds.space.lg}px`,
     verticalAlign: "middle" as const,
   } as React.CSSProperties,
   label: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey900,
+    color: ds.grey900,
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     cursor: "pointer",
   } as React.CSSProperties,
   // An UNCHECKED note is still fully selectable — the checkbox is never
@@ -51,12 +51,12 @@ const styles = {
   // disabled control, so users thought notes couldn't be included at all. Use
   // a readable grey so it reads as "available, not selected" instead.
   labelDisabled: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey700,
+    color: ds.grey700,
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     cursor: "pointer",
   } as React.CSSProperties,
   select: {

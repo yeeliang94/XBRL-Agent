@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, userMessage } from "../lib/errors";
-import { pwc, tokens } from "../lib/theme";
+import { ds, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { PageHeader } from "../components/PageHeader";
 import { HistoryFilters } from "../components/HistoryFilters";
@@ -537,12 +537,12 @@ const styles = {
     ...ui.pageWide,
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
   } as React.CSSProperties,
   detailContainer: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
   } as React.CSSProperties,
   loadMoreBtn: {
     ...ui.buttonQuiet,
@@ -551,19 +551,19 @@ const styles = {
     color: tokens.color.action.primary,
   } as React.CSSProperties,
   loadMoreError: {
-    marginTop: pwc.space.sm,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    background: pwc.orange50,
-    color: pwc.grey800,
+    marginTop: ds.space.sm,
+    padding: `${ds.space.sm}px ${ds.space.md}px`,
+    background: ds.orange50,
+    color: ds.grey800,
     border: "none",
-    borderRadius: pwc.radius.md,
-    fontFamily: pwc.fontBody,
+    borderRadius: ds.radius.md,
+    fontFamily: ds.fontBody,
     fontSize: 13,
   } as React.CSSProperties,
   resultCount: {
-    margin: `0 0 -${pwc.space.sm}px`,
-    color: pwc.grey700,
-    fontFamily: pwc.fontBody,
+    margin: `0 0 -${ds.space.sm}px`,
+    color: ds.grey700,
+    fontFamily: ds.fontBody,
     fontSize: 13,
   } as React.CSSProperties,
   draftsSection: {
@@ -571,18 +571,18 @@ const styles = {
   } as React.CSSProperties,
   draftsSummary: {
     cursor: "pointer",
-    padding: `${pwc.space.sm}px 0`,
-    color: pwc.grey700,
-    fontFamily: pwc.fontBody,
+    padding: `${ds.space.sm}px 0`,
+    color: ds.grey700,
+    fontFamily: ds.fontBody,
     fontSize: 13,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
   } as React.CSSProperties,
   filterNote: {
-    marginTop: pwc.space.xs,
+    marginTop: ds.space.xs,
     marginBottom: 0,
     padding: 0,
-    color: pwc.grey500,
-    fontFamily: pwc.fontBody,
+    color: ds.grey500,
+    fontFamily: ds.fontBody,
     fontSize: 12,
     fontStyle: "italic" as const,
   } as React.CSSProperties,

@@ -18,7 +18,7 @@ interface Props {
 
 export function TabPanelFade({ tabKey, children }: Props) {
   return (
-    <div key={tabKey} className="pwc-view-enter">
+    <div key={tabKey} className="app-view-enter">
       {children}
     </div>
   );

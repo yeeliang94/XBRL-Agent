@@ -1,4 +1,4 @@
-import { pwc, tokens } from "../lib/theme";
+import { ds, tokens } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { AnimatedNumber } from "./AnimatedNumber";
 
@@ -74,28 +74,28 @@ const styles = {
     ...ui.statTile,
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xs,
+    gap: ds.space.xs,
     minWidth: 0,
   } as React.CSSProperties,
   value: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     // Regular weight on the large number — hierarchy from size, not boldness
     // (design system: two text weights, no Light 300).
-    fontWeight: pwc.weight.regular,
+    fontWeight: ds.weight.regular,
     fontSize: 28,
     lineHeight: 1.1,
-    color: pwc.grey900,
+    color: ds.grey900,
     // Fixed-width digits so a counting value doesn't jitter and tiles line up.
     fontVariantNumeric: "tabular-nums",
   } as React.CSSProperties,
   label: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 12,
-    fontWeight: pwc.weight.regular,
+    fontWeight: ds.weight.regular,
     color: tokens.color.text.secondary,
   } as React.CSSProperties,
   detail: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 12,
     color: tokens.color.text.secondary,
   } as React.CSSProperties,

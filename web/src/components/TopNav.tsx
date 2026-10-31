@@ -1,5 +1,5 @@
 import type { AppView } from "../lib/appReducer";
-import { pwc, tokens } from "../lib/theme";
+import { ds, tokens } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { Description, RunHistory, UploadFile } from "./iconGlyphs";
 
@@ -19,14 +19,14 @@ export function TopNav({ view, extractMode = "queue", hasDocument = false, onVie
     style={{ display: "flex", flexDirection: "column", gap: 4 }}>
     {destinations.map(({ label, href, glyph: Glyph, active, action }) => <a key={href} href={href}
       aria-label={label} data-tooltip={label} aria-current={active ? "page" : undefined}
-      className="pwc-btn-quiet app-navigation-link"
+      className="app-btn-quiet app-navigation-link"
       style={{ ...ui.navLink, ...(active ? ui.navLinkActive : {}) }}
       onClick={(event) => {
         if (!action || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
         event.preventDefault();
         action();
       }}>
-      <span aria-hidden="true" style={{ display: "inline-flex", flexShrink: 0, color: active ? pwc.orange500 : tokens.color.icon.rest }}><Glyph size={20} /></span>
+      <span aria-hidden="true" style={{ display: "inline-flex", flexShrink: 0, color: active ? ds.orange500 : tokens.color.icon.rest }}><Glyph size={20} /></span>
       <span className="app-navigation-label">{label}</span>
     </a>)}
   </nav>;

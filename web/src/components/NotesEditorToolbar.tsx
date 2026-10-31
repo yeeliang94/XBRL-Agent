@@ -24,7 +24,7 @@ import {
   TEXT_COLORS,
   type PaletteSwatch,
 } from "../lib/notesPalette";
-import { pwc, tokens } from "../lib/theme";
+import { ds, tokens } from "../lib/theme";
 import type { Glyph } from "./iconGlyphs";
 import {
   AddColumnLeft,
@@ -120,7 +120,7 @@ export function NotesEditorToolbar({ editor }: { editor: Editor }) {
       aria-label={ariaLabel}
       title={ariaLabel}
       data-tooltip={ariaLabel}
-      className="pwc-btn-quiet"
+      className="app-btn-quiet"
       style={active ? styles.buttonActive : styles.button}
       {...guarded(onClick)}
     >
@@ -158,7 +158,7 @@ export function NotesEditorToolbar({ editor }: { editor: Editor }) {
         title={item.label}
         aria-label={`${prefix} ${item.label}`}
         data-tooltip={`${prefix} ${item.label}`}
-        style={{ ...styles.swatch, background: item.value ?? pwc.white }}
+        style={{ ...styles.swatch, background: item.value ?? ds.white }}
         {...guarded(apply)}
       >
         {item.value === null ? <FormatColorReset size={18} /> : null}
@@ -292,7 +292,7 @@ export function NotesEditorToolbar({ editor }: { editor: Editor }) {
             <>
               {FILL_PRESETS.map((preset) =>
                 button(
-                  <span style={{ display: "inline-flex", color: pwc.grey700, borderBottom: `4px solid ${preset.color}`, boxShadow: `0 1px 0 ${pwc.grey300}` }}>
+                  <span style={{ display: "inline-flex", color: ds.grey700, borderBottom: `4px solid ${preset.color}`, boxShadow: `0 1px 0 ${ds.grey300}` }}>
                     <FormatColorFill size={18} />
                   </span>,
                   `Fill ${preset.label}`,
@@ -348,7 +348,7 @@ export function NotesEditorToolbar({ editor }: { editor: Editor }) {
                     background: color,
                     outline:
                       borderPaint === color
-                        ? `2px solid ${pwc.orange500}`
+                        ? `2px solid ${ds.orange500}`
                         : "none",
                     outlineOffset: 1,
                   }}
@@ -363,8 +363,8 @@ export function NotesEditorToolbar({ editor }: { editor: Editor }) {
                 data-tooltip="Border colour erase"
                 style={{
                   ...styles.swatch,
-                  background: pwc.white,
-                  outline: eraseActive ? `2px solid ${pwc.orange500}` : "none",
+                  background: ds.white,
+                  outline: eraseActive ? `2px solid ${ds.orange500}` : "none",
                   outlineOffset: 1,
                 }}
                 {...guarded(() => setBorderPaint(BORDER_HIDDEN))}
@@ -430,24 +430,24 @@ export function NotesEditorToolbar({ editor }: { editor: Editor }) {
 }
 
 const styles = {
-  root: { display: "flex", flexDirection: "column", gap: pwc.space.xs, marginTop: pwc.space.xs },
+  root: { display: "flex", flexDirection: "column", gap: ds.space.xs, marginTop: ds.space.xs },
   row: {
     display: "flex",
     flexWrap: "wrap",
     alignItems: "center",
-    gap: pwc.space.sm,
-    padding: pwc.space.sm,
-    background: pwc.grey50,
+    gap: ds.space.sm,
+    padding: ds.space.sm,
+    background: ds.grey50,
     borderRadius: tokens.radius.control,
   },
   tableRow: {
     display: "flex",
     flexWrap: "wrap",
     alignItems: "center",
-    gap: pwc.space.sm,
-    padding: pwc.space.sm,
-    marginTop: pwc.space.xs,
-    background: pwc.grey50,
+    gap: ds.space.sm,
+    padding: ds.space.sm,
+    marginTop: ds.space.xs,
+    background: ds.grey50,
     borderRadius: tokens.radius.control,
   },
   group: {
@@ -459,16 +459,16 @@ const styles = {
   groupLabel: {
     color: tokens.color.text.secondary,
     fontSize: 12,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
     whiteSpace: "nowrap",
-    marginRight: pwc.space.xs,
+    marginRight: ds.space.xs,
   },
   swatch: {
     width: 28,
     height: 28,
     padding: 0,
-    border: `1px solid ${pwc.grey300}`,
-    borderRadius: pwc.radius.sm,
+    border: `1px solid ${ds.grey300}`,
+    borderRadius: ds.radius.sm,
     cursor: "pointer",
     color: tokens.color.icon.rest,
     display: "inline-flex",
@@ -492,8 +492,8 @@ const styles = {
     minWidth: 34,
     height: 34,
     padding: "0 5px",
-    background: pwc.white,
-    border: `1px solid ${pwc.grey300}`,
+    background: ds.white,
+    border: `1px solid ${ds.grey300}`,
     borderRadius: tokens.radius.control,
     color: tokens.color.icon.strong,
     cursor: "pointer",

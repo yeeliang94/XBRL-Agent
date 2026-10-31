@@ -1,11 +1,11 @@
 // XBRL focused-workspace design tokens — the single cascade point for the
-// whole web UI. `pwc` remains the object name only for source compatibility
-// with existing imports; docs/xbrl-design-system.html is the visual authority.
+// whole web UI. `ds` (design system) holds the global token
+// values; docs/xbrl-design-system.html is the visual authority.
 // Direction A in docs/prototype-ui-overhaul.html supplies examples under it.
 //
 // NOTE: several frontend tests assert the exact rgb() form of these hexes.
 // Change a value and update its pinning test in the same commit.
-export const pwc = {
+export const ds = {
   // Primary — the focused-workspace visual language is deliberately narrow:
   // black and white carry hierarchy, while orange is reserved for identity,
   // current activity, and attention.
@@ -106,7 +106,7 @@ export const pwc = {
 // ---------------------------------------------------------------------------
 // Semantic token layer (design-system "Semantic token architecture").
 //
-// Three layers: global values (the raw `pwc` object above) → semantic roles
+// Three layers: global values (the raw `ds` object above) → semantic roles
 // (this `tokens` object) → component roles (`component` below). Page
 // components consume MEANING (`tokens.color.text.secondary`), not palette
 // names, so the visual identity can evolve without a search-and-replace.
@@ -124,8 +124,8 @@ export const tokens = {
     // Signature orange is IDENTITY — marks, progress and compact attention
     // icons. Interactive selection uses surfaces, never accent edge lines.
     brand: {
-      accent: pwc.orange500,
-      indicator: pwc.orange500,
+      accent: ds.orange500,
+      indicator: ds.orange500,
     },
     // Accessible interaction roles. Deliberately darker than the signature
     // orange and independently changeable from it (plan: app-wide design
@@ -133,56 +133,56 @@ export const tokens = {
     action: {
       primary: ACTION_PRIMARY,
       primaryHover: ACTION_PRIMARY_HOVER,
-      quietHover: pwc.grey100,
+      quietHover: ds.grey100,
     },
     text: {
-      primary: pwc.black,
-      body: pwc.black,
+      primary: ds.black,
+      body: ds.black,
       secondary: 'rgba(0, 0, 0, 0.64)',
       muted: 'rgba(0, 0, 0, 0.46)',
-      onAction: pwc.white,      // text on a filled primary action
+      onAction: ds.white,      // text on a filled primary action
     },
     border: {
-      subtle: pwc.grey200,      // hairline dividers, card borders
-      strong: pwc.grey300,      // decorative emphasis borders, disabled
-      control: pwc.grey500,
+      subtle: ds.grey200,      // hairline dividers, card borders
+      strong: ds.grey300,      // decorative emphasis borders, disabled
+      control: ds.grey500,
     },
     // Icon colour roles (design-system Iconography). Resting icons are grey so
     // text stays dominant; orange marks the current place, live work and
     // attention; black marks routine success and icons inside primary text.
     icon: {
-      rest: pwc.grey500,
-      strong: pwc.black,
-      active: pwc.orange500,
-      attention: pwc.orange500,
-      tileSurface: pwc.orange50,
+      rest: ds.grey500,
+      strong: ds.black,
+      active: ds.orange500,
+      attention: ds.orange500,
+      tileSurface: ds.orange50,
     },
     focus: {
-      ring: pwc.black,
-      halo: pwc.grey100,
-      strong: pwc.black,
+      ring: ds.black,
+      halo: ds.grey100,
+      strong: ds.black,
     },
   },
   surface: {
-    canvas: pwc.white,
-    default: pwc.white,
-    sunken: pwc.grey50,
-    navigation: pwc.grey50,
+    canvas: ds.white,
+    default: ds.white,
+    sunken: ds.grey50,
+    navigation: ds.grey50,
   },
   space: {
-    inset: pwc.space.md,        // dense inner padding
-    group: pwc.space.lg,        // between related controls
-    section: pwc.space.xxl,     // between page sections
-    pageGutter: pwc.space.xxl,  // desktop page edge; narrow screens use 16px
-    paneInset: pwc.space.xl,    // document and review panes
-    paragraph: pwc.space.md,    // gap between separate short paragraphs
+    inset: ds.space.md,        // dense inner padding
+    group: ds.space.lg,        // between related controls
+    section: ds.space.xxl,     // between page sections
+    pageGutter: ds.space.xxl,  // desktop page edge; narrow screens use 16px
+    paneInset: ds.space.xl,    // document and review panes
+    paragraph: ds.space.md,    // gap between separate short paragraphs
   },
   radius: {
-    cell: pwc.radius.sm,        // dense cells, compact references
-    control: pwc.radius.md,     // buttons, inputs, alerts
-    panel: pwc.radius.lg,       // cards, panels, bordered groups
-    feature: pwc.radius.xl,     // large feature surfaces only
-    pill: pwc.radius.pill,
+    cell: ds.radius.sm,        // dense cells, compact references
+    control: ds.radius.md,     // buttons, inputs, alerts
+    panel: ds.radius.lg,       // cards, panels, bordered groups
+    feature: ds.radius.xl,     // large feature surfaces only
+    pill: ds.radius.pill,
   },
   // Canonical task-based page widths (design-system Layouts & density). The
   // app shell owns the route-level mode; pages must not invent another cap.

@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
 import { AgentTelemetryPanel } from "../components/AgentTelemetryPanel";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import type { RunDetailJson } from "../lib/types";
 
 
@@ -66,6 +66,6 @@ describe("AgentTelemetryPanel incidents", () => {
     render(<AgentTelemetryPanel detail={advisory} />);
 
     const card = screen.getByText("The document scan could not finish.").closest("article");
-    expect(card).toHaveStyle({ background: pwc.warningBg });
+    expect(card).toHaveStyle({ background: ds.warningBg });
   });
 });

@@ -17,7 +17,7 @@ if sys.platform == "win32":
             _stream.reconfigure(encoding="utf-8", errors="replace")
 
 # Trust the OS certificate store for SSL verification. Required on Windows
-# behind corporate MITM proxies (e.g. genai-sharedservice-emea.pwc.com) whose
+# behind corporate MITM proxies (e.g. llm-proxy.example.com) whose
 # root CA is installed system-wide but absent from certifi's bundle. Must
 # run before any TLS connection is opened. Idempotent; no-op on Py<3.10.
 try:
@@ -1071,7 +1071,7 @@ def _model_id(model_obj) -> str:
 def _is_local_proxy(proxy_url: str) -> bool:
     """True when ``proxy_url`` points at the Mac local-dev LiteLLM proxy.
 
-    The enterprise proxy is a remote PwC host; the dev proxy started by
+    The enterprise proxy is a remote host; the dev proxy started by
     ``start.sh`` lives on localhost. Only the local-dev case is allowed to
     bypass the proxy for direct Gemini calls — direct Google is firewall
     -blocked (403) on the Windows enterprise network (CLAUDE.md gotcha #5).

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { StatusIcon } from "./StatusIcon";
@@ -633,61 +633,61 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
 }
 
 const styles = {
-  dim: { color: pwc.grey500, fontSize: 14 },
-  error: { color: pwc.errorText, fontSize: 14 },
+  dim: { color: ds.grey500, fontSize: 14 },
+  error: { color: ds.errorText, fontSize: 14 },
   // Flat: no bordered card around the outcome.
   outcomeCard: {
-    paddingBottom: pwc.space.lg,
-    borderBottom: `1px solid ${pwc.grey100}`,
+    paddingBottom: ds.space.lg,
+    borderBottom: `1px solid ${ds.grey100}`,
   } as const,
   impactLine: {
-    margin: `${pwc.space.md}px 0 0`,
-    fontFamily: pwc.fontBody,
+    margin: `${ds.space.md}px 0 0`,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.grey900,
+    color: ds.grey900,
     display: "flex",
     flexWrap: "wrap" as const,
     alignItems: "center",
     gap: 4,
   } as const,
   outcomeTitle: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 16,
     lineHeight: 1.3,
     fontWeight: 600,
-    color: pwc.grey900,
-    margin: `0 0 ${pwc.space.xs}px`,
+    color: ds.grey900,
+    margin: `0 0 ${ds.space.xs}px`,
   } as const,
   impactAttention: {
     display: "inline-flex",
     alignItems: "center",
     gap: 6,
-    color: pwc.warningText,
+    color: ds.warningText,
   } as const,
   notice: {
     ...ui.alertInfo,
-    padding: pwc.space.sm,
+    padding: ds.space.sm,
     fontSize: 14,
-    margin: `0 0 ${pwc.space.md}px`,
+    margin: `0 0 ${ds.space.md}px`,
   } as const,
   // Soft warning banner (items 11/12): stale totals / stale download. Warning
   // left-rule, distinct from the info `notice` and the red `error`.
   warning: {
     ...ui.alertWarning,
-    padding: pwc.space.sm,
+    padding: ds.space.sm,
     fontSize: 14,
-    margin: `0 0 ${pwc.space.md}px`,
+    margin: `0 0 ${ds.space.md}px`,
   } as const,
   reviewControls: {
     display: "flex",
     alignItems: "flex-end",
-    gap: pwc.space.md,
+    gap: ds.space.md,
   } as const,
   modelLabel: {
     ...ui.fieldLabel,
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as const,
   modelSelect: {
     ...ui.select,
@@ -697,14 +697,14 @@ const styles = {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
   } as const,
   h3: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 16,
     fontWeight: 600,
-    color: pwc.grey900,
-    margin: `${pwc.space.lg}px 0 ${pwc.space.sm}px`,
+    color: ds.grey900,
+    margin: `${ds.space.lg}px 0 ${ds.space.sm}px`,
   } as const,
   table: {
     width: "100%",
@@ -716,27 +716,27 @@ const styles = {
   } as const,
   th: {
     textAlign: "left" as const,
-    padding: pwc.space.sm,
-    borderBottom: `1px solid ${pwc.grey200}`,
-    color: pwc.grey700,
+    padding: ds.space.sm,
+    borderBottom: `1px solid ${ds.grey200}`,
+    color: ds.grey700,
     fontWeight: 400,
   } as const,
   td: {
-    padding: pwc.space.sm,
-    borderBottom: `1px solid ${pwc.grey100}`,
+    padding: ds.space.sm,
+    borderBottom: `1px solid ${ds.grey100}`,
     verticalAlign: "top" as const,
-    color: pwc.grey800,
+    color: ds.grey800,
   } as const,
-  cellLabel: { fontWeight: 400, color: pwc.grey900 },
-  oldVal: { color: pwc.grey500, textDecoration: "line-through" },
-  newVal: { color: pwc.successText, fontWeight: 400 },
-  arrow: { color: pwc.grey500 },
+  cellLabel: { fontWeight: 400, color: ds.grey900 },
+  oldVal: { color: ds.grey500, textDecoration: "line-through" },
+  newVal: { color: ds.successText, fontWeight: 400 },
+  arrow: { color: ds.grey500 },
   evidenceRow: {
     display: "flex",
     alignItems: "baseline",
-    gap: pwc.space.xs,
-    marginTop: pwc.space.xs,
-    color: pwc.grey500,
+    gap: ds.space.xs,
+    marginTop: ds.space.xs,
+    color: ds.grey500,
   } as const,
   evidenceLabel: {
     fontSize: 12,
@@ -745,53 +745,53 @@ const styles = {
   linkBtn: {
     background: "none",
     border: "none",
-    color: pwc.info,
+    color: ds.info,
     cursor: "pointer",
     padding: 0,
     textDecoration: "underline",
     fontSize: 14,
   } as const,
-  flagStack: { display: "flex", flexDirection: "column" as const, gap: pwc.space.sm },
+  flagStack: { display: "flex", flexDirection: "column" as const, gap: ds.space.sm },
   flagCard: {
-    padding: `${pwc.space.md}px 0`,
-    borderBottom: `1px solid ${pwc.grey100}`,
+    padding: `${ds.space.md}px 0`,
+    borderBottom: `1px solid ${ds.grey100}`,
   } as const,
   flagHead: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
-    marginBottom: pwc.space.xs,
+    gap: ds.space.sm,
+    marginBottom: ds.space.xs,
   } as const,
-  flagReason: { color: pwc.grey800, fontSize: 14, margin: `${pwc.space.xs}px 0` },
+  flagReason: { color: ds.grey800, fontSize: 14, margin: `${ds.space.xs}px 0` },
   cascadeDetails: {
-    marginTop: pwc.space.md,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    background: pwc.grey50,
-    borderRadius: pwc.radius.sm,
-    color: pwc.grey700,
+    marginTop: ds.space.md,
+    padding: `${ds.space.sm}px ${ds.space.md}px`,
+    background: ds.grey50,
+    borderRadius: ds.radius.sm,
+    color: ds.grey700,
     fontSize: 14,
   } as const,
   cascadeSummary: {
     cursor: "pointer",
     fontWeight: 500,
-    color: pwc.grey800,
+    color: ds.grey800,
   } as const,
   cascadeHelp: {
-    margin: `${pwc.space.sm}px 0`,
+    margin: `${ds.space.sm}px 0`,
     lineHeight: 1.45,
   } as const,
   cascadeList: {
     margin: 0,
-    paddingLeft: pwc.space.lg,
+    paddingLeft: ds.space.lg,
   } as const,
   technicalDetails: {
-    color: pwc.grey500,
+    color: ds.grey500,
     fontSize: 12,
-    marginTop: pwc.space.xs,
+    marginTop: ds.space.xs,
     overflowWrap: "anywhere" as const,
   } as const,
-  answerGiven: { color: pwc.successText, fontSize: 14, margin: 0 },
-  answerRow: { display: "flex", gap: pwc.space.sm, alignItems: "flex-start" },
+  answerGiven: { color: ds.successText, fontSize: 14, margin: 0 },
+  answerRow: { display: "flex", gap: ds.space.sm, alignItems: "flex-start" },
   answerBox: {
     ...ui.textarea,
     flex: 1,
@@ -799,24 +799,24 @@ const styles = {
   guidanceBox: {
     ...ui.textarea,
     width: "100%",
-    marginBottom: pwc.space.lg,
+    marginBottom: ds.space.lg,
   } as const,
   rerunDetails: {
-    marginTop: pwc.space.xl,
+    marginTop: ds.space.xl,
   } as const,
   rerunSummary: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey900,
+    fontWeight: ds.weight.medium,
+    color: ds.grey900,
     minHeight: 40,
   } as const,
   rerunBody: {
-    paddingTop: pwc.space.sm,
+    paddingTop: ds.space.sm,
   } as const,
   // Neutral secondary — a re-run action is not the screen's primary CTA, and
   // the design system reserves orange for that one action and forbids status
-  // colours (the old blue `pwc.info` fill) as button backgrounds (docs/
+  // colours (the old blue `ds.info` fill) as button backgrounds (docs/
   // PLAN-design-qa-fixes.md C1).
   reviewBtn: {
     ...ui.buttonSecondary,

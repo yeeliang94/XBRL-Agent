@@ -10,7 +10,7 @@ import {
   variantsFor,
 } from "../lib/types";
 import { variantLabel } from "../lib/vocabulary";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { StatusIcon } from "./StatusIcon";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
 
@@ -35,27 +35,27 @@ const styles = {
   container: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.lg,
+    gap: ds.space.lg,
   } as React.CSSProperties,
   row: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     minWidth: 0,
   } as React.CSSProperties,
   checkboxLabel: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
     width: 300,
     flexShrink: 0,
     cursor: "pointer",
   } as React.CSSProperties,
   label: {
-    fontFamily: pwc.fontBody,
-    fontWeight: pwc.weight.regular,
+    fontFamily: ds.fontBody,
+    fontWeight: ds.weight.regular,
     fontSize: 14,
-    color: pwc.grey900,
+    color: ds.grey900,
     width: 260,
     flexShrink: 0,
   } as React.CSSProperties,
@@ -65,10 +65,10 @@ const styles = {
     minWidth: 0,
   } as React.CSSProperties,
   labelDisabled: {
-    fontFamily: pwc.fontBody,
-    fontWeight: pwc.weight.regular,
+    fontFamily: ds.fontBody,
+    fontWeight: ds.weight.regular,
     fontSize: 14,
-    color: pwc.grey700,
+    color: ds.grey700,
     width: 260,
     flexShrink: 0,
   } as React.CSSProperties,
@@ -88,10 +88,10 @@ const styles = {
     alignItems: "center",
     gap: 6,
     flexWrap: "wrap" as const,
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 12,
-    color: pwc.grey500,
-    marginBottom: pwc.space.xs,
+    color: ds.grey500,
+    marginBottom: ds.space.xs,
   } as React.CSSProperties,
 };
 

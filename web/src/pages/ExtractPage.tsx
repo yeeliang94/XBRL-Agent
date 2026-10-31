@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PreparationSnapshot, RunConfigPayload } from "../lib/types";
 import { userMessage } from "../lib/errors";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import type { AppState, AppAction } from "../lib/appReducer";
 import { notesTabLabel, agentSubAgentSummary } from "../lib/appReducer";
@@ -431,7 +431,7 @@ export function ExtractPage({
       />
 
       {showReviewHandoff && (
-        <section aria-labelledby="completion-heading" className="pwc-view-enter" style={styles.runOverview}>
+        <section aria-labelledby="completion-heading" className="app-view-enter" style={styles.runOverview}>
           <div role="status" aria-live="polite">
             <h2 id="completion-heading" style={styles.runOverviewTitle}>
               <StatusIcon symbol={completionDisplay.symbol} /> {completionDisplay.label}
@@ -444,7 +444,7 @@ export function ExtractPage({
                   : "Extraction did not finish successfully. Opening Overview with a recovery action."}
             </p>
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: pwc.space.md, marginTop: pwc.space.md }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: ds.space.md, marginTop: ds.space.md }}>
             <button type="button" className={uiClass.btnPrimary} style={ui.buttonPrimary}
               onClick={() => {
                 setCompletionInteractionRunId(completedRunId);
@@ -490,7 +490,7 @@ export function ExtractPage({
           back-then-forward between two drafts would leak the first one's
           state into the second's panel. */}
       {state.sessionId && !state.isRunning && !state.isComplete && !state.hasError && preparationSucceeded && !setupHandoff && (
-        <div className="pwc-view-enter">
+        <div className="app-view-enter">
         <PreRunPanel
           key={state.currentRunId ?? "fresh"}
           sessionId={state.sessionId}
@@ -509,7 +509,7 @@ export function ExtractPage({
           and token cards. Operators first see what the system is doing and
           whether any workstream needs attention; technical usage is secondary. */}
       {showActivity && (state.isRunning || state.currentPhase || state.tokens) && (
-        <section aria-labelledby="live-run-heading" className="pwc-view-enter" style={styles.runOverview}>
+        <section aria-labelledby="live-run-heading" className="app-view-enter" style={styles.runOverview}>
           <div className="live-run-header" style={styles.runOverviewHeader}>
             <div style={styles.runOverviewLead}>
               <div style={styles.runEyebrow}>{state.isRunning ? "Live run" : "Run progress"}</div>
@@ -652,7 +652,7 @@ export function ExtractPage({
         </p>
       ))}
       {!state.isRunning && documentChecks.length > 0 && (
-        <details style={{ marginTop: pwc.space.sm }}>
+        <details style={{ marginTop: ds.space.sm }}>
           <summary>Document check details</summary>
           <ul>{documentChecks.map((message) => <li key={message}>{message}</li>)}</ul>
         </details>
@@ -704,13 +704,13 @@ export function ExtractPage({
         <div style={styles.errorBox}>
           <h3 style={styles.errorTitle}>Extraction couldn't finish</h3>
           <p style={styles.errorMessage}>{userMessage(new Error(state.error.message))}</p>
-          <p style={{ ...styles.errorMessage, color: pwc.grey700, fontSize: 14 }}>
+          <p style={{ ...styles.errorMessage, color: ds.grey700, fontSize: 14 }}>
             You can try starting the extraction again. If it keeps failing, share
             the technical details below with your support contact.
           </p>
           {state.error.traceback && (
-            <details style={{ marginTop: pwc.space.sm }}>
-              <summary style={{ color: pwc.grey700, fontSize: 13, cursor: "pointer" }}>
+            <details style={{ marginTop: ds.space.sm }}>
+              <summary style={{ color: ds.grey700, fontSize: 13, cursor: "pointer" }}>
                 Technical details (for support)
               </summary>
               <pre style={styles.errorTraceback}>{state.error.traceback}</pre>
@@ -876,8 +876,8 @@ export function ActiveTabPanel({
             )}
           </div>
         </div>
-        {stageMessages.length > 0 && <div style={{ padding: pwc.space.lg }}>
-          <div role="status" aria-live="polite" style={{ color: pwc.grey900, fontSize: 14 }}>
+        {stageMessages.length > 0 && <div style={{ padding: ds.space.lg }}>
+          <div role="status" aria-live="polite" style={{ color: ds.grey900, fontSize: 14 }}>
             {stageMessages.map((reason) => <div key={reason}>{reason}</div>)}
           </div>
           {total > 0 && !bySheet && (
@@ -1054,7 +1054,7 @@ export function ActiveTabPanel({
             <AgentTimeline events={events} toolTimeline={toolTimeline}
               reasoningBlocks={reasoningBlocks} isRunning={running} />
             {(state.isRunning || state.tokens) && (
-              <div style={{ marginTop: pwc.space.lg }}>
+              <div style={{ marginTop: ds.space.lg }}>
                 <TokenDashboard tokens={state.tokens} isRunning={state.isRunning} embedded />
               </div>
             )}
@@ -1081,87 +1081,87 @@ const styles = {
     display: "flex",
     alignItems: "flex-start",
     justifyContent: "space-between",
-    gap: pwc.space.xl,
-    marginBottom: pwc.space.xl,
+    gap: ds.space.xl,
+    marginBottom: ds.space.xl,
   } as const,
   runOverviewLead: {
     minWidth: 0,
   } as const,
   runEyebrow: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 12,
-    fontWeight: pwc.weight.medium,
-    color: pwc.orange700,
-    marginBottom: pwc.space.xs,
+    fontWeight: ds.weight.medium,
+    color: ds.orange700,
+    marginBottom: ds.space.xs,
   } as const,
   runOverviewTitle: {
     margin: 0,
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 16,
     lineHeight: 1.3,
-    fontWeight: pwc.weight.semibold,
-    color: pwc.grey900,
+    fontWeight: ds.weight.semibold,
+    color: ds.grey900,
   } as const,
   runTitleRow: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.sm,
+    gap: ds.space.sm,
   } as const,
   runArc: {
     width: 16,
     height: 16,
     boxSizing: "border-box" as const,
-    border: `2px solid ${pwc.grey200}`,
-    borderTopColor: pwc.orange500,
-    borderRightColor: pwc.orange500,
+    border: `2px solid ${ds.grey200}`,
+    borderTopColor: ds.orange500,
+    borderRightColor: ds.orange500,
     borderRadius: "50%",
     flexShrink: 0,
   } as const,
   runOverviewMessage: {
-    margin: `${pwc.space.xs}px 0 0`,
-    fontFamily: pwc.fontBody,
+    margin: `${ds.space.xs}px 0 0`,
+    fontFamily: ds.fontBody,
     fontSize: 14,
     lineHeight: 1.5,
-    color: pwc.grey700,
+    color: ds.grey700,
   } as const,
   stageProgress: {
     width: "min(420px, 100%)",
     height: 3,
-    marginTop: pwc.space.md,
+    marginTop: ds.space.md,
     overflow: "hidden",
-    background: pwc.grey100,
+    background: ds.grey100,
   } as const,
   stageProgressFill: {
     display: "block",
     height: "100%",
-    background: pwc.orange500,
+    background: ds.orange500,
     transition: "width 220ms ease",
   } as const,
   runSummary: {
     flexShrink: 0,
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.md,
-    color: pwc.grey700,
+    gap: ds.space.md,
+    color: ds.grey700,
   } as const,
   runSummaryPrimary: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 12,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey700,
+    fontWeight: ds.weight.medium,
+    color: ds.grey700,
     whiteSpace: "nowrap" as const,
   } as const,
   runSummaryMeta: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 12,
-    color: pwc.grey500,
+    color: ds.grey500,
     whiteSpace: "nowrap" as const,
   } as const,
   runSummaryElapsed: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontVariantNumeric: "tabular-nums",
     fontSize: 12,
-    color: pwc.grey500,
+    color: ds.grey500,
     whiteSpace: "nowrap" as const,
   } as const,
   // Not sticky: the activity list grows with the page, and a pinned panel
@@ -1169,7 +1169,7 @@ const styles = {
   activityCardAttached: {
     background: "transparent",
     border: "none",
-    borderLeft: `1px solid ${pwc.grey100}`,
+    borderLeft: `1px solid ${ds.grey100}`,
     borderRadius: 0,
     padding: "7px 0 8px 30px",
     overflow: "hidden" as const,
@@ -1182,8 +1182,8 @@ const styles = {
     alignItems: "flex-start",
     justifyContent: "space-between",
     flexWrap: "wrap" as const,
-    gap: pwc.space.md,
-    padding: `${pwc.space.xs}px 0 ${pwc.space.md}px`,
+    gap: ds.space.md,
+    padding: `${ds.space.xs}px 0 ${ds.space.md}px`,
     borderBottom: "none",
     background: "transparent",
   } as const,
@@ -1191,123 +1191,123 @@ const styles = {
     display: "flex",
     alignItems: "center",
     flexWrap: "wrap" as const,
-    gap: pwc.space.md,
+    gap: ds.space.md,
     minWidth: 0,
   } as const,
   activityHeaderRight: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.md,
+    gap: ds.space.md,
     marginLeft: "auto",
   } as const,
   activityTitle: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 16,
     fontWeight: 600,
-    color: pwc.grey900,
+    color: ds.grey900,
     whiteSpace: "nowrap" as const,
   } as const,
   activityEyebrow: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 12,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey700,
+    fontWeight: ds.weight.medium,
+    color: ds.grey700,
     letterSpacing: "0.02em",
     marginBottom: 2,
   } as const,
   activeAgentStatus: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 12,
-    color: pwc.grey700,
-    paddingLeft: pwc.space.md,
-    borderLeft: `1px solid ${pwc.grey200}`,
+    color: ds.grey700,
+    paddingLeft: ds.space.md,
+    borderLeft: `1px solid ${ds.grey200}`,
   } as const,
   activityCount: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontVariantNumeric: "tabular-nums",
     fontSize: 12,
-    color: pwc.grey500,
+    color: ds.grey500,
   } as const,
   // Compact ghost buttons sitting in the activity-header toolbar. Sized
   // to read as toolbar actions, not page CTAs. `destructiveBtn` powers
   // both `stopBtn` and `stopAllBtn` (same visual contract); `primaryBtn`
   // powers `rerunBtn`. Spread base + variant inline at use sites.
   toolbarBtnBase: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontSize: 14,
     fontWeight: 500,
-    borderRadius: pwc.radius.md,
+    borderRadius: ds.radius.md,
     minHeight: 40,
     padding: "0 12px",
     cursor: "pointer",
     lineHeight: 1.2,
   } as const,
   destructiveBtn: {
-    color: pwc.error,
+    color: ds.error,
     background: "transparent",
     border: "none",
   } as const,
   primaryBtn: {
-    color: pwc.white,
-    background: pwc.black,
-    border: `1px solid ${pwc.black}`,
+    color: ds.white,
+    background: ds.black,
+    border: `1px solid ${ds.black}`,
   } as const,
   errorBox: {
-    background: pwc.orange50,
+    background: ds.orange50,
     border: "none",
-    borderRadius: pwc.radius.md,
-    padding: pwc.space.lg,
+    borderRadius: ds.radius.md,
+    padding: ds.space.lg,
   } as const,
   errorTitle: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontWeight: 600,
-    color: pwc.errorText,
+    color: ds.errorText,
     fontSize: 14,
     margin: 0,
   } as const,
   errorMessage: {
-    fontFamily: pwc.fontBody,
-    color: pwc.grey800,
+    fontFamily: ds.fontBody,
+    color: ds.grey800,
     fontSize: 14,
-    marginTop: pwc.space.xs,
+    marginTop: ds.space.xs,
   } as const,
   errorTraceback: {
-    fontFamily: pwc.fontMono,
+    fontFamily: ds.fontMono,
     fontSize: 12,
-    color: pwc.grey800,
+    color: ds.grey800,
     whiteSpace: "pre-wrap" as const,
     overflow: "auto",
-    marginTop: pwc.space.sm,
+    marginTop: ds.space.sm,
   } as const,
   // PLAN-stop-and-validation-visibility Phase 2.3 — distinct palette
   // from errorBox so the user can tell "we saved your work" apart from
   // "your work failed". Warning amber matches the chip used for the
   // correction_exhausted run status (RUN-REVIEW P0-1).
   partialMergeBox: {
-    background: pwc.grey50,
+    background: ds.grey50,
     border: "none",
-    borderRadius: pwc.radius.md,
-    padding: pwc.space.lg,
-    marginBottom: pwc.space.md,
+    borderRadius: ds.radius.md,
+    padding: ds.space.lg,
+    marginBottom: ds.space.md,
   } as const,
   partialMergeTitle: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: ds.fontHeading,
     fontWeight: 600,
-    color: pwc.warningText,
+    color: ds.warningText,
     fontSize: 14,
     margin: 0,
   } as const,
   partialMergeMessage: {
-    fontFamily: pwc.fontBody,
-    color: pwc.grey800,
+    fontFamily: ds.fontBody,
+    color: ds.grey800,
     fontSize: 14,
-    marginTop: pwc.space.xs,
+    marginTop: ds.space.xs,
     marginBottom: 0,
   } as const,
   resetLink: {
-    fontFamily: pwc.fontBody,
+    fontFamily: ds.fontBody,
     fontSize: 14,
-    color: pwc.orange500,
+    color: ds.orange500,
     background: "none",
     border: "none",
     cursor: "pointer",

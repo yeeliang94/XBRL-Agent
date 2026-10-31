@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import type { SettingsResponse } from "../lib/types";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { GeneralSettingsForm } from "./GeneralSettingsForm";
 
@@ -31,7 +31,7 @@ const styles = {
   } as React.CSSProperties,
   heading: {
     ...ui.dialogTitle,
-    marginBottom: pwc.space.xl,
+    marginBottom: ds.space.xl,
   } as React.CSSProperties,
 };
 

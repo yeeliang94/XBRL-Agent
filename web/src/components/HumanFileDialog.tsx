@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Close } from "./iconGlyphs";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { userMessage } from "../lib/errors";
 import { DENOMINATION_LABELS } from "../lib/types";
@@ -98,7 +98,7 @@ export function HumanFileDialog({ runId, open, defaultUnit, existing, onClose, o
   return (
     <div
       style={ui.scrim}
-      className="pwc-dialog-scrim-enter"
+      className="app-dialog-scrim-enter"
       onClick={(e) => {
         if (e.target === e.currentTarget && !busy) onClose();
       }}
@@ -106,9 +106,9 @@ export function HumanFileDialog({ runId, open, defaultUnit, existing, onClose, o
       aria-modal="true"
       aria-label="Compare with human file"
     >
-      <div style={{ ...ui.dialog, maxWidth: 480 }} className="pwc-dialog-enter">
+      <div style={{ ...ui.dialog, maxWidth: 480 }} className="app-dialog-enter">
         {/* Same header as the other dialogs: title left, close at the right. */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: pwc.space.md, marginBottom: pwc.space.md }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: ds.space.md, marginBottom: ds.space.md }}>
           <h2 style={{ ...ui.dialogTitle, margin: 0 }}>
             {replacing ? "Replace human file" : "Compare with human file"}
           </h2>
@@ -218,9 +218,9 @@ export function HumanFileDialog({ runId, open, defaultUnit, existing, onClose, o
 }
 
 const styles = {
-  stack: { display: "flex", flexDirection: "column", gap: pwc.space.lg } as React.CSSProperties,
-  field: { display: "flex", flexDirection: "column", gap: pwc.space.sm } as React.CSSProperties,
-  selectedFile: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: pwc.space.md } as React.CSSProperties,
-  fileName: { minWidth: 0, fontWeight: pwc.weight.semibold, overflowWrap: "anywhere" } as React.CSSProperties,
+  stack: { display: "flex", flexDirection: "column", gap: ds.space.lg } as React.CSSProperties,
+  field: { display: "flex", flexDirection: "column", gap: ds.space.sm } as React.CSSProperties,
+  selectedFile: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: ds.space.md } as React.CSSProperties,
+  fileName: { minWidth: 0, fontWeight: ds.weight.semibold, overflowWrap: "anywhere" } as React.CSSProperties,
   body: { ...ui.bodyText, margin: 0 } as React.CSSProperties,
 };

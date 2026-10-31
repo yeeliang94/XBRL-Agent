@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 
 // ---------------------------------------------------------------------------
 // AnimatedNumber — a number that counts from its previous on-screen value to a
-// new one when it CHANGES, within the app's motion budget (pwc.motion). It is
+// new one when it CHANGES, within the app's motion budget (ds.motion). It is
 // the one number-transition primitive; stat tiles, eval scores and telemetry
 // figures all read through it.
 //
@@ -29,7 +29,7 @@ interface Props {
 
 // The tween runs at the "slow" token (250ms) — the longest in the budget,
 // because a number rolling reads best with a touch more room than a fade.
-const DURATION_MS = parseInt(pwc.motion.duration.slow, 10) || 250;
+const DURATION_MS = parseInt(ds.motion.duration.slow, 10) || 250;
 
 function prefersReducedMotion(): boolean {
   return (
@@ -39,7 +39,7 @@ function prefersReducedMotion(): boolean {
   );
 }
 
-// Decelerate, no overshoot — the JS analogue of pwc.motion.easing
+// Decelerate, no overshoot — the JS analogue of ds.motion.easing
 // (cubic-bezier(0.2, 0, 0, 1)). ease-out cubic is visually indistinguishable
 // here and needs no bezier solver.
 function easeOut(t: number): number {

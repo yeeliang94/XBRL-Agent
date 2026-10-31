@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
-import { pwc, tokens, component } from "../lib/theme";
+import { ds, tokens, component } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 
 function readReference(relativePath: string): string {
@@ -94,25 +94,25 @@ describe("XBRL design system is the production authority", () => {
     ["grey100", "--grey-100"],
     ["grey50", "--grey-50"],
   ] as const)("pins %s to the canonical reference", (token, cssName) => {
-    const declaration = `${cssName}: ${pwc[token].toLowerCase()}`;
+    const declaration = `${cssName}: ${ds[token].toLowerCase()}`;
     expect(designSystem.toLowerCase()).toContain(declaration);
     expect(prototype.toLowerCase()).toContain(declaration);
   });
 
   test("pins black and white to the prototype's ink and canvas aliases", () => {
-    expect(designSystem.toLowerCase()).toContain(`--black: ${pwc.black.toLowerCase()}`);
-    expect(designSystem.toLowerCase()).toContain(`--white: ${pwc.white.toLowerCase()}`);
-    expect(prototype.toLowerCase()).toContain(`--ink: ${pwc.black.toLowerCase()}`);
-    expect(prototype.toLowerCase()).toContain(`--canvas: ${pwc.white.toLowerCase()}`);
+    expect(designSystem.toLowerCase()).toContain(`--black: ${ds.black.toLowerCase()}`);
+    expect(designSystem.toLowerCase()).toContain(`--white: ${ds.white.toLowerCase()}`);
+    expect(prototype.toLowerCase()).toContain(`--ink: ${ds.black.toLowerCase()}`);
+    expect(prototype.toLowerCase()).toContain(`--canvas: ${ds.white.toLowerCase()}`);
   });
 
   test("pins typography, spacing, radius, and flat-surface rules", () => {
-    expect(pwc.fontBody).toBe('"Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif');
-    expect(pwc.fontMono).toBe('"SFMono-Regular", Consolas, "Liberation Mono", monospace');
-    expect(pwc.radius).toMatchObject({ sm: 6, md: 8, lg: 12 });
-    expect(pwc.space).toEqual({ xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32, xxxl: 48, xxxxl: 64 });
-    expect(pwc.shadow.card).toBe("none");
-    expect(pwc.shadow.elevated).toBe("0 14px 40px rgba(0, 0, 0, 0.12)");
+    expect(ds.fontBody).toBe('"Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif');
+    expect(ds.fontMono).toBe('"SFMono-Regular", Consolas, "Liberation Mono", monospace');
+    expect(ds.radius).toMatchObject({ sm: 6, md: 8, lg: 12 });
+    expect(ds.space).toEqual({ xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32, xxxl: 48, xxxxl: 64 });
+    expect(ds.shadow.card).toBe("none");
+    expect(ds.shadow.elevated).toBe("0 14px 40px rgba(0, 0, 0, 0.12)");
     expect(ui.card.boxShadow).toBeUndefined();
     expect(tokens.space.pageGutter).toBe(32);
     expect(tokens.space.paneInset).toBe(24);
@@ -132,20 +132,20 @@ describe("XBRL design system is the production authority", () => {
 
 describe("Direction A semantic roles", () => {
   test("black carries actions while orange stays activity/attention", () => {
-    expect(tokens.color.action.primary).toBe(pwc.black);
-    expect(tokens.color.action.primaryHover).toBe(pwc.black);
-    expect(component.button.primary.background).toBe(pwc.black);
-    expect(tokens.color.brand.accent).toBe(pwc.orange500);
+    expect(tokens.color.action.primary).toBe(ds.black);
+    expect(tokens.color.action.primaryHover).toBe(ds.black);
+    expect(component.button.primary.background).toBe(ds.black);
+    expect(tokens.color.brand.accent).toBe(ds.orange500);
     expect(prototype).toContain(".shell-a .button.primary");
     expect(designSystem).toContain("Orange identifies activity and attention");
   });
 
   test("text and control roles match the exact XBRL values", () => {
-    expect(tokens.color.text.primary).toBe(pwc.black);
-    expect(tokens.color.text.body).toBe(pwc.black);
+    expect(tokens.color.text.primary).toBe(ds.black);
+    expect(tokens.color.text.body).toBe(ds.black);
     expect(tokens.color.text.secondary).toBe("rgba(0, 0, 0, 0.64)");
     expect(tokens.color.text.muted).toBe("rgba(0, 0, 0, 0.46)");
-    expect(tokens.color.border.control).toBe(pwc.grey500);
+    expect(tokens.color.border.control).toBe(ds.grey500);
   });
 
   test("uses the three-level type scale and exact action geometry", () => {
@@ -156,9 +156,9 @@ describe("Direction A semantic roles", () => {
     expect(designSystem).toContain(`--type-section: ${ui.sectionTitle.fontSize}px`);
     expect(designSystem).toContain(`--type-body: ${ui.bodyText.fontSize}px`);
     expect(designSystem).toContain(`--type-metadata: ${ui.metadata.fontSize}px`);
-    expect(designSystem).toContain(`--weight-regular: ${pwc.weight.regular}`);
-    expect(designSystem).toContain(`--weight-control: ${pwc.weight.medium}`);
-    expect(designSystem).toContain(`--weight-emphasis: ${pwc.weight.semibold}`);
+    expect(designSystem).toContain(`--weight-regular: ${ds.weight.regular}`);
+    expect(designSystem).toContain(`--weight-control: ${ds.weight.medium}`);
+    expect(designSystem).toContain(`--weight-emphasis: ${ds.weight.semibold}`);
     expect(ui.buttonPrimary.minHeight).toBe(40);
     expect(ui.buttonPrimary.padding).toBe("0 15px");
     expect(ui.buttonSm.minHeight).toBe(40);

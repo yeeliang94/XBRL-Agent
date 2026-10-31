@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { pwc } from "../lib/theme";
+import { ds } from "../lib/theme";
 import type { ToastState } from "../lib/appReducer";
 import { CloseIcon } from "./icons";
 
@@ -27,16 +27,16 @@ const TONE_STYLES: Record<
   { background: string; border: string; color: string; accent: string }
 > = {
   success: {
-    background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-    color: pwc.grey800,
-    accent: pwc.success,
+    background: ds.white,
+    border: `1px solid ${ds.grey200}`,
+    color: ds.grey800,
+    accent: ds.success,
   },
   error: {
-    background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-    color: pwc.grey800,
-    accent: pwc.error,
+    background: ds.white,
+    border: `1px solid ${ds.grey200}`,
+    color: ds.grey800,
+    accent: ds.error,
   },
 };
 
@@ -71,7 +71,7 @@ export function SuccessToast({ toast, onDismiss }: SuccessToastProps) {
     <div
       role="status"
       aria-live="polite"
-      className="pwc-toast-enter"
+      className="app-toast-enter"
       style={{
         ...styles.toast,
         background: palette.background,
@@ -96,16 +96,16 @@ export function SuccessToast({ toast, onDismiss }: SuccessToastProps) {
 const styles = {
   toast: {
     position: "fixed" as const,
-    top: pwc.space.lg,
-    right: pwc.space.lg,
+    top: ds.space.lg,
+    right: ds.space.lg,
     zIndex: 1000,
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.md,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    borderRadius: pwc.radius.md,
-    boxShadow: pwc.shadow.elevated,
-    fontFamily: pwc.fontBody,
+    gap: ds.space.md,
+    padding: `${ds.space.sm}px ${ds.space.md}px`,
+    borderRadius: ds.radius.md,
+    boxShadow: ds.shadow.elevated,
+    fontFamily: ds.fontBody,
     fontSize: 14,
     minWidth: 260,
   } as React.CSSProperties,
@@ -118,7 +118,7 @@ const styles = {
     border: "none",
     cursor: "pointer",
     fontSize: 14,
-    fontWeight: pwc.weight.medium,
+    fontWeight: ds.weight.medium,
     padding: 0,
     lineHeight: 1,
   } as React.CSSProperties,

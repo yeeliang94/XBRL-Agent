@@ -125,7 +125,7 @@ describe("ExtractPage — render-gate regression guards", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
     expect(props.handleAbortAll).not.toHaveBeenCalled();
     const dialog = screen.getByRole("dialog", { name: "Stop this extraction run?" });
-    fireEvent.click(dialog.querySelector<HTMLButtonElement>(".pwc-btn-danger")!);
+    fireEvent.click(dialog.querySelector<HTMLButtonElement>(".app-btn-danger")!);
     expect(props.handleAbortAll).toHaveBeenCalledOnce();
   });
 
