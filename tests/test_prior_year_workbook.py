@@ -709,3 +709,58 @@ def test_imported_comparatives_cannot_turn_a_no_write_agent_into_success(
     assert face.status == "failed"
     assert "without writing a workbook" in face.error
     assert (tmp_path / "SOFP_filled.xlsx").exists()
+
+
+def test_native_subtotal_inputs_are_recalculated_not_imported(tmp_path):
+    """mTool types SOCIE other reserves; the canonical model calculates it."""
+    from openpyxl import Workbook
+    from concept_model.bootstrap import _import_one
+    from concept_model.prior_year import validate_export_source
+    from db.schema import init_db
+
+    db = tmp_path / "audit.db"
+    init_db(db)
+    _import_one(db, Path("XBRL-template-MFRS/Company/09-SOCIE.xlsx"), "company")
+    config = {
+        "filing_standard": "mfrs",
+        "filing_level": "company",
+        "denomination": "units",
+        "statements": ["SOCIE"],
+        "variants": {"SOCIE": "Default"},
+    }
+    x = "full_ifrs-cor_2022-03-24.xsd#ifrs-full_"
+    members = ["IssuedCapitalMember", "OtherReservesMember"]
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "SOCIE"
+    for top, date in ((2, "31/12/2025"), (10, "31/12/2024")):
+        for col, member in enumerate(members, 5):
+            ws.cell(top, col).value = "::".join(
+                x + n for n in ("StatementOfChangesInEquityTable", "ComponentsOfEquityAxis", member)
+            )
+            ws.cell(top + 2, col).value = date
+        ws.cell(top + 1, 3).value, ws.cell(top + 1, 4).value = "#DOM#", "#PRIM#"
+        ws.cell(top + 2, 3).value = "#ENDT#"
+        ws.cell(top + 3, 1).value = x + "Equity@periodStartLabel"
+        ws.cell(top + 3, 4).value = "*Equity at beginning of period"
+    ws["E13"], ws["F13"] = 1000, 250
+    workbook = tmp_path / "native.xlsx"
+    wb.save(workbook)
+    wb.close()
+    token = hashlib.sha256(workbook.read_bytes()).hexdigest()
+    root = tmp_path / "prior_year"
+    root.mkdir()
+    (root / f"{token}.xlsx").write_bytes(workbook.read_bytes())
+    (root / f"{token}.json").write_text(json.dumps({"filename": "native.xlsx", "unit": "units"}))
+    config["prior_year_workbook"] = token
+    run = add_run(db, config, "running")
+
+    summary = import_workbook(db, run, tmp_path, config)
+
+    assert (summary["inputs"], summary["recalculated_inputs"]) == (1, 1)
+    with sqlite3.connect(db) as conn:
+        assert [r[0] for r in conn.execute(
+            "SELECT value FROM run_concept_facts WHERE run_id=? AND source=?", (run, SOURCE)
+        )] == [1000]
+        # The same file must still be accepted when the mTool draft is prepared.
+        validate_export_source(conn, run, workbook)

@@ -22,6 +22,31 @@ def _require_blank_current_year(facts):
         )
 
 
+def _prior_year_inputs(conn, facts):
+    """Split filled PY inputs into importable facts and recalculated subtotals."""
+    from concept_model.facts_api import _concept_owns_formula, _lookup_concept
+
+    inputs = []
+    recalculated = 0
+    previous = conn.row_factory
+    conn.row_factory = sqlite3.Row  # required by the facts_api lookups
+    try:
+        for f in facts:
+            if f["period"] != "PY" or f["value"] is None or f["calculated"]:
+                continue
+            # mTool keeps some subtotals as typed inputs (for example SOCIE
+            # other reserves) that the canonical model calculates. Those stay
+            # unchanged in the workbook and are recalculated, never imported.
+            concept = _lookup_concept(conn, f["concept_uuid"])
+            if concept and _concept_owns_formula(conn, f["concept_uuid"], concept):
+                recalculated += 1
+                continue
+            inputs.append(f)
+    finally:
+        conn.row_factory = previous
+    return inputs, recalculated
+
+
 def workbook_path(session_dir: Path, token: str) -> Path:
     if not re.fullmatch(r"[a-f0-9]{64}", token):
         raise ValueError("Choose a valid rolled-forward workbook again.")
@@ -127,11 +152,7 @@ def inspect_workbook(conn, config: dict, path: Path, unit: str, infopack=None):
         )
     read = read_human_file(conn, 0, path, unit, shape=shape, include_notes=False)
     _require_blank_current_year(read.facts)
-    inputs = [
-        f
-        for f in read.facts
-        if f["period"] == "PY" and f["value"] is not None and not f["calculated"]
-    ]
+    inputs, recalculated = _prior_year_inputs(conn, read.facts)
     if not inputs:
         raise ValueError(
             "No prior-year numeric inputs match the selected templates. Check the year columns and statement formats."
@@ -177,6 +198,7 @@ def inspect_workbook(conn, config: dict, path: Path, unit: str, infopack=None):
         "layout": layout,
         "layout_digest": layout_digest,
         "inputs": len(inputs),
+        "recalculated_inputs": recalculated,
         "blank_slots": missing,
         "unresolved_slots": read.summary["unresolved_slots"],
         "not_in_file": read.not_compared,
@@ -583,8 +605,7 @@ def validate_export_source(conn, run_id, path, *, require_blank_current_year=Tru
         _require_blank_current_year(read.facts)
     actual = {
         (f["concept_uuid"], f["entity_scope"], f["dimension_key"]): f["value"]
-        for f in read.facts
-        if f["period"] == "PY" and f["value"] is not None and not f["calculated"]
+        for f in _prior_year_inputs(conn, read.facts)[0]
     }
     expected = {
         (r[0], r[1], r[2]): r[3]
