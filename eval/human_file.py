@@ -107,7 +107,8 @@ def _now() -> str:
         "+00:00", "Z")
 
 
-def run_filing_shape(conn: sqlite3.Connection, run_id: int) -> dict[str, Any]:
+def run_filing_shape(conn: sqlite3.Connection, run_id: int, *,
+                     config: dict | None = None) -> dict[str, Any]:
     """The run's standard, level, denomination and template sets.
 
     ``statements`` maps each compared template to its display name;
@@ -116,13 +117,14 @@ def run_filing_shape(conn: sqlite3.Connection, run_id: int) -> dict[str, Any]:
     """
     from db import repository as repo
 
-    run = repo.fetch_run(conn, run_id)
-    if run is None:
-        raise HumanFileError("Run not found.", status=404)
-    if run.status not in COMPARABLE_RUN_STATUSES:
-        raise HumanFileError(
-            "Only a completed run can be compared with a human file.", status=409)
-    config = run.config or {}
+    if config is None:
+        run = repo.fetch_run(conn, run_id)
+        if run is None:
+            raise HumanFileError("Run not found.", status=404)
+        if run.status not in COMPARABLE_RUN_STATUSES:
+            raise HumanFileError(
+                "Only a completed run can be compared with a human file.", status=409)
+        config = run.config or {}
     standard = str(config.get("filing_standard") or "mfrs").lower()
     level = str(config.get("filing_level") or "company").lower()
 
@@ -460,11 +462,13 @@ def _magnitude_warning(conn, run_id: int, facts: list[dict]) -> str | None:
 
 
 def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
-                    unit: str) -> HumanFileRead:
+                    unit: str, *, shape: dict | None = None,
+                    periods: tuple[str, ...] = ("CY", "PY"),
+                    include_notes: bool = True) -> HumanFileRead:
     """Read ``path`` as the human's filing for ``run_id``. Nothing is stored."""
     if unit not in UNIT_FACTORS:
         raise HumanFileError("Unit must be units, thousands or millions.")
-    shape = run_filing_shape(conn, run_id)
+    shape = shape if shape is not None else run_filing_shape(conn, run_id)
     standard, level = shape["standard"], shape["level"]
     scale = UNIT_FACTORS[unit] / UNIT_FACTORS.get(shape["denomination"], 1_000.0)
 
@@ -588,9 +592,12 @@ def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
             "concept_uuid": write["concept_uuid"], "period": write["period"],
             "entity_scope": write["entity_scope"], "dimension_key": dimension_key,
             "value": value, "calculated": calculated, "unit_class": unit_class,
+            "source_sheet": write["sheet"], "source_cell": f"{col}{row}",
         })
 
     for write in ready["writes"]:
+        if write["period"] not in periods:
+            continue
         if not write.get("cell"):
             continue  # label-only fallback: never read by guess
         col, row = split_ref(write["cell"])
@@ -645,8 +652,10 @@ def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
             "human_variant": filled_variant,
         })
 
-    notes, note_unmatched, outside = _read_notes(
-        conn, data, standard, level, shape["notes_templates"], statements)
+    notes, note_unmatched, outside = (
+        _read_notes(conn, data, standard, level, shape["notes_templates"], statements)
+        if include_notes else ([], [], {})
+    )
     result.notes = notes
     result.unmatched.extend(note_unmatched)
     for template_id, count in outside.items():

@@ -954,6 +954,8 @@ class NotesDeps:
     # logic so a stale `filled.xlsx` from an earlier run in the same
     # output_dir doesn't get layered on top of.
     wrote_once: bool = False
+    # Imported comparatives seed the scratch artifact but are not an extraction write.
+    prior_year_seeded: bool = False
     # Set when save_result persists the final artefacts. The coordinator
     # stops the loop here instead of paying for a closing chat turn.
     result_saved: bool = False
@@ -3052,7 +3054,7 @@ def _write_source_and_project_impl(
             output_path = Path(deps.output_dir) / deps.filled_filename
             source_path = (
                 Path(deps.filled_path)
-                if deps.wrote_once and deps.filled_path
+                if (deps.wrote_once or deps.prior_year_seeded) and deps.filled_path
                 and Path(deps.filled_path).exists()
                 else Path(deps.template_path)
             )
@@ -3231,7 +3233,7 @@ def _write_payloads_through_writer_impl(deps: NotesDeps, payloads: list):
         output_path = str(Path(deps.output_dir) / deps.filled_filename)
         source_path = (
             deps.filled_path
-            if deps.wrote_once and deps.filled_path
+            if (deps.wrote_once or deps.prior_year_seeded) and deps.filled_path
             and Path(deps.filled_path).exists()
             else deps.template_path
         )
@@ -3461,6 +3463,16 @@ def create_notes_agent(
     # are. No-op on text / hybrid PDFs; the tool stays registered.
     from tools.pdf_search import scanned_pdf_advisory
     system_prompt += scanned_pdf_advisory(pdf_path)
+
+    from concept_model.prior_year import guidance, seed_scratch, register_comparison_tool
+    from concept_model.parser import derive_template_id
+    prior_template_id = derive_template_id(Path(template_path_str))
+    if entry.is_numeric:
+        system_prompt += guidance(db_path, run_id, prior_template_id)
+        scratch = str(Path(deps.output_dir) / filled_filename)
+        if seed_scratch(db_path, run_id, prior_template_id, template_path_str, scratch, filing_level):
+            deps.filled_path = scratch
+            deps.prior_year_seeded = True
 
     from agent_instructions import guidance_for_run
     system_prompt += guidance_for_run(db_path, run_id, "notes_extraction")
@@ -4157,4 +4169,6 @@ def create_notes_agent(
             """
             return _submit_coverage_entries_impl(ctx.deps, entries)
 
+    if entry.is_numeric:
+        register_comparison_tool(agent, db_path, run_id, prior_template_id)
     return agent, deps

@@ -128,6 +128,8 @@ class ExtractionDeps:
         self.pdf_page_count = 0
         self.turn_counter = 0
         self.filled_path: str = ""
+        # Imported comparatives seed the scratch workbook but are not an extraction write.
+        self.prior_year_seed_path: str = ""
         # Phase 1.3: save_result gating. verify_totals populates this with
         # the most recent VerificationResult; fill_workbook clears it so
         # the agent cannot call fill_workbook then save_result without a
@@ -1168,6 +1170,12 @@ def create_extraction_agent(
     from tools.pdf_search import scanned_pdf_advisory
     system_prompt += scanned_pdf_advisory(pdf_path, page_text_tool=True)
 
+    from concept_model.prior_year import guidance, seed_scratch, register_comparison_tool
+    system_prompt += guidance(db_path, run_id, template_id)
+    scratch = str(Path(deps.output_dir) / deps.filled_filename)
+    if seed_scratch(db_path, run_id, template_id, template_path, scratch, filing_level):
+        deps.prior_year_seed_path = scratch
+
     from agent_instructions import guidance_for_run
     system_prompt += guidance_for_run(db_path, run_id, "figures_extraction")
 
@@ -1391,10 +1399,10 @@ def create_extraction_agent(
             ctx.deps.last_verify_result = None
             return message
         output_path = str(Path(ctx.deps.output_dir) / ctx.deps.filled_filename)
-        source_path = (
-            ctx.deps.filled_path
-            if ctx.deps.filled_path and Path(ctx.deps.filled_path).exists()
-            else ctx.deps.template_path
+        source_path = next(
+            (path for path in (ctx.deps.filled_path, ctx.deps.prior_year_seed_path)
+             if path and Path(path).exists()),
+            ctx.deps.template_path,
         )
         validator_context = nullcontext(None)
         if (
@@ -1668,4 +1676,5 @@ def create_extraction_agent(
                 )
             return " ".join(parts)
 
+    register_comparison_tool(agent, db_path, run_id, template_id)
     return agent, deps

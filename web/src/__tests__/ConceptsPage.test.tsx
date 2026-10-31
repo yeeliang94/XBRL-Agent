@@ -804,6 +804,18 @@ describe("ConceptsPage", () => {
       .not.toHaveStyle({ borderLeft: `1px solid ${ds.grey200}` });
   });
 
+  test("rolled-forward SOCIE keeps prior-year matrix cells read-only", async () => {
+    const rolled = { run_id: 7, concepts: matrixConcepts.concepts.map((c) =>
+      c.kind === "MATRIX_CELL" ? { ...c, editable: true, preserve_prior_year: true,
+        scope_facts: { Company: { CY: c.value, PY: 1000 } } } : c) };
+    mockFetch((url) => url.includes("/concepts") ? rolled : { conflicts: [] });
+    render(<ConceptsPage runId={7} />);
+    await screen.findByTestId("concept-matrix-grid");
+    expect(screen.getByTestId("matrix-cell-11-B-CY").querySelector("input")).not.toBeNull();
+    expect(screen.getByTestId("matrix-cell-11-B-PY").querySelector("input")).toBeNull();
+    expect(screen.getByTestId("matrix-cell-11-B-PY")).toHaveTextContent("1,000");
+  });
+
   test("editable matrix cells render an input and PATCH the facts endpoint", async () => {
     // Peer-review F1: SOCIE data-entry component cells must be editable.
     const editableMatrix = {

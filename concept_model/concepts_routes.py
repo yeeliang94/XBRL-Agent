@@ -70,6 +70,8 @@ def register_concept_routes(app, audit_db_getter) -> None:
             # their years instead of bare "CY" / "PY" (D5). Best-effort: a run
             # without scout, or an unparseable config, just yields nulls and the
             # UI keeps the plain headers.
+            from concept_model.prior_year import is_preserved
+            preserve_prior_year = is_preserved(conn, run_id)
             reporting_cy = reporting_py = None
             try:
                 cfg_raw = run["run_config_json"] if "run_config_json" in run.keys() else None
@@ -271,6 +273,7 @@ def register_concept_routes(app, audit_db_getter) -> None:
                     ),
                     "is_alias": alias is not None,
                     "category_facts": category_facts_by_uuid.get(r["concept_uuid"], []),
+                    "preserve_prior_year": preserve_prior_year,
                     "scope_facts": scope_facts_by_uuid.get(
                         r["concept_uuid"], {}
                     ),

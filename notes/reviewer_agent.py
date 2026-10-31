@@ -1652,6 +1652,8 @@ def create_notes_reviewer_agent(
         for key, ref in deps.finding_refs.items():
             packet += "\n" + _review_source_line(f"{ref}: {_finding_reference_summary(key)}")
     system_prompt = f"{base_prompt}\n\n{packet}"
+    from concept_model.prior_year import guidance as prior_year_guidance, register_comparison_tool
+    system_prompt += prior_year_guidance(db_path, run_id)
     from agent_instructions import guidance_for_run
     system_prompt += guidance_for_run(db_path, run_id, "notes_review")
 
@@ -2900,4 +2902,5 @@ def create_notes_reviewer_agent(
             })
         return f"ok: cleared {sheet} row {row}"
 
+    register_comparison_tool(agent, db_path, run_id, None)
     return agent, deps, context

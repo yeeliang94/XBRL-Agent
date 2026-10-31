@@ -138,6 +138,7 @@ interface NotesPreview {
 type NoteTarget = { key?: string; sheet?: string; cell?: string };
 
 interface ReportSummary {
+  prior_year_preservation?: { status: string; preserved_inputs: number };
   sheet_selection?: { selected_sheets: string[]; excluded_sheets: string[]; excluded_figures: number; excluded_notes: number | null };
   status: string;
   numeric_status?: string;
@@ -560,6 +561,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
   const [columnPrompt, setColumnPrompt] = useState<string | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [preservePriorYear, setPreservePriorYear] = useState(false);
   const [notesSheets, setNotesSheets] = useState<string[]>([]);
   const [selectedSheets, setSelectedSheets] = useState<string[] | null>(null);
   const availableSheets = Array.from(new Set([...(meta?.sheets_covered ?? []), ...notesSheets])).sort();
@@ -682,12 +684,25 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
         setReadinessErr(result ? null : "The check returned an unreadable result.");
       })
       .catch((e) => { if (current() && preflightRequest === preflightSeq.current) setReadinessErr(fillErrorMessage(e)); });
+    setPreservePriorYear(false);
+    const loadSavedWorkbook = () => {
+      fetch(`/api/runs/${runId}/prior-year-workbook`)
+        .then(async (r) => {
+          if (r.status === 404) return null;
+          if (!r.ok) throw await responseError(r);
+          const disposition = r.headers.get("Content-Disposition") ?? "";
+          const name = disposition.match(/filename="([^"]+)"/)?.[1] ?? "rolled-forward.xlsx";
+          return new File([await r.blob()], name);
+        })
+        .then((saved) => { if (current() && saved) { setPreservePriorYear(true); setFile(saved); } })
+        .catch((e) => { if (current()) setLoadErr(`Could not load the saved rolled-forward workbook. ${fillErrorMessage(e)}`); });
+    };
     fetch(`/api/runs/${runId}/mtool-fill`)
       .then(async (r) => {
         if (!r.ok) throw await responseError(r);
         return r.json();
       })
-      .then((doc) => { if (current()) setMeta(doc.meta); })
+      .then((doc) => { if (current()) { setMeta(doc.meta); setPreservePriorYear(doc.meta?.preserve_prior_year === true); if (doc.meta?.preserve_prior_year) loadSavedWorkbook(); } })
       .catch((e) => { if (current()) setLoadErr(fillErrorMessage(e)); });
     fetch(`/api/runs/${runId}/mtool-notes-fill`)
       .then(async (r) => {
@@ -1105,7 +1120,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
             <span>{notice}</span>
           </p>
         )}
-        {!file && <p style={styles.sub}>Use an empty .xlsx template from mTool.</p>}
+        {!file && <p style={styles.sub}>Choose a blank or rolled-forward .xlsx template from mTool.</p>}
 
         <fieldset disabled={busy || downloading || fillQueued} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
         {!file && (
@@ -1145,6 +1160,8 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
             />
           </div>
         )}
+
+        {preservePriorYear && <p role="note" style={styles.sub}>Fill current-year numeric fields only. Preserve prior-year inputs, including numeric notes.</p>}
 
         {file && meta && !report && (
           <p aria-label="Fill summary" style={{ margin: `${ds.space.md}px 0`, color: ds.grey700, fontSize: 14 }}>
@@ -1524,6 +1541,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
                 The draft contains every safely matched value. Finish the items below in mTool before filing.
               </p>
             )}
+            {report.prior_year_preservation?.status === "ok" && <p style={ui.supportingText}>Verified: {report.prior_year_preservation.preserved_inputs} prior-year inputs preserved. Only current-year numeric fields were filled.</p>}
             <div style={styles.summaryGrid}>
               <div><div style={styles.summaryValue}>{report.counts.written}</div><div style={{ ...styles.statLine, color: ds.grey700 }}>figures filled</div></div>
               {report.notes && <div><div style={styles.summaryValue}>{report.notes.counts.written}</div><div style={{ ...styles.statLine, color: ds.grey700 }}>notes filled</div></div>}

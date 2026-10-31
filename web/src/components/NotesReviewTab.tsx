@@ -2347,7 +2347,7 @@ function NumericCategoryRow({
 
   const saveColumn = useCallback(
     async (key: string) => {
-      if (!cell.concept_uuid) return; // unmappable row — nothing to write
+      if (!cell.concept_uuid || (cell.preserve_prior_year && NUMERIC_VALUE_COLUMNS[key].period === "PY")) return;
       const original = values[key];
       // Accountant-aware parse: "1,234" / "(95)" resolve instead of failing.
       const parsed = parseNumericInput(drafts[key] ?? "");
@@ -2425,6 +2425,8 @@ function NumericCategoryRow({
               <input
                 type="text"
                 inputMode="decimal"
+                readOnly={cell.preserve_prior_year && NUMERIC_VALUE_COLUMNS[key].period === "PY"}
+                title={cell.preserve_prior_year && NUMERIC_VALUE_COLUMNS[key].period === "PY" ? "Imported prior-year figure; preserved from the rolled-forward workbook" : undefined}
                 aria-label={`${cell.label}, ${NUMERIC_VALUE_COLUMNS[key].label}`}
                 data-testid={`numeric-input-${cell.row}-${key}`}
                 style={{ ...styles.numericInput, ...noteHighlightStyle(
@@ -2472,7 +2474,7 @@ function NumericCategoryRow({
               })()}
           </div>
       ))}
-      {dimensionKey === "" && cell.category_options?.length && Object.values(cell.resolution_tokens ?? {}).some(Boolean) ? (
+      {dimensionKey === "" && cell.category_options?.length && Object.entries(cell.resolution_tokens ?? {}).some(([key, token]) => token && !(cell.preserve_prior_year && NUMERIC_VALUE_COLUMNS[key]?.period === "PY")) ? (
         <div role="cell" aria-label="Category resolution" style={styles.numericSaveErrors}>
           <NumericCategoryResolution runId={runId} cell={cell}
             blocked={columns.some((key) => ["dirty", "saving", "failed"].includes(columnStatuses[key] ?? "idle"))}
@@ -2514,7 +2516,7 @@ function NumericCategoryResolution({ runId, cell, blocked, onStatusChange, onRes
   const [error, setError] = useState<string | null>(null);
   const options = cell.category_options ?? [];
   const slots = Object.keys(cell.resolution_tokens ?? {}).filter((key) =>
-    NUMERIC_VALUE_COLUMNS[key] && cell.values?.[key] != null && cell.resolution_tokens?.[key]);
+    NUMERIC_VALUE_COLUMNS[key] && !(cell.preserve_prior_year && NUMERIC_VALUE_COLUMNS[key].period === "PY") && cell.values?.[key] != null && cell.resolution_tokens?.[key]);
   const change = () => { setError(null); onStatusChange("dirty"); };
   const submit = async () => {
     const category = options[Number(option)];

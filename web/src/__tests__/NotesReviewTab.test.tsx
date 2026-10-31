@@ -3553,3 +3553,17 @@ test("policy heading hierarchy and nested emphasis survive mounting the real edi
     expect(editor.querySelector("ul li ul li u")?.textContent).toBe("complete");
   });
 });
+
+test("rolled-forward numeric notes keep prior-year inputs read-only", async () => {
+  const template: NotesCellsResponse = {
+    sheets: [{ ...FULL_TEMPLATE.sheets[1], rows: [{ ...FULL_TEMPLATE.sheets[1].rows[0],
+      preserve_prior_year: true, values: { cy: 4242, py: 4000 } }] }],
+  };
+  mockFetchOnce(template);
+  render(<NotesReviewTab runId={1} />);
+  const current = await screen.findByTestId("numeric-input-6-cy");
+  const prior = screen.getByTestId("numeric-input-6-py");
+  expect(current).not.toHaveAttribute("readonly");
+  expect(prior).toHaveAttribute("readonly");
+  expect(prior).toHaveAttribute("title", expect.stringContaining("Imported prior-year"));
+});

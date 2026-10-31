@@ -732,6 +732,13 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
                 "abandoning worker thread", timeout, run_id,
             )
             return None
+        from concept_model.prior_year import check_results as prior_year_checks, incomplete_assessment
+        try:
+            results.extend(prior_year_checks(str(AUDIT_DB_PATH), run_id))
+        except Exception:  # noqa: BLE001 — an unfinished assessment stays visible, never clean
+            logger.warning("prior-year comparative recheck failed for run %s", run_id, exc_info=True)
+            results.append(incomplete_assessment())
+        advisory_rows = [row for row in advisory_rows if not row["name"].startswith("Prior-year ")]
         from cross_checks.framework import comparands_to_json
         numeric_rows = [
             {
@@ -3368,6 +3375,8 @@ class RunConfigRequest(BaseModel):
     scanned_pdf: bool = False
     # First statements after incorporation have no comparative reporting period.
     first_financial_statements: bool = False
+    prior_year_workbook: Optional[str] = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    prior_year_layout: Optional[str] = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     # Human corrections to the preview's note list. Kept separate from scout
     # output so a mandatory fresh scan can improve its hints without erasing
     # additions/deletions the operator deliberately made.
@@ -3441,6 +3450,8 @@ class RunConfigPatchRequest(BaseModel):
     use_scout: Optional[bool] = None
     scanned_pdf: Optional[bool] = None
     first_financial_statements: Optional[bool] = None
+    prior_year_workbook: Optional[str] = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    prior_year_layout: Optional[str] = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     notes_inventory_overrides: Optional["NotesInventoryOverrides"] = None
     filing_level: Optional[Literal["company", "group"]] = None
     filing_standard: Optional[Literal["mfrs", "mpers"]] = None
@@ -4399,14 +4410,15 @@ def _run_socf_section_placement(merged_path: str, infopack, run_id: int) -> list
     ]
 
 
-async def _run_notes_advisory_bounded(fn, *args, run_id: int, label: str) -> list:
+async def _run_notes_advisory_bounded(fn, *args, run_id: int, label: str, failure_results: Optional[list] = None) -> list:
     """Dispatch a supplemental workbook check off the event loop, bounded.
 
     The citation and notes↔face passes load the full merged workbook with
     openpyxl — blocking work that must never run on the event loop (the exact
     failure mode ``_run_cross_checks_bounded`` exists for). Same executor and
     timeout bound. This helper NEVER raises (invariant #10): infrastructure
-    trouble cannot fabricate either an advisory or a filing contradiction.
+    trouble cannot fabricate a filing contradiction. A caller may supply an
+    explicit incomplete-assessment warning; other failures return no findings.
     """
     loop = asyncio.get_running_loop()
     # Read the module global at call time so tests can monkeypatch it.
@@ -4422,13 +4434,13 @@ async def _run_notes_advisory_bounded(fn, *args, run_id: int, label: str) -> lis
             "%s advisory check exceeded %.0fs cap on run %s — skipping "
             "(worker thread abandoned)", label, timeout, run_id,
         )
-        return []
+        return list(failure_results or [])
     except Exception:  # noqa: BLE001 — advisory, never fail a run
         logger.warning(
             "%s advisory check failed to dispatch on run %s",
             label, run_id, exc_info=True,
         )
-        return []
+        return list(failure_results or [])
 
 
 async def _run_notes_advisories(
@@ -4503,6 +4515,11 @@ async def _run_notes_advisories(
     out.extend(await _run_notes_advisory_bounded(
         _run_notes_numeric_footing, run_id, filing_level, filing_standard,
         run_id=run_id, label="notes-numeric-footing"))
+    from concept_model.prior_year import check_results as prior_year_checks, incomplete_assessment
+    out.extend(await _run_notes_advisory_bounded(
+        prior_year_checks, str(AUDIT_DB_PATH), run_id,
+        run_id=run_id, label="prior-year-comparatives",
+        failure_results=[incomplete_assessment()]))
     return out
 
 
@@ -6082,6 +6099,25 @@ async def run_multi_agent_stream(
                     run_id,
                     exc_info=True,
                 )
+
+        if run_config.prior_year_workbook:
+            from concept_model.prior_year import import_workbook
+            try:
+                await asyncio.to_thread(import_workbook, str(AUDIT_DB_PATH), run_id,
+                    session_dir, run_config.model_dump(), infopack)
+                await event_queue.put({"event": "status", "data": {
+                    "phase": "prior_year_imported", "message": "Prior-year workbook figures imported; current-year extraction will preserve them."}})
+            except Exception as exc:
+                fail_events, fail_status = _fail_run(db_conn, run_id,
+                    f"Prior-year workbook could not be imported: {exc}", error_code="prior_year_import_failed")
+                terminal_status = fail_status or terminal_status
+                for event in fail_events:
+                    if client_connected:
+                        try:
+                            yield event
+                        except (asyncio.CancelledError, GeneratorExit):
+                            client_connected = False
+                return
 
         # Notes source integrity, plan Phases 3.5 / 4.3. Read the uploaded
         # Word file into a frozen manifest BEFORE any agent sees a template,
@@ -8920,6 +8956,7 @@ from api.notes_formatter import router as _notes_formatter_router
 from api.files import router as _files_router
 from api.mtool import router as _mtool_router
 from api.human_file import router as _human_file_router
+from api.prior_year import router as _prior_year_router
 from auth.routes import router as _auth_router
 
 app.include_router(_config_router)
@@ -8936,6 +8973,7 @@ app.include_router(_notes_formatter_router)
 app.include_router(_files_router)
 app.include_router(_mtool_router)
 app.include_router(_human_file_router)
+app.include_router(_prior_year_router)
 app.include_router(_auth_router)
 
 # Re-export the moved handler functions as ``server.<name>`` so existing tests
