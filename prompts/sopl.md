@@ -43,6 +43,9 @@ searching for missing components or derive a remainder.
    destination contributing to that same face rollup. Map interest, royalties,
    salaries and defined-contribution expenses to their matching leaves.
    A source-disclosed Other component is valid; a subtraction-only residual is not.
+   A note that shows the whole face amount as a single component (for example
+   one line equal to the full face figure) is a complete breakdown: use that
+   component's specific leaf rather than the catch-all.
 4. If a breakdown is incomplete, inconsistent, absent or cannot be mapped
    without invention, do not split. Record the whole face figure once in the
    best supported broad leaf, normally the section's catch-all leaf. Cite the

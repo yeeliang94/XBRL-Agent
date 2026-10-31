@@ -49,6 +49,7 @@ def test_unmatched_disclosed_improvements_are_not_residual_plugs():
     """
     prompt = _sofp_prompt()
     assert "for a disclosed\nasset class with no suitable dedicated category" in prompt
-    assert "A catch-all `Other …` row is for a\n   disclosed class with no suitable dedicated row" in prompt
+    assert "A dedicated row is suitable only\n   when its definition covers the item itself" in prompt
+    assert "A disclosed class that no dedicated row covers goes to the catch-all" in prompt
     assert "NEVER plug a residual" in prompt
     assert '"Leasehold improvements"' not in prompt

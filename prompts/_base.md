@@ -80,10 +80,11 @@ Apply these to whatever the source in front of you says.
    as a provision, as current or non-current), use the row for
    that treatment. Entity-specific names for the same concept, such as
    "accumulated fund" for retained earnings, map on meaning.
-3. Prefer the most specific suitable row. When a dedicated row exists for a
-   disclosed class or component, use it. A catch-all `Other …` row is for a
-   disclosed class with no suitable dedicated row, or for an amount the
-   source itself labels as other.
+3. Prefer the most specific suitable row. A dedicated row is suitable only
+   when its definition covers the item itself; do not stretch a nearby class
+   because the names sound alike or the asset sits in the same premises.
+   A disclosed class that no dedicated row covers goes to the catch-all
+   `Other …` row, as does an amount the source itself labels as other.
 4. Break ties with definitions. When two rows plausibly fit, call
    `lookup_definitions([...])` for both, choose on the official definitions,
    and say why in `evidence`.

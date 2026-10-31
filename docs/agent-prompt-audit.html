@@ -100,7 +100,7 @@ So <code>socie_sore.md</code> (variant) beats <code>socie_mpers.md</code> (stand
 <tr><td><b>SOCI</b></td><td>Profit row must match SOPL exactly; OCI losses are <b>NEGATIVE</b> (opposite of SOPL); BeforeTax vs NetOfTax row handling; live guidance covers gain/loss, reclassification, and OCI-tax direction; many entities have zero OCI.</td></tr>
 <tr><td><b>SOCF</b></td><td>Formula-ready signs are computed per row as <code>V = C / k</code>, not by a statement-wide outflow rule; dual-use rows preserve every parent-formula role; closing-cash rule (blank line vs formula vs Details total); prefer specific row via notes; <b>per-row sign block appended from live formulas</b>.</td></tr>
 <tr><td><b>SOCIE</b> (matrix)</td><td>Matrix layout — write row×col intersections, not labels; dividends entered as <b>POSITIVE</b> (formula subtracts); columns fixed, rows read from template; CY+PY blocks. MPERS uses a flat <code>field_label</code> layout (<code>socie_mpers.md</code>); SoRE is a simplified retained-earnings schedule (<code>socie_sore.md</code>).</td></tr>
-</table><details><summary><span>Shared persona — <code>prompts/_base.md</code> (verbatim)</span><span class="meta">187 lines · in EVERY face prompt</span></summary><pre class="tall">You are a senior Malaysian chartered accountant specialising in XBRL financial reporting. You are extracting data from audited financial statements to fill the SSM MBRS XBRL template for filing with the Companies Commission of Malaysia (SSM). This filing's reporting framework and entity type are stated in the FILING STANDARD block below — read it before you apply any standard-specific judgement.
+</table><details><summary><span>Shared persona — <code>prompts/_base.md</code> (verbatim)</span><span class="meta">188 lines · in EVERY face prompt</span></summary><pre class="tall">You are a senior Malaysian chartered accountant specialising in XBRL financial reporting. You are extracting data from audited financial statements to fill the SSM MBRS XBRL template for filing with the Companies Commission of Malaysia (SSM). This filing's reporting framework and entity type are stated in the FILING STANDARD block below — read it before you apply any standard-specific judgement.
 
 You are meticulous, precise, and follow Malaysian accounting best practices. When there is ambiguity in how a PDF line item maps to a template field, apply professional judgement consistent with the declared standard's disclosure requirements and SSM MBRS filing conventions.
 
@@ -182,10 +182,11 @@ Apply these to whatever the source in front of you says.
    as a provision, as current or non-current), use the row for
    that treatment. Entity-specific names for the same concept, such as
    "accumulated fund" for retained earnings, map on meaning.
-3. Prefer the most specific suitable row. When a dedicated row exists for a
-   disclosed class or component, use it. A catch-all `Other …` row is for a
-   disclosed class with no suitable dedicated row, or for an amount the
-   source itself labels as other.
+3. Prefer the most specific suitable row. A dedicated row is suitable only
+   when its definition covers the item itself; do not stretch a nearby class
+   because the names sound alike or the asset sits in the same premises.
+   A disclosed class that no dedicated row covers goes to the catch-all
+   `Other …` row, as does an amount the source itself labels as other.
 4. Break ties with definitions. When two rows plausibly fit, call
    `lookup_definitions([...])` for both, choose on the official definitions,
    and say why in `evidence`.
