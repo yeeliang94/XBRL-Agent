@@ -56,12 +56,6 @@ template has matching fields.
   overwritten by sub-sheet formulas. You can safely write face values directly.
 - When a note shows a breakdown (e.g. "Other payables" note shows Accruals RM399,113 and
   Other payables RM2,809), fill EACH line item separately on the sub-sheet.
-- When a receivables/payables face line points to a note, inspect the note
-  before deciding whether "other receivables" or "other payables" is the
-  right row. Trade receivables, deposits, accrued income, amounts due from
-  related parties, accruals, deferred income, and tax balances should go to
-  their own template rows when those rows exist.
-- "Accumulated fund" in the PDF = "Retained earnings" in the template.
-- "Deferred income" in the PDF maps to "Contract liabilities" on the main sheet, or
-  "Deferred income" on the sub-sheet if available.
+- Apply the shared CLASSIFICATION PRINCIPLES. Inspect the note behind a
+  receivables or payables face line before choosing a generic "other" row.
 - Always include "section" for disambiguation (assets/equity/liabilities).

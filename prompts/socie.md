@@ -72,7 +72,9 @@ CELL INTERSECTIONS (row × column), not entire rows.
 === CRITICAL RULES ===
 
 - **Do NOT fill formula columns** (M, S, T, U, X). These auto-calculate.
-- **Leave cells BLANK** where there is no activity. Do not enter zeros.
+- **Leave a cell BLANK** where the source shows no amount for that movement and
+  component. Write 0 only under the shared printed-zero rule, when the
+  statement itself prints 0 or a dash in that exact cell.
 - **Profit always goes to Retained earnings column (C)** — even if the entity calls it
   "accumulated fund", "revenue reserve", or "retained profit".
 - **Closing equity will be cross-checked against SOFP total equity LATER.** You

@@ -1,78 +1,41 @@
-"""RUN-REVIEW P1-3 (2026-04-26): pin the AFS↔SSM concept cheat-sheet.
+"""Pin the shared classification principles that replaced the SOFP cheat-sheet.
 
-The Amway run mis-routed `Consumer products` (an AFS term for finished
-goods) into `Other inventories`, and put a subsidiary trade receivable
-into `Other receivables due from subsidiaries` instead of the trade row.
-The cheat-sheet in `prompts/sofp.md` is the prompt-layer fix; this test
-ensures the load-bearing entries don't get accidentally edited away.
-
-The cheat-sheet lives in the shared `sofp.md` (not the MFRS/MPERS
-precedence tier) because the SSM labels are identical across standards
-— see _build_fixtures.py and the row maps in
-`tests/fixtures/run_review/`. The only divergence (`Refunds provision`
-exists on MFRS, not on MPERS) is called out inline in the cheat-sheet.
+RUN-REVIEW P1-3 (2026-04-26): the Amway run mis-routed `Consumer products`
+into `Other inventories` and a subsidiary trade receivable into the
+`Other receivables` row. The first fix was a per-label cheat-sheet in
+`prompts/sofp.md`. It was replaced (2026-10-31) by general principles in
+`prompts/_base.md`: classify by substance (trade versus other turns on what
+the item is, not the counterparty), follow the source's own classification,
+and prefer a dedicated row over a catch-all `Other …` row. These cover both
+original errors without a label list, and reach every face statement.
 """
 from __future__ import annotations
 
-from pathlib import Path
+import pytest
 
 from prompts import render_prompt
 from statement_types import StatementType
 
-_PROMPTS = Path(__file__).resolve().parent.parent / "prompts"
 
-
-def test_sofp_cheatsheet_present_in_static_prompt() -> None:
-    """The cheat-sheet header and load-bearing entries must be in
-    `prompts/sofp.md` directly. A casual rewrite that drops the
-    `=== AFS NOTE → SSM ROW MAPPING` anchor will fail this test."""
-    text = (_PROMPTS / "sofp.md").read_text(encoding="utf-8")
-    lower = text.lower()
-    assert "afs note → ssm row mapping" in lower, (
-        "sofp.md must carry the named '=== AFS NOTE → SSM ROW MAPPING ==='"
-        " section — that's the cheat-sheet anchor"
-    )
-    # Load-bearing entries from RUN-REVIEW §3.3
-    assert "consumer products" in lower
-    assert "finished goods" in lower
-    assert "trade receivables due from subsidiary" in lower
-    # The trade-vs-other axis explanation (the *why*, not just *what*)
-    assert "trade vs other" in lower or "trade vs. other" in lower
-    # Provisions guidance (warranty / refunds were lumped into Other in
-    # the reviewed run)
-    assert "warranty provision" in lower
-    assert "do not lump these" in lower or "do not lump" in lower
-
-
-def test_cheatsheet_renders_for_both_filing_standards() -> None:
-    """Because the cheat-sheet lives in the shared `sofp.md`, MPERS runs
-    fall through the prompt-precedence chain to the same content. This
-    test makes that intentional behaviour explicit so a future split
-    into `sofp_mfrs.md` / `sofp_mpers.md` doesn't silently regress
-    MPERS coverage of the cheat-sheet."""
-    mfrs_prompt = render_prompt(
-        StatementType.SOFP, variant="CuNonCu",
-        filing_level="company", filing_standard="mfrs",
-    )
-    mpers_prompt = render_prompt(
-        StatementType.SOFP, variant="CuNonCu",
-        filing_level="company", filing_standard="mpers",
-    )
-    for rendered in (mfrs_prompt, mpers_prompt):
-        lower = rendered.lower()
-        assert "afs note → ssm row mapping" in lower
-        assert "consumer products" in lower
-        assert "trade receivables due from subsidiary" in lower
-
-
-def test_cheatsheet_documents_mpers_refunds_divergence() -> None:
-    """The single MFRS-vs-MPERS divergence (no separate `Refunds
-    provision` row in MPERS) is called out inline so the agent knows
-    why the row may be missing on MPERS runs. Pinned because dropping
-    the call-out silently re-opens the lump-into-Other failure mode
-    on MPERS."""
-    text = (_PROMPTS / "sofp.md").read_text(encoding="utf-8").lower()
-    assert "mpers" in text and "refunds provision" in text, (
-        "sofp.md must mention that MPERS lacks a separate Refunds "
-        "provision row — without that, an MPERS agent runs blind"
-    )
+@pytest.mark.parametrize("standard", ["mfrs", "mpers"])
+@pytest.mark.parametrize("statement,variant", [
+    (StatementType.SOFP, "CuNonCu"),
+    (StatementType.SOFP, "OrderOfLiquidity"),
+    (StatementType.SOPL, "Function"),
+    (StatementType.SOCF, "Indirect"),
+])
+def test_classification_principles_reach_every_face_statement(statement, variant, standard) -> None:
+    rendered = render_prompt(
+        statement, variant=variant, filing_level="company", filing_standard=standard,
+    ).lower()
+    assert "=== classification principles ===" in rendered
+    # The Amway trade-receivable error: substance, not counterparty.
+    assert "classify by substance" in rendered
+    assert "not on whether the counterparty is related" in rendered
+    # The Amway inventories error: dedicated row before the catch-all.
+    assert "prefer the most specific suitable row" in rendered
+    assert "follow the source's own classification" in rendered
+    assert "lookup_definitions" in rendered
+    # The per-label cheat-sheet is gone; principles, not a rulebook.
+    assert "afs note → ssm row mapping" not in rendered
+    assert "consumer products" not in rendered
