@@ -79,6 +79,22 @@ def test_import_guidance_retry_protection_and_comparative_checks(tmp_path):
         db, run, SOFP, facts[0][0], facts[0][2] + 5, "PDF page 8: restated comparative"
     )
     assert any(r.status == "failed" for r in check_results(db, run))
+    # A difference dismissed in review stays accepted when the same figure is
+    # rechecked; a new difference reopens it.
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE run_concept_conflicts SET status='dismissed' WHERE run_id=? AND kind='prior_year_comparative'",
+            (run,),
+        )
+    assert "already accepted" in compare_value(
+        db, run, SOFP, facts[0][0], facts[0][2] + 5, "PDF page 8: restated comparative"
+    )
+    assert not any(r.status == "failed" for r in check_results(db, run))
+    assert "1 differences accepted" in next(
+        r.message for r in check_results(db, run) if r.name == "Prior-year comparative coverage"
+    )
+    compare_value(db, run, SOFP, facts[0][0], facts[0][2] + 6, "PDF page 8: restated again")
+    assert any(r.status == "failed" for r in check_results(db, run))
 
     # A malformed tool call is reported back to the agent instead of ending its run.
     from concept_model.prior_year import register_comparison_tool

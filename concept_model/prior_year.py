@@ -404,6 +404,15 @@ def compare_value(
         if row is None:
             return "No imported value exists for that exact field, scope and category. Leave the missing comparative visible."
         difference = value - row[0]
+        # A reviewer's decision on this exact difference survives a repeat check.
+        previous = conn.execute(
+            "SELECT residual,status FROM run_concept_conflicts WHERE run_id=? AND concept_uuid=? AND period='PY' "
+            "AND entity_scope=? AND dimension_key=? AND kind='prior_year_comparative'",
+            (run_id, concept_uuid, entity_scope, dims),
+        ).fetchone()
+        status = "resolved" if difference == 0 else "open"
+        if difference != 0 and previous and previous[0] == difference and previous[1] != "open":
+            status = previous[1]
         conn.execute(
             "DELETE FROM run_concept_conflicts WHERE run_id=? AND concept_uuid=? AND period='PY' "
             "AND entity_scope=? AND dimension_key=? AND kind='prior_year_comparative'",
@@ -419,14 +428,14 @@ def compare_value(
                 dims,
                 difference,
                 json.dumps({"imported": row[0], "report": value, "evidence": evidence}),
-                "resolved" if difference == 0 else "open",
+                status,
             ),
         )
-    return (
-        "Comparative agrees."
-        if difference == 0
-        else f"Comparative differs: workbook={row[0]}, report={value}. Preserved workbook value; review required."
-    )
+    if difference == 0:
+        return "Comparative agrees."
+    if status != "open":
+        return f"Comparative differs: workbook={row[0]}, report={value}. A reviewer already accepted this difference."
+    return f"Comparative differs: workbook={row[0]}, report={value}. Preserved workbook value; review required."
 
 
 def register_comparison_tool(agent, db_path, run_id, template_id):
@@ -486,16 +495,19 @@ def check_results(db_path, run_id):
         comparisons = {
             (r[0], r[1], r[2]): r[3:]
             for r in conn.execute(
-                "SELECT concept_uuid,entity_scope,dimension_key,residual,detail FROM run_concept_conflicts WHERE run_id=? AND kind='prior_year_comparative'",
+                "SELECT concept_uuid,entity_scope,dimension_key,residual,detail,status FROM run_concept_conflicts WHERE run_id=? AND kind='prior_year_comparative'",
                 (run_id,),
             )
         }
         results = []
-        unchecked = 0
+        unchecked = accepted = 0
         for uid, scope, dims, label in facts:
             checked = comparisons.get((uid, scope, dims))
             if checked is None:
                 unchecked += 1
+            elif checked[0] != 0 and checked[2] != "open":
+                # Resolved or dismissed in review: assessed, not a failure.
+                accepted += 1
             elif checked[0] != 0:
                 detail = json.loads(checked[1])
                 results.append(
@@ -512,6 +524,7 @@ def check_results(db_path, run_id):
                 name="Prior-year comparative coverage",
                 status="warning" if unchecked else "passed",
                 message=f"{len(facts)-unchecked} of {len(facts)} imported figures compared with the current report. "
+                + (f"{accepted} differences accepted in review. " if accepted else "")
                 + (
                     f"{unchecked} remain unassessed; imported figures are preserved."
                     if unchecked
