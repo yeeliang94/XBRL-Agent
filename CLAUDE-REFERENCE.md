@@ -2329,8 +2329,9 @@ immutable session upload. Import its PY numeric inputs into canonical facts,
 including selected numeric notes, before launching agents. Keep two periods;
 do not reuse `first_financial_statements`. Preserve workbook provenance, reject
 PY writes and category reassignment, and retain imported facts and comparative
-assessments during retry cleanup. Agents use prior field choices as advisory
-context and compare PDF comparatives with `check_prior_year`; differences and
+assessments during retry cleanup. Agents follow the imported field choices
+unless a line is absent or has changed in nature (reason in evidence), and
+compare PDF comparatives with `check_prior_year`; differences and
 unassessed coverage remain visible. mTool preparation emits CY numeric writes
 only, validates replacement comparatives and verifies imported cell preservation
 before writing the receipt. Redo copies the selected source workbook. See
