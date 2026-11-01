@@ -23,28 +23,62 @@ def _require_blank_current_year(facts):
 
 
 def _prior_year_inputs(conn, facts):
-    """Split filled PY inputs into importable facts and recalculated subtotals."""
+    """Keep every populated PY input, including authoritative typed subtotals."""
     from concept_model.facts_api import _concept_owns_formula, _lookup_concept
 
     inputs = []
-    recalculated = 0
     previous = conn.row_factory
     conn.row_factory = sqlite3.Row  # required by the facts_api lookups
     try:
         for f in facts:
             if f["period"] != "PY" or f["value"] is None or f["calculated"]:
                 continue
-            # mTool keeps some subtotals as typed inputs (for example SOCIE
-            # other reserves) that the canonical model calculates. Those stay
-            # unchanged in the workbook and are recalculated, never imported.
+            # A native typed subtotal is a source observation, even when the
+            # internal template calculates it. Preserve it through the existing
+            # aggregate-only policy instead of losing an undisclosed breakdown.
             concept = _lookup_concept(conn, f["concept_uuid"])
-            if concept and _concept_owns_formula(conn, f["concept_uuid"], concept):
-                recalculated += 1
-                continue
-            inputs.append(f)
+            aggregate = concept and _concept_owns_formula(conn, f["concept_uuid"], concept)
+            inputs.append({**f, "children_status": "aggregate_only" if aggregate else None})
     finally:
         conn.row_factory = previous
-    return inputs, recalculated
+    return inputs
+
+
+def _check_imported_subtotals(conn, run_id, facts):
+    """Keep disagreements with available source components visible for review."""
+    from concept_model.cascade import _money, _MONEY_TOLERANCE
+    from eval.human_compare import derive_totals
+
+    aggregates = [f for f in facts if f["children_status"] == "aggregate_only"]
+    if not aggregates:
+        return
+    edges = {}
+    for parent, child, coefficient in conn.execute(
+        "SELECT parent_uuid,child_uuid,coefficient FROM concept_edges"
+    ):
+        edges.setdefault(parent, []).append((child, coefficient))
+    values = {
+        (f["concept_uuid"], "PY", f["entity_scope"], f["dimension_key"]): f["value"]
+        for f in facts
+    }
+    for f in aggregates:
+        key = (f["concept_uuid"], "PY", f["entity_scope"], f["dimension_key"])
+        observed = values.pop(key)
+        try:
+            derived = derive_totals(values, edges, [key]).get(key)
+        finally:
+            values[key] = observed
+        if derived is None or abs(_money(observed) - derived) <= _MONEY_TOLERANCE:
+            continue
+        conn.execute(
+            "INSERT INTO run_concept_conflicts(run_id,concept_uuid,period,entity_scope,dimension_key,kind,residual,detail,status,created_at) "
+            "SELECT ?,?,'PY',?,?,'parent_child_disagree',?,?,'open',datetime('now') "
+            "WHERE NOT EXISTS (SELECT 1 FROM run_concept_conflicts WHERE run_id=? AND concept_uuid=? "
+            "AND period='PY' AND entity_scope=? AND dimension_key=? AND kind='parent_child_disagree')",
+            (run_id, key[0], key[2], key[3], _money(observed - derived),
+             f"Imported prior-year subtotal={observed} but available components sum to {derived}; workbook figures preserved.",
+             run_id, key[0], key[2], key[3]),
+        )
 
 
 def workbook_path(session_dir: Path, token: str) -> Path:
@@ -152,7 +186,7 @@ def inspect_workbook(conn, config: dict, path: Path, unit: str, infopack=None):
         )
     read = read_human_file(conn, 0, path, unit, shape=shape, include_notes=False)
     _require_blank_current_year(read.facts)
-    inputs, recalculated = _prior_year_inputs(conn, read.facts)
+    inputs = _prior_year_inputs(conn, read.facts)
     if not inputs:
         raise ValueError(
             "No prior-year numeric inputs match the selected templates. Check the year columns and statement formats."
@@ -198,7 +232,7 @@ def inspect_workbook(conn, config: dict, path: Path, unit: str, infopack=None):
         "layout": layout,
         "layout_digest": layout_digest,
         "inputs": len(inputs),
-        "recalculated_inputs": recalculated,
+        "aggregate_inputs": sum(f["children_status"] == "aggregate_only" for f in inputs),
         "blank_slots": missing,
         "unresolved_slots": read.summary["unresolved_slots"],
         "not_in_file": read.not_compared,
@@ -240,6 +274,7 @@ def import_workbook(
                     period="PY",
                     entity_scope=f["entity_scope"],
                     value=f["value"],
+                    children_status=f["children_status"],
                 ),
             )
             evidence = json.dumps(
@@ -252,20 +287,22 @@ def import_workbook(
                 }
             )
             before = conn.execute(
-                "SELECT value,value_status,source,evidence FROM run_concept_facts WHERE run_id=? AND concept_uuid=? AND period='PY' AND entity_scope=? AND dimension_key=?",
+                "SELECT value,value_status,children_status,source,evidence FROM run_concept_facts WHERE run_id=? AND concept_uuid=? AND period='PY' AND entity_scope=? AND dimension_key=?",
                 (run_id, f["concept_uuid"], f["entity_scope"], f["dimension_key"]),
             ).fetchone()
             conn.execute(
-                "INSERT INTO run_concept_facts(run_id,concept_uuid,period,entity_scope,dimension_key,value,value_status,source,evidence,updated_at) "
-                "VALUES (?,?,'PY',?,?,?,'observed',?,?,datetime('now')) "
+                "INSERT INTO run_concept_facts(run_id,concept_uuid,period,entity_scope,dimension_key,value,value_status,children_status,source,evidence,updated_at) "
+                "VALUES (?,?,'PY',?,?,?,?,?,?,?,datetime('now')) "
                 "ON CONFLICT(run_id,concept_uuid,period,entity_scope,dimension_key) DO UPDATE SET "
-                "value=excluded.value,value_status=excluded.value_status,source=excluded.source,evidence=excluded.evidence,updated_at=excluded.updated_at",
+                "value=excluded.value,value_status=excluded.value_status,children_status=excluded.children_status,source=excluded.source,evidence=excluded.evidence,updated_at=excluded.updated_at",
                 (
                     run_id,
                     f["concept_uuid"],
                     f["entity_scope"],
                     f["dimension_key"],
                     f["value"],
+                    "user_override" if f["children_status"] else "observed",
+                    f["children_status"],
                     SOURCE,
                     evidence,
                 ),
@@ -274,6 +311,7 @@ def import_workbook(
                 before is None
                 or before["value"] != f["value"]
                 or before["source"] != SOURCE
+                or before["children_status"] != f["children_status"]
             ):
                 conn.execute(
                     "INSERT INTO concept_fact_events(run_id,concept_uuid,period,entity_scope,dimension_key,actor,ts,before_json,after_json) "
@@ -288,13 +326,15 @@ def import_workbook(
                         json.dumps(
                             {
                                 "value": f["value"],
-                                "value_status": "observed",
+                                "value_status": "user_override" if f["children_status"] else "observed",
+                                "children_status": f["children_status"],
                                 "source": SOURCE,
                                 "evidence": evidence,
                             }
                         ),
                     ),
                 )
+        _check_imported_subtotals(conn, run_id, facts)
         conn.execute(
             "UPDATE runs SET run_config_json=json_set(run_config_json,'$.prior_year_summary',json(?)) WHERE id=?",
             (
@@ -605,7 +645,7 @@ def validate_export_source(conn, run_id, path, *, require_blank_current_year=Tru
         _require_blank_current_year(read.facts)
     actual = {
         (f["concept_uuid"], f["entity_scope"], f["dimension_key"]): f["value"]
-        for f in _prior_year_inputs(conn, read.facts)[0]
+        for f in _prior_year_inputs(conn, read.facts)
     }
     expected = {
         (r[0], r[1], r[2]): r[3]

@@ -711,11 +711,12 @@ def test_imported_comparatives_cannot_turn_a_no_write_agent_into_success(
     assert (tmp_path / "SOFP_filled.xlsx").exists()
 
 
-def test_native_subtotal_inputs_are_recalculated_not_imported(tmp_path):
-    """mTool types SOCIE other reserves; the canonical model calculates it."""
-    from openpyxl import Workbook
+@pytest.mark.parametrize("component,disagrees", [(None, False), (250, False), (200, True)])
+def test_native_subtotal_inputs_are_preserved_and_verified(tmp_path, component, disagrees):
+    """A typed subtotal remains canonical and is checked even without its breakdown."""
+    from openpyxl import Workbook, load_workbook
     from concept_model.bootstrap import _import_one
-    from concept_model.prior_year import validate_export_source
+    from concept_model.prior_year import validate_export_source, verify_preservation
     from db.schema import init_db
 
     db = tmp_path / "audit.db"
@@ -729,7 +730,7 @@ def test_native_subtotal_inputs_are_recalculated_not_imported(tmp_path):
         "variants": {"SOCIE": "Default"},
     }
     x = "full_ifrs-cor_2022-03-24.xsd#ifrs-full_"
-    members = ["IssuedCapitalMember", "OtherReservesMember"]
+    members = ["IssuedCapitalMember", "OtherReservesMember", "CapitalReserveMember"]
     wb = Workbook()
     ws = wb.active
     ws.title = "SOCIE"
@@ -743,7 +744,7 @@ def test_native_subtotal_inputs_are_recalculated_not_imported(tmp_path):
         ws.cell(top + 2, 3).value = "#ENDT#"
         ws.cell(top + 3, 1).value = x + "Equity@periodStartLabel"
         ws.cell(top + 3, 4).value = "*Equity at beginning of period"
-    ws["E13"], ws["F13"] = 1000, 250
+    ws["E13"], ws["F13"], ws["G13"] = 1000, 250, component
     workbook = tmp_path / "native.xlsx"
     wb.save(workbook)
     wb.close()
@@ -757,10 +758,29 @@ def test_native_subtotal_inputs_are_recalculated_not_imported(tmp_path):
 
     summary = import_workbook(db, run, tmp_path, config)
 
-    assert (summary["inputs"], summary["recalculated_inputs"]) == (1, 1)
+    assert summary["inputs"] == 2 + (component is not None)
+    assert summary["aggregate_inputs"] == 1
     with sqlite3.connect(db) as conn:
-        assert [r[0] for r in conn.execute(
-            "SELECT value FROM run_concept_facts WHERE run_id=? AND source=?", (run, SOURCE)
-        )] == [1000]
-        # The same file must still be accepted when the mTool draft is prepared.
+        rows = conn.execute(
+            "SELECT value,children_status,evidence FROM run_concept_facts WHERE run_id=? AND source=?",
+            (run, SOURCE),
+        ).fetchall()
+        subtotal = next(r for r in rows if json.loads(r[2])["cell"] == "F13")
+        assert subtotal[:2] == (250, "aggregate_only")
+        conflicts = conn.execute(
+            "SELECT residual FROM run_concept_conflicts WHERE run_id=? AND period='PY' "
+            "AND kind='parent_child_disagree' AND status='open'", (run,),
+        ).fetchall()
+        assert conflicts == ([(50,)] if disagrees else [])
         validate_export_source(conn, run, workbook)
+        assert verify_preservation(conn, run, workbook, workbook)["preserved_inputs"] == len(rows)
+
+        wb = load_workbook(workbook)
+        wb["SOCIE"]["F13"] = 999
+        changed = tmp_path / "changed.xlsx"
+        wb.save(changed)
+        wb.close()
+        with pytest.raises(ValueError, match="prior-year inputs differ"):
+            validate_export_source(conn, run, changed)
+        with pytest.raises(ValueError, match="values changed during preparation"):
+            verify_preservation(conn, run, workbook, changed)

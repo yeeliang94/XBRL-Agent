@@ -2326,7 +2326,10 @@ The operator selects Reporting periods in filing setup, or uses CLI
 
 **Rolled-forward inputs before extraction.** `prior_year_workbook` identifies an
 immutable session upload. Import its PY numeric inputs into canonical facts,
-including selected numeric notes, before launching agents. Keep two periods;
+including selected numeric notes, before launching agents. Typed source subtotals
+remain authoritative aggregate-only facts and receive the same preservation
+checks as ordinary inputs; disagreements with available components remain
+visible for review. Keep two periods;
 do not reuse `first_financial_statements`. Preserve workbook provenance, reject
 PY writes and category reassignment, and retain imported facts and comparative
 assessments during retry cleanup. Agents use prior field choices as advisory
