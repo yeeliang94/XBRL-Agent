@@ -127,7 +127,8 @@ export type AppView =
   | "extract"
   | "history"
   | "concepts"
-  | "settings";
+  | "settings"
+  | "issues";
 
 export type AppAction =
   | { type: "UPLOADED"; payload: { sessionId: string; filename: string; runId?: number | null } }
@@ -140,6 +141,7 @@ export type AppAction =
   | { type: "SET_SELECTED_RUN_ID"; payload: number | null }
   | { type: "SET_CURRENT_RUN_ID"; payload: number | null }
   | { type: "DISMISS_TOAST" }
+  | { type: "SHOW_TOAST"; payload: ToastState }
   | { type: "RESET" };
 
 export const initialState: AppState = {
@@ -225,6 +227,10 @@ export function parseRouteFromPath(
       selectedRunId: m ? Number(m[1]) : null,
       currentRunId: null,
     };
+  }
+  if (pathname.startsWith("/issues")) {
+    // Issues list and detail; the issue id itself is held by the app shell.
+    return { view: "issues", selectedRunId: null, currentRunId: null };
   }
   if (pathname.startsWith("/settings")) {
     // The consolidated settings page (model/proxy + account + admin users).
@@ -824,6 +830,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       // a "Start new extraction" reset).
       return { ...state, currentRunId: action.payload };
 
+    case "SHOW_TOAST":
+      return { ...state, toast: action.payload };
     case "DISMISS_TOAST":
       return { ...state, toast: null };
 

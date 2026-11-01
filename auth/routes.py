@@ -29,6 +29,7 @@ _DEV_USER = {
     "display_name": "Dev",
     "provider": "dev",
     "is_admin": True,
+    "must_change_password": False,
 }
 
 
@@ -40,12 +41,7 @@ class PasswordLoginRequest(BaseModel):
 class AddUserRequest(BaseModel):
     email: str
     display_name: str = ""
-    password: str
     is_admin: bool = False
-
-
-class ResetPasswordRequest(BaseModel):
-    password: str
 
 
 class SetAdminRequest(BaseModel):
@@ -112,7 +108,7 @@ async def login_password(request: Request, body: PasswordLoginRequest):
     if remaining > 0:
         return JSONResponse(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            content={"detail": "Too many attempts. Please try again later."},
+            content={"detail": "Too many attempts. Try again later."},
         )
 
     with db_session(server.AUDIT_DB_PATH) as conn:
@@ -144,9 +140,14 @@ async def login_password(request: Request, body: PasswordLoginRequest):
         cookie_value = sessions.create_session(
             conn, user.email, user.display_name, provider="password"
         )
+        repo.record_auth_sign_in(conn, user.email)
 
     response = JSONResponse(
-        content={"email": user.email, "display_name": user.display_name}
+        content={
+            "email": user.email,
+            "display_name": user.display_name,
+            "must_change_password": user.must_change_password,
+        }
     )
     _set_session_cookie(response, cookie_value)
     return response
@@ -179,6 +180,7 @@ async def me(request: Request):
         "display_name": session.display_name,
         "provider": session.provider,
         "is_admin": bool(user.is_admin) if user is not None else False,
+        "must_change_password": bool(user.must_change_password) if user is not None else False,
     }
 
 
@@ -231,7 +233,10 @@ async def change_password(request: Request, body: ChangePasswordRequest):
     """Let a logged-in user rotate their own password.
 
     Requires the CURRENT password (re-authentication) so a hijacked-but-idle
-    session can't silently lock the real owner out. 401 if the session is gone
+    session can't silently lock the real owner out. The exception is an
+    admin-issued temporary password: that session was just opened with it, and
+    the person must replace it before doing anything else, so the current
+    password is not asked again. 401 if the session is gone
     (a genuine auth failure the SPA turns into a logout), 403 if the current
     password is wrong (a validation error shown inline — NOT a session
     expiry), 422 if the new password is too short.
@@ -263,7 +268,15 @@ async def change_password(request: Request, body: ChangePasswordRequest):
         user = repo.fetch_auth_user(conn, session.email)
         # Verify the current password. On any miss we still burn argon2 time so
         # the failure isn't distinguishable by timing (mirrors the login path).
-        if user is not None and user.password_hash:
+        if user is not None and user.must_change_password:
+            # Keeping the temporary password would leave the admin knowing it.
+            if passwords.verify_password(user.password_hash, body.new_password):
+                return JSONResponse(
+                    status_code=422,  # Unprocessable Content
+                    content={"detail": "Choose a password different from the temporary one."},
+                )
+            ok = True
+        elif user is not None and user.password_hash:
             ok = passwords.verify_password(user.password_hash, body.current_password)
         else:
             passwords.dummy_verify(body.current_password)
@@ -277,9 +290,9 @@ async def change_password(request: Request, body: ChangePasswordRequest):
                 status_code=status.HTTP_403_FORBIDDEN,
                 content={"detail": "Current password is incorrect."},
             )
-        repo.upsert_auth_user(
-            conn, user.email, user.display_name,
-            passwords.hash_password(body.new_password),
+        repo.set_auth_user_password(
+            conn, user.email, passwords.hash_password(body.new_password),
+            must_change_password=False,
         )
     return {"ok": True}
 
@@ -316,6 +329,11 @@ def _require_admin(
     return None
 
 
+def _actor_email(request: Request) -> str:
+    """The signed-in admin, as stamped by the auth middleware."""
+    return getattr(request.state, "auth_email", None) or _DEV_USER["email"]
+
+
 def _is_last_enabled_admin(conn, email: str) -> bool:
     """True if `email` is currently the ONLY admin who can still act. Disabling
     or demoting them would leave no one able to manage accounts — the lockout
@@ -341,6 +359,8 @@ def _user_public(user: repo.AuthUser) -> dict:
         "has_password": bool(user.password_hash),
         "created_at": user.created_at,
         "password_set_at": user.password_set_at,
+        "must_change_password": user.must_change_password,
+        "last_sign_in_at": user.last_sign_in_at,
     }
 
 
@@ -357,37 +377,38 @@ async def admin_list_users(request: Request):
 
 @router.post("/api/admin/users")
 async def admin_add_user(request: Request, body: AddUserRequest):
-    """Create (or update) an account (admin only). Mirrors the CLI add-user:
-    sets the password and, if requested, the admin role."""
+    """Create an account with a one-time temporary password (admin only).
+
+    The password is returned once and never stored in clear; the person must
+    replace it at first sign-in. An existing email is refused rather than
+    overwritten. Use reset-password for an existing account."""
     email = (body.email or "").strip()
     if not email or "@" not in email:
         return JSONResponse(
             status_code=422,  # Unprocessable Content
-            content={"detail": "A valid email is required."},
+            content={"detail": "Enter a valid email."},
         )
-    if len(body.password) < passwords.MIN_PASSWORD_LEN:
-        return JSONResponse(
-            status_code=422,  # Unprocessable Content
-            content={
-                "detail": f"Password must be at least "
-                f"{passwords.MIN_PASSWORD_LEN} characters."
-            },
-        )
+    temporary = passwords.generate_temporary_password()
     with db_session(server.AUDIT_DB_PATH) as conn:
         denied = _require_admin(conn, request)
         if denied is not None:
             return denied
-        repo.upsert_auth_user(
-            conn, email, body.display_name or "",
-            passwords.hash_password(body.password),
+        created = repo.create_auth_user(
+            conn, email, body.display_name.strip(),
+            passwords.hash_password(temporary),
+            is_admin=body.is_admin, must_change_password=True,
         )
-        # Only ever SET the role here (never clear it) so re-adding an existing
-        # admin without is_admin doesn't silently demote them — same rule as the
-        # CLI. Demote explicitly via the /admin route below.
-        if body.is_admin:
-            repo.set_auth_user_admin(conn, email, True)
+        if not created:
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={"detail": "An account with this email already exists."},
+            )
         user = repo.fetch_auth_user(conn, email)
-    return {"ok": True, "user": _user_public(user)}
+        repo.insert_audit_event(
+            conn, _actor_email(request), "user_added", user.email,
+            {"is_admin": user.is_admin},
+        )
+    return {"ok": True, "user": _user_public(user), "temporary_password": temporary}
 
 
 @router.post("/api/admin/users/{email}/disable")
@@ -411,6 +432,7 @@ async def admin_disable_user(request: Request, email: str):
                 status_code=status.HTTP_404_NOT_FOUND,
                 content={"detail": "No such account."},
             )
+        repo.insert_audit_event(conn, _actor_email(request), "user_disabled", email.strip().lower())
     return {"ok": True}
 
 
@@ -426,21 +448,15 @@ async def admin_enable_user(request: Request, email: str):
                 status_code=status.HTTP_404_NOT_FOUND,
                 content={"detail": "No such account."},
             )
+        repo.insert_audit_event(conn, _actor_email(request), "user_enabled", email.strip().lower())
     return {"ok": True}
 
 
 @router.post("/api/admin/users/{email}/reset-password")
-async def admin_reset_password(request: Request, email: str, body: ResetPasswordRequest):
-    """Set a new password for any account (admin only). The admin-driven reset
-    path since there is no self-service email reset."""
-    if len(body.password) < passwords.MIN_PASSWORD_LEN:
-        return JSONResponse(
-            status_code=422,  # Unprocessable Content
-            content={
-                "detail": f"Password must be at least "
-                f"{passwords.MIN_PASSWORD_LEN} characters."
-            },
-        )
+async def admin_reset_password(request: Request, email: str):
+    """Issue a new one-time temporary password (admin only). The person is
+    signed out everywhere and must choose their own at next sign-in."""
+    temporary = passwords.generate_temporary_password()
     with db_session(server.AUDIT_DB_PATH) as conn:
         denied = _require_admin(conn, request)
         if denied is not None:
@@ -451,11 +467,13 @@ async def admin_reset_password(request: Request, email: str, body: ResetPassword
                 status_code=status.HTTP_404_NOT_FOUND,
                 content={"detail": "No such account."},
             )
-        repo.upsert_auth_user(
-            conn, user.email, user.display_name,
-            passwords.hash_password(body.password),
+        repo.set_auth_user_password(
+            conn, user.email, passwords.hash_password(temporary),
+            must_change_password=True,
         )
-    return {"ok": True}
+        repo.delete_auth_sessions_for(conn, user.email)
+        repo.insert_audit_event(conn, _actor_email(request), "password_reset", user.email)
+    return {"ok": True, "temporary_password": temporary}
 
 
 @router.post("/api/admin/users/{email}/admin")
@@ -480,4 +498,20 @@ async def admin_set_admin(request: Request, email: str, body: SetAdminRequest):
                 content={"detail": "No such account."},
             )
         user = repo.fetch_auth_user(conn, email)
+        repo.insert_audit_event(
+            conn, _actor_email(request), "role_changed", user.email,
+            {"is_admin": body.is_admin},
+        )
     return {"ok": True, "user": _user_public(user)}
+
+
+@router.get("/api/admin/audit")
+async def admin_audit_log(request: Request, before: int | None = None, limit: int = 50):
+    """Administrator actions, newest first (admin only)."""
+    limit = max(1, min(limit, 200))
+    with db_session(server.AUDIT_DB_PATH) as conn:
+        denied = _require_admin(conn, request)
+        if denied is not None:
+            return denied
+        events = repo.list_audit_events(conn, limit=limit, before_id=before)
+    return {"events": events, "has_more": len(events) == limit}

@@ -242,7 +242,9 @@ from pathlib import Path
 # structural visual-review finding. The block is corrected in place; this
 # table retains the earlier capture, the finding and the verifier's receipt.
 # v53 tracks saved document activity for History and Recent.
-CURRENT_SCHEMA_VERSION = 54
+# v55 adds account provisioning (temporary passwords, last sign-in), the
+# administrator audit log, and reported issues with their attached files.
+CURRENT_SCHEMA_VERSION = 55
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -1182,7 +1184,9 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         disabled        INTEGER NOT NULL DEFAULT 0, -- 1 blocks login without deleting the row (audit trail)
         created_at      TEXT NOT NULL DEFAULT '',
         password_set_at TEXT,                      -- ISO 8601 UTC of the last password set/rotate
-        is_admin        INTEGER NOT NULL DEFAULT 0  -- 1 = may manage other accounts (v20); 0 = ordinary user
+        is_admin        INTEGER NOT NULL DEFAULT 0, -- 1 = may manage other accounts (v20); 0 = ordinary user
+        must_change_password INTEGER NOT NULL DEFAULT 0, -- 1 = admin-issued temporary password (v55)
+        last_sign_in_at TEXT                       -- ISO 8601 UTC of the last successful sign-in (v55)
     )
     """,
     # auth_sessions is the server-side session store (not stateless JWT) so
@@ -1759,6 +1763,50 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY (run_id, concept_uuid)
     )
     """,
+
+    # v55: who changed accounts or issues, in plain events. Emails are stored as
+    # text (not foreign keys) so the record outlives any later account change.
+    """
+    CREATE TABLE IF NOT EXISTS auth_audit_events (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        at           TEXT NOT NULL,
+        actor_email  TEXT NOT NULL,
+        action       TEXT NOT NULL,   -- user_added|user_disabled|user_enabled|password_reset|role_changed|issue_updated|issue_deleted
+        target       TEXT NOT NULL,   -- account email or issue id
+        detail_json  TEXT
+    )
+    """,
+
+    # v55: issues people report from any page. Files live on disk under
+    # OUTPUT_DIR/issues/<id>/; only their details are stored here. run_id is
+    # cleared (not cascaded) when a run is deleted so the issue survives.
+    """
+    CREATE TABLE IF NOT EXISTS issues (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        reporter_email TEXT NOT NULL,
+        created_at     TEXT NOT NULL,
+        kind           TEXT NOT NULL,   -- wrong_figure|notes|formatting|app_error|other
+        description    TEXT NOT NULL DEFAULT '',
+        status         TEXT NOT NULL DEFAULT 'new',  -- new|in_progress|resolved
+        run_id         INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+        context_json   TEXT,
+        admin_reply    TEXT NOT NULL DEFAULT '',
+        updated_by     TEXT,
+        updated_at     TEXT
+    )
+    """,
+
+    """
+    CREATE TABLE IF NOT EXISTS issue_files (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        issue_id       INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+        stored_name    TEXT NOT NULL,
+        original_name  TEXT NOT NULL,
+        content_type   TEXT NOT NULL,
+        size_bytes     INTEGER NOT NULL,
+        sha256         TEXT NOT NULL
+    )
+    """,
 )
 
 
@@ -1856,6 +1904,11 @@ _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_notes_coverage_rows_run_id ON notes_coverage_rows(run_id)",
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_notes_coverage_rows "
     "ON notes_coverage_rows(run_id, note_num, COALESCE(subnote_ref, ''))",
+    # v55: issue lists filter by status and reporter; files load per issue.
+    "CREATE INDEX IF NOT EXISTS ix_issues_status ON issues(status, created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_issues_reporter ON issues(reporter_email, created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_issue_files_issue_id ON issue_files(issue_id)",
+    "CREATE INDEX IF NOT EXISTS ix_auth_audit_events_at ON auth_audit_events(at)",
 )
 
 
@@ -2145,6 +2198,7 @@ _RUN_ACTIVITY_TABLES = (
 # These document-owned records are derived, historical or accompanied by an
 # authoritative write above. Keep exclusions explicit as the schema grows.
 _RUN_ACTIVITY_EXCLUDED_TABLES = {
+    "issues": "A reported issue points at a run but does not change the filing document.",
     "fact_source_receipts": "Source evidence is replaced with the canonical fact write.",
     "human_file_facts": "Comparison input is replaced alongside human_files.",
     "human_file_notes": "Comparison input is replaced alongside human_files.",
@@ -3840,6 +3894,24 @@ def init_db(path: str | Path) -> None:
                 latest = conn.execute("SELECT version FROM schema_version").fetchone()[0]
                 if latest < 54:
                     conn.execute("UPDATE schema_version SET version = 54")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v54 -> v55: account provisioning columns; audit and issue tables are
+        # created above.
+        if current_version is not None and current_version < 55:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                latest = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+                if latest < 55:
+                    columns = {r[1] for r in conn.execute("PRAGMA table_info(auth_users)")}
+                    if "must_change_password" not in columns:
+                        conn.execute("ALTER TABLE auth_users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
+                    if "last_sign_in_at" not in columns:
+                        conn.execute("ALTER TABLE auth_users ADD COLUMN last_sign_in_at TEXT")
+                    conn.execute("UPDATE schema_version SET version = 55")
                 conn.commit()
             except Exception:
                 conn.rollback()

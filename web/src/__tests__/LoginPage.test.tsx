@@ -48,7 +48,7 @@ describe("LoginPage", () => {
   });
 
   test("429 shows a lockout message", async () => {
-    loginPassword.mockResolvedValue({ ok: false, status: 429, detail: "Too many attempts. Please try again later." });
+    loginPassword.mockResolvedValue({ ok: false, status: 429, detail: "Too many attempts. Try again later." });
     render(<LoginPage onAuthenticated={() => {}} />);
     fillAndSubmit();
     await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/too many attempts/i));

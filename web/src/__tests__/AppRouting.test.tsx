@@ -73,6 +73,10 @@ describe("App routing", () => {
     });
     let finishSave!: (value: { status: string }) => void;
     vi.mocked(api.updateSettings).mockImplementationOnce(() => new Promise(resolve => { finishSave = resolve; }));
+    // Notes appearance is shared by everyone, so only administrators see it.
+    vi.mocked(api.getAuthMe).mockResolvedValueOnce({
+      email: "admin@localhost", display_name: "Admin", provider: "dev", is_admin: true,
+    });
     window.history.replaceState({}, "", "/settings");
     try {
       const { default: App } = await import("../App");
@@ -235,7 +239,7 @@ describe("App routing", () => {
       expect(editor).toHaveValue("Unsaved practice");
       confirm.mockReturnValue(true);
       fireEvent.click(screen.getByRole("button", { name: "Log out" }));
-      await screen.findByText("Sign in to continue");
+      await screen.findByRole("button", { name: "Sign in" });
       expect(api.logout).toHaveBeenCalledTimes(1);
       expect(screen.queryByLabelText("Additional instructions")).not.toBeInTheDocument();
     } finally {

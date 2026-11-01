@@ -1,19 +1,22 @@
 import type { AppView } from "../lib/appReducer";
 import { ds, tokens } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
-import { Description, RunHistory, UploadFile } from "./iconGlyphs";
+import { Description, Flag, RunHistory, UploadFile } from "./iconGlyphs";
 
-export function TopNav({ view, extractMode = "queue", hasDocument = false, onViewChange, onAdd }: {
+export function TopNav({ view, extractMode = "queue", hasDocument = false, onViewChange, onAdd, onIssues }: {
   view: AppView;
   extractMode?: "queue" | "new";
   hasDocument?: boolean;
   onViewChange: (view: AppView) => void;
   onAdd?: () => void;
+  /** Admins only: the Issues page. No count or dot; the page shows New. */
+  onIssues?: () => void;
 }) {
   const destinations = [
     { label: "Work queue", href: "/", glyph: Description, active: view === "extract" && extractMode === "queue" && !hasDocument, action: () => onViewChange("extract") },
     { label: "Add documents", href: "/#new-extraction", glyph: UploadFile, active: view === "extract" && extractMode === "new" && !hasDocument, action: onAdd },
     { label: "History", href: "/history", glyph: RunHistory, active: view === "history" && !hasDocument, action: () => onViewChange("history") },
+    ...(onIssues ? [{ label: "Issues", href: "/issues", glyph: Flag, active: view === "issues", action: onIssues }] : []),
   ];
   return <nav id="app-primary-navigation" className="app-primary-navigation" aria-label="Main navigation"
     style={{ display: "flex", flexDirection: "column", gap: 4 }}>

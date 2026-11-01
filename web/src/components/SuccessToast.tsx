@@ -4,8 +4,9 @@ import type { ToastState } from "../lib/appReducer";
 import { CloseIcon } from "./icons";
 
 // ---------------------------------------------------------------------------
-// SuccessToast — a small transient banner rendered in the top-right corner
-// when a run finishes. The parent owns the toast state; this component only
+// SuccessToast — a small transient banner rendered at the bottom centre
+// when a run finishes. Page actions sit top-right and sticky Save bars put
+// their button bottom-right, so the centre covers no primary action. The parent owns the toast state; this component only
 // renders and schedules auto-dismiss.
 //
 // Why auto-dismiss at 4s? Long enough for users to read a one-liner, short
@@ -96,8 +97,12 @@ export function SuccessToast({ toast, onDismiss }: SuccessToastProps) {
 const styles = {
   toast: {
     position: "fixed" as const,
-    top: ds.space.lg,
-    right: ds.space.lg,
+    bottom: ds.space.lg,
+    left: 0,
+    right: 0,
+    margin: "0 auto",
+    width: "max-content",
+    maxWidth: `calc(100vw - ${ds.space.lg * 2}px)`,
     zIndex: 1000,
     display: "flex",
     alignItems: "center",

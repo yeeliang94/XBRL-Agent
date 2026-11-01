@@ -192,7 +192,7 @@ export function createMultiAgentSSE(
       const reader = response.body?.getReader();
       if (!reader) {
         onError(
-          "We couldn't open the connection to follow the run. Please try again.",
+          "We couldn't open the connection to follow the run. Try again.",
           "transport",
         );
         return;
@@ -202,7 +202,7 @@ export function createMultiAgentSSE(
         if (evt.event === "session-expired") {
           // The auth session idled out mid-stream — drop to the login page.
           window.dispatchEvent(new CustomEvent("auth:unauthorized"));
-          onError("Your session expired. Please sign in again.", "session");
+          onError("Your session expired. Sign in again.", "session");
           return;
         }
         if (!MULTI_EVENT_TYPES.includes(evt.event as SSEEventType)) continue;
@@ -220,7 +220,7 @@ export function createMultiAgentSSE(
         // is NOT a network problem and would otherwise be misreported here.
         console.error("Multi-agent SSE stream failed:", err);
         onError(
-          "The connection to the run was lost. Please check your network and try again.",
+          "The connection to the run was lost. Check your network and try again.",
           "transport",
         );
       }
@@ -264,7 +264,7 @@ export function createMultiAgentSSEByRunId(
       const reader = response.body?.getReader();
       if (!reader) {
         onError(
-          "We couldn't open the connection to follow the run. Please try again.",
+          "We couldn't open the connection to follow the run. Try again.",
           "transport",
         );
         return;
@@ -274,7 +274,7 @@ export function createMultiAgentSSEByRunId(
         if (evt.event === "session-expired") {
           // The auth session idled out mid-stream — drop to the login page.
           window.dispatchEvent(new CustomEvent("auth:unauthorized"));
-          onError("Your session expired. Please sign in again.", "session");
+          onError("Your session expired. Sign in again.", "session");
           return;
         }
         if (!MULTI_EVENT_TYPES.includes(evt.event as SSEEventType)) continue;
@@ -291,7 +291,7 @@ export function createMultiAgentSSEByRunId(
         // error to the console so support can see a non-network failure.
         console.error("Multi-agent SSE stream (by run id) failed:", err);
         onError(
-          "The connection to the run was lost. Please check your network and try again.",
+          "The connection to the run was lost. Check your network and try again.",
           "transport",
         );
       }

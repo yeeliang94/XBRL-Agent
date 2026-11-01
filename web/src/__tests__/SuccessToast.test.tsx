@@ -3,7 +3,7 @@ import { render, screen, fireEvent, cleanup, act } from "@testing-library/react"
 import { SuccessToast } from "../components/SuccessToast";
 
 // ---------------------------------------------------------------------------
-// SuccessToast is a small transient banner at the top-right. It reads a
+// SuccessToast is a small transient banner at the bottom centre. It reads a
 // `toast` prop (message + tone) and fires `onDismiss` either when the user
 // clicks the close button or after a 4 s auto-dismiss timer.
 // ---------------------------------------------------------------------------

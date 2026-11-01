@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { ds } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 
@@ -82,13 +83,14 @@ export function ConfirmDialog({
   onCancelRef.current = onCancel;
   busyRef.current = busy;
 
-  // Focus the confirm button on open (keyboard users can act without the
-  // mouse) and restore focus to the trigger element on close. Keyed on
-  // [isOpen] ONLY so re-renders while open never re-steal focus.
+  // Focus on open and restore focus to the trigger element on close. A
+  // destructive confirm starts on Cancel so a stray Enter loses nothing; a
+  // safe one starts on Confirm. Keyed on [isOpen] ONLY so re-renders while
+  // open never re-steal focus.
   useEffect(() => {
     if (!isOpen) return;
     const previouslyFocused = document.activeElement as HTMLElement | null;
-    confirmRef.current?.focus();
+    (danger ? cancelRef : confirmRef).current?.focus();
     return () => previouslyFocused?.focus?.();
   }, [isOpen]);
 
@@ -126,7 +128,9 @@ export function ConfirmDialog({
     }
   };
 
-  return (
+  // Rendered at the document root: an animated ancestor (Settings sections
+  // fade in with a transform) would otherwise confine the fixed scrim to it.
+  return createPortal(
     <div
       style={styles.overlay}
       className="app-dialog-scrim-enter"
@@ -166,6 +170,7 @@ export function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

@@ -51,11 +51,20 @@ describe("SettingsPage", () => {
     expect(tabs.map((t) => t.textContent)).toEqual(["General", "Team guidance", "Extraction", "Advanced", "Notes appearance", "Account", "Users"]);
   });
 
-  test("non-admin does not see the Users tab", () => {
+  test("non-admin sees only the sections they can use", () => {
     render(<SettingsPage isAdmin={false} />);
     const tabs = within(tablist()).getAllByRole("tab");
-    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Team guidance", "Extraction", "Advanced", "Notes appearance", "Account"]);
-    expect(within(tablist()).queryByText("Users")).toBeNull();
+    expect(tabs.map((t) => t.textContent)).toEqual(["Team guidance", "Account"]);
+    expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByRole("button", { name: "Reset settings to defaults" })).toBeNull();
+  });
+
+  test("non-admin reaches their issues from Account", () => {
+    const onOpenIssues = vi.fn();
+    render(<SettingsPage isAdmin={false} onOpenIssues={onOpenIssues} />);
+    fireEvent.click(within(tablist()).getByRole("tab", { name: "Account" }));
+    fireEvent.click(screen.getByRole("link", { name: "Your issues" }));
+    expect(onOpenIssues).toHaveBeenCalled();
   });
 
   test("General tab is active by default and shows the settings form", async () => {
@@ -117,7 +126,7 @@ describe("SettingsPage", () => {
   });
 
   test("active tab uses dark text and a quiet surface without an indicator line (CS5)", () => {
-    render(<SettingsPage isAdmin={false} />);
+    render(<SettingsPage isAdmin={true} />);
     const active = screen.getByRole("tab", { name: "General" });
     expect(active.getAttribute("aria-selected")).toBe("true");
     expect(active.style.color).toBe("rgb(0, 0, 0)");
@@ -190,12 +199,6 @@ describe("SettingsPage", () => {
     expect(screen.getByRole("button", { name: "Reset settings to defaults" })).toBeEnabled();
     fireEvent.click(within(tablist()).getByRole("tab", { name: "Extraction" }));
     expect(screen.getByLabelText("Maximum turns")).toHaveValue(27);
-  });
-
-  test("non-admin cannot reset shared settings", async () => {
-    render(<SettingsPage isAdmin={false} />);
-    await screen.findByDisplayValue("https://proxy.example.com");
-    expect(screen.queryByRole("button", { name: "Reset settings to defaults" })).toBeNull();
   });
 
   test("source preservation needs no settings selector", async () => {

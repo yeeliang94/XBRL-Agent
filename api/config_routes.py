@@ -89,6 +89,10 @@ _ADMIN_ONLY_SETTINGS_KEYS = frozenset({
     "reset_keys",
     "reset_shared_defaults",
     "advanced_settings",
+    # The house notes look applies to every run and every person.
+    "notes_table_style",
+    "notes_appearance_overrides",
+    "notes_appearance_reset",
 })
 
 _SETTING_ENV_KEYS = {
@@ -265,10 +269,14 @@ async def get_config():
 
 
 @router.get("/api/settings")
-async def get_settings():
+async def get_settings(request: Request):
     server._reload_runtime_settings()
     api_key = server._resolve_api_key()
     masked = api_key[:4] + "..." + api_key[-2:] if len(api_key) > 8 else ""
+    # The connection details are admin-only to change and no longer shown to
+    # anyone else, so they are not sent to anyone else either.
+    with db_session(server.AUDIT_DB_PATH) as conn:
+        is_admin = auth_routes._require_admin(conn, request) is None
 
     extended = server._load_extended_settings()
     locally_saved = read_runtime_settings(server.SETTINGS_FILE)
@@ -276,9 +284,9 @@ async def get_settings():
     return {
         # Backward-compatible fields
         "model": os.environ.get("TEST_MODEL", _DEFAULT_MODEL_ID),
-        "proxy_url": os.environ.get("LLM_PROXY_URL", ""),
+        "proxy_url": os.environ.get("LLM_PROXY_URL", "") if is_admin else "",
         "api_key_set": bool(api_key),
-        "api_key_preview": masked,
+        "api_key_preview": masked if is_admin else "",
         # Extended fields (Phase 8)
         "available_models": server._load_available_models(),
         "local_override_keys": sorted(

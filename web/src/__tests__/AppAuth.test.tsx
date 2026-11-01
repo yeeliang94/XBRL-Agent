@@ -20,6 +20,6 @@ describe("App production auth gate", () => {
     const { default: App } = await import("../App");
     render(<App />);
     expect(await screen.findByRole("heading", { name: "XBRL Agent" })).toBeInTheDocument();
-    expect(screen.getByText("Sign in to continue")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
   });
 });

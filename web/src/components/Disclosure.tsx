@@ -5,8 +5,8 @@ import { DisclosureChevron } from "./icons";
 // ---------------------------------------------------------------------------
 // Disclosure — the one expand-to-view primitive behind every collapsed
 // developer surface (Technical details, Performance details, AI usage,
-// Diagnostics, Advanced settings). Collapsed by default; a chevron rotates 90°
-// and the body reveals at motion.duration.base. The operator's stated
+// Diagnostics, Advanced settings). Collapsed by default; the chevron follows
+// the title, rotates 90°, and the body reveals at motion.duration.base. The operator's stated
 // preference: engineering detail stays one click away, never in the way.
 //
 // Uncontrolled by default (own open state); pass `open`/`onToggle` to control.
@@ -60,8 +60,8 @@ export function Disclosure({ summary, children, defaultOpen = false, open, onTog
           color: tokens.color.text.primary,
         }}
       >
-        <DisclosureChevron open={isOpen} />
         {summary}
+        <DisclosureChevron open={isOpen} />
       </button>
       {isOpen && (
         <div

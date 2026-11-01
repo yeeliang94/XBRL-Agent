@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { ds } from "../lib/theme";
-import { ui } from "../lib/uiStyles";
+import { ui, uiClass } from "../lib/uiStyles";
 import { PageHeader } from "../components/PageHeader";
 import { ArrowForward } from "../components/iconGlyphs";
 import { getSettings, updateSettings, testConnection } from "../lib/api";
@@ -18,6 +18,8 @@ import { NotesAppearanceSettings } from "../components/NotesAppearanceSettings";
 //   Agent instructions — shared content guidance and read-only prompt sources
 //   Account  — change my own password
 //   Users    — admin-only user management (hidden unless isAdmin)
+// Everyone else sees only Team guidance (read) and Account: the other sections
+// are shared settings they cannot change, so they are not shown at all.
 // Tab content is mounted lazily (only the active panel renders) so the Users
 // tab's list fetch and the General tab's settings load don't fire until shown.
 // ---------------------------------------------------------------------------
@@ -30,22 +32,29 @@ interface Props {
   // actions on the admin's own row (UX-QA #13).
   currentEmail?: string;
   onFieldLabels?: () => void;
+  // Opens the person's own issues (non-admins; admins use the sidebar).
+  onOpenIssues?: () => void;
 }
 
 type TabKey = SharedSettingsSection | "instructions" | "notes" | "account" | "users";
 
-export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
-  const tabs: { key: TabKey; label: string }[] = [
-    { key: "general", label: "General" },
-    { key: "instructions", label: "Team guidance" },
-    { key: "extraction", label: "Extraction" },
-    { key: "advanced", label: "Advanced" },
-    { key: "notes", label: "Notes appearance" },
-    { key: "account", label: "Account" },
-    ...(isAdmin ? [{ key: "users" as const, label: "Users" }] : []),
-  ];
+export function SettingsPage({ isAdmin, currentEmail, onFieldLabels, onOpenIssues }: Props) {
+  const tabs: { key: TabKey; label: string }[] = isAdmin
+    ? [
+        { key: "general", label: "General" },
+        { key: "instructions", label: "Team guidance" },
+        { key: "extraction", label: "Extraction" },
+        { key: "advanced", label: "Advanced" },
+        { key: "notes", label: "Notes appearance" },
+        { key: "account", label: "Account" },
+        { key: "users", label: "Users" },
+      ]
+    : [
+        { key: "instructions", label: "Team guidance" },
+        { key: "account", label: "Account" },
+      ];
 
-  const [activeTab, setActiveTab] = useState<TabKey>("general");
+  const [activeTab, setActiveTab] = useState<TabKey>(isAdmin ? "general" : "instructions");
   const [instructionsDirty, setInstructionsDirty] = useState(false);
   const [sharedDirty, setSharedDirty] = useState(false);
   const [sharedBusy, setSharedBusy] = useState(false);
@@ -128,7 +137,7 @@ export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
       </div>
 
       <div style={{ minWidth: 0 }}>
-      {sharedTab(activeTab) && (
+      {sharedTab(activeTab) && isAdmin && (
         <section className="app-view-enter" style={styles.section} id={`settings-panel-${activeTab}`} aria-labelledby={`settings-tab-${activeTab}`} role="tabpanel">
           <GeneralSettingsForm
             getSettings={getSettings}
@@ -142,7 +151,7 @@ export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
         </section>
       )}
 
-      {activeTab === "notes" && (
+      {activeTab === "notes" && isAdmin && (
         <section style={styles.section} id="settings-panel-notes" aria-labelledby="settings-tab-notes" role="tabpanel">
           <NotesAppearanceSettings onBusyChange={setNotesBusy} />
         </section>
@@ -158,12 +167,21 @@ export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
         <section className="app-view-enter" style={styles.section} id="settings-panel-account" aria-labelledby="settings-tab-account" role="tabpanel">
           <h2 style={styles.panelTitle}>Account</h2>
           <AccountTab />
+          {!isAdmin && onOpenIssues && (
+            <a href="/issues" className={uiClass.btnQuiet} style={styles.issuesLink}
+              onClick={(e) => {
+                if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                e.preventDefault();
+                onOpenIssues();
+              }}>
+              Your issues<ArrowForward size={16} style={{ color: ds.grey500 }} />
+            </a>
+          )}
         </section>
       )}
 
       {activeTab === "users" && isAdmin && (
         <section className="app-view-enter" style={styles.section} id="settings-panel-users" aria-labelledby="settings-tab-users" role="tabpanel">
-          <h2 style={styles.panelTitle}>Users</h2>
           <UsersTab currentEmail={currentEmail} />
         </section>
       )}
@@ -184,6 +202,7 @@ const styles = {
   layout: { display: "grid", gridTemplateColumns: "190px minmax(0, 1fr)", gap: 32, alignItems: "start" } as React.CSSProperties,
   rail: { display: "flex", flexDirection: "column" as const, gap: 4, minWidth: 0 } as React.CSSProperties,
   panelTitle: { ...ui.sectionTitle, marginBottom: ds.space.lg } as React.CSSProperties,
+  issuesLink: { ...ui.buttonQuiet, marginTop: ds.space.xl, marginLeft: -10, padding: "0 10px", gap: ds.space.sm, width: "fit-content", textDecoration: "none" } as React.CSSProperties,
   tabBar: {
     display: "flex",
     flexDirection: "column" as const,
