@@ -10,3 +10,4 @@ def find_runs_for_company(db_path: str, company_name: str) -> list[tuple]:
 
 def average_duration(durations: list[float]) -> float:
     return sum(durations) / len(durations)
+
