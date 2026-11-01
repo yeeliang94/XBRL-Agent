@@ -2327,12 +2327,15 @@ The operator selects Reporting periods in filing setup, or uses CLI
 **Rolled-forward inputs before extraction.** `prior_year_workbook` identifies an
 immutable session upload. Import its PY numeric inputs into canonical facts,
 including selected numeric notes, before launching agents. Typed source subtotals
-remain authoritative aggregate-only facts and receive the same preservation
+remain authoritative aggregate-only facts, including typed linear statement
+subtotals; actual formula results remain derived. They receive the same preservation
 checks as ordinary inputs; disagreements with available components remain
 visible for review. Keep two periods;
 do not reuse `first_financial_statements`. Preserve workbook provenance, reject
 PY writes and category reassignment, and retain imported facts and comparative
-assessments during retry cleanup. Agents follow the imported field choices
+assessments and imported subtotal disagreements during retry cleanup. Calculated
+canonical totals compare against their derived amounts, never an invented zero.
+Agents follow the imported field choices
 unless a line is absent or has changed in nature (reason in evidence), and
 compare PDF comparatives with `check_prior_year`; differences and
 unassessed coverage remain visible. mTool preparation emits CY numeric writes

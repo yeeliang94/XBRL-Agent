@@ -1822,6 +1822,39 @@ describe("mTool preparation lifecycle", () => {
     fireEvent.change(screen.getByLabelText(/mtool template file/i), { target: { files: [new File(["xlsx"], name)] } });
   }
 
+  test.each(["metadata", "download", "download-error"])("choosing a replacement wins over a pending saved workbook %s", async (pending) => {
+    let finishMeta!: (value: Response) => void;
+    let finishSaved!: (value: Response) => void;
+    mockFetch((url, init) => {
+      if (url.endsWith("/mtool-fill")) return new Promise(resolve => { finishMeta = resolve; });
+      if (url.endsWith("/prior-year-workbook")) return new Promise(resolve => { finishSaved = resolve; });
+      if (url.endsWith("/notes-preview")) return Response.json(previewFor("Replacement note"));
+      if (url.endsWith("/patch")) {
+        expect(((init?.body as FormData).get("template") as File).name).toBe("replacement.xlsx");
+        return patchResponse(cleanReport);
+      }
+      return defaults(url);
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    const meta = () => finishMeta(Response.json({ ...FILL_DOC, meta: { ...FILL_DOC.meta, preserve_prior_year: true } }));
+    if (pending !== "metadata") {
+      await act(async () => meta());
+      await waitFor(() => expect(finishSaved).toBeDefined());
+    }
+    choose("replacement.xlsx");
+    if (pending === "metadata") await act(async () => meta());
+    await waitFor(() => expect(finishSaved).toBeDefined());
+    await act(async () => finishSaved(pending === "download-error"
+      ? Response.json({ detail: "Saved source unavailable" }, { status: 500 })
+      : new Response("original", { headers: { "Content-Disposition": 'attachment; filename="original.xlsx"' } })));
+    expect(screen.getByText("replacement.xlsx")).toBeInTheDocument();
+    expect(screen.queryByText("original.xlsx")).toBeNull();
+    expect(screen.queryByText(/Could not load the saved rolled-forward workbook/)).toBeNull();
+    await waitFor(() => expect(screen.getByRole("button", { name: /^fill$/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    await screen.findByRole("button", { name: /download/i });
+  });
+
   test("a slow preview for the previous template cannot replace the current preview", async () => {
     let finishOld!: (value: Response) => void;
     mockFetch((url, init) => {
