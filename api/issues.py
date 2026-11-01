@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import io
-import json
 import secrets
 import shutil
 import zipfile
@@ -17,7 +16,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import server
 from auth import config, routes as auth_routes
@@ -39,6 +38,20 @@ _INLINE_TYPES = {"image/png", "image/jpeg", "image/webp"}
 class IssueUpdate(BaseModel):
     status: str
     admin_reply: str = ""
+
+
+class IssueContext(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    run_id: int | None = None
+    document: str | None = None
+    page: str | None = None
+    tab: str | None = None
+    statement: str | None = None
+    path: str | None = None
+    app_version: str | None = None
+    browser: str | None = None
+    window: str | None = None
 
 
 def _issues_dir() -> Path:
@@ -122,10 +135,8 @@ async def create_issue(
         if len(context.encode()) > MAX_CONTEXT_BYTES:
             return _error(422, "Page details are too long.")
         try:
-            parsed_context = json.loads(context)
-        except json.JSONDecodeError:
-            return _error(422, "Page details are not valid.")
-        if not isinstance(parsed_context, dict):
+            parsed_context = IssueContext.model_validate_json(context).model_dump(exclude_none=True)
+        except ValidationError:
             return _error(422, "Page details are not valid.")
 
     accepted: list[tuple[bytes, str, str, str]] = []
@@ -144,8 +155,6 @@ async def create_issue(
     parsed_context = {**(parsed_context or {}), "app_version": get_app_version()}
 
     run_id = parsed_context.get("run_id")
-    if not isinstance(run_id, int) or isinstance(run_id, bool):
-        run_id = None
 
     issue_dir: Path | None = None
     try:

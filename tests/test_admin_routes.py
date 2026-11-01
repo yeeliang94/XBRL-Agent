@@ -120,6 +120,10 @@ def test_added_person_must_replace_temporary_password_before_using_the_app(env):
     assert blocked.status_code == 403
     assert blocked.json()["reason"] == "password_change_required"
 
+    other = TestClient(server.app)
+    _login(other, "new@firm.com", temporary)
+    assert other.get("/api/runs").status_code == 403
+
     # Keeping the temporary password would leave the admin knowing it.
     assert person.post("/api/auth/change-password",
                        json={"current_password": "", "new_password": temporary}).status_code == 422
@@ -127,6 +131,13 @@ def test_added_person_must_replace_temporary_password_before_using_the_app(env):
     assert person.post("/api/auth/change-password",
                        json={"current_password": "", "new_password": "chosen-password"}).status_code == 200
     assert person.get("/api/runs").status_code == 200
+    assert other.get("/api/runs").status_code == 401
+    assert other.post("/api/auth/change-password", json={
+        "current_password": "", "new_password": "another-password"}).status_code == 401
+    assert other.post("/api/auth/login/password", json={
+        "email": "new@firm.com", "password": temporary}).status_code == 401
+    _login(other, "new@firm.com", "chosen-password")
+    assert other.get("/api/runs").status_code == 200
     assert _fetch(env, "new@firm.com").must_change_password is False
     assert _fetch(env, "new@firm.com").last_sign_in_at
 

@@ -106,6 +106,10 @@ def test_reporter_and_admins_can_read_an_issue_and_its_files_others_cannot(env):
     ([(f"{n}.png", PNG, "image/png") for n in range(6)], {}, 422),
     ([], {"description": "  "}, 422),
     ([], {"kind": "complaint"}, 422),
+    *[([], {"context": {field: {"invalid": "object"}}}, 422)
+      for field in ("document", "page", "tab", "statement", "path", "app_version", "browser", "window")],
+    ([], {"context": {"run_id": True}}, 422),
+    ([], {"context": {"run_id": "1"}}, 422),
 ])
 def test_rejected_reports_store_nothing(env, files, data, status):
     ben = _client("ben@firm.com", "ben-password")

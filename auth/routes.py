@@ -112,6 +112,8 @@ async def login_password(request: Request, body: PasswordLoginRequest):
         )
 
     with db_session(server.AUDIT_DB_PATH) as conn:
+        # Serialize credential checks with password changes across workers.
+        conn.execute("BEGIN IMMEDIATE")
         user = repo.fetch_auth_user(conn, email)
         # 2) Verify. On a missing/disabled/passwordless account we still burn
         #    argon2 time (dummy_verify) so timing doesn't reveal which emails
@@ -258,7 +260,9 @@ async def change_password(request: Request, body: ChangePasswordRequest):
         )
 
     cookie_value = request.cookies.get(config.cookie_name())
+    replacement_cookie = None
     with db_session(server.AUDIT_DB_PATH) as conn:
+        conn.execute("BEGIN IMMEDIATE")
         session, _status = middleware.resolve_session(conn, cookie_value)
         if session is None:
             return JSONResponse(
@@ -294,7 +298,16 @@ async def change_password(request: Request, body: ChangePasswordRequest):
             conn, user.email, passwords.hash_password(body.new_password),
             must_change_password=False,
         )
-    return {"ok": True}
+        if user.must_change_password:
+            # No session opened with the temporary password may gain access.
+            repo.delete_auth_sessions_for(conn, user.email)
+            replacement_cookie = sessions.create_session(
+                conn, user.email, user.display_name, provider=session.provider,
+            )
+    response = JSONResponse(content={"ok": True})
+    if replacement_cookie is not None:
+        _set_session_cookie(response, replacement_cookie)
+    return response
 
 
 # ---------------------------------------------------------------------------

@@ -2485,6 +2485,9 @@ and sets `auth_users.must_change_password`. While it is set, the auth middleware
 returns 403 `reason: "password_change_required"` for every guarded route
 (`/api/auth/*` stays open) and the SPA shows only "Choose a new password";
 `/api/auth/change-password` skips the current-password check on that path.
+Completing that forced change revokes all temporary-password sessions and
+issues a fresh session to the person choosing the password. Credential checks
+and password changes are serialized in database write transactions.
 Reset also signs the person out. `last_sign_in_at` is stamped on login. Add
 refuses an existing email (409) instead of overwriting it. Every admin account
 change and every issue update or deletion writes `auth_audit_events` in the same
@@ -2495,7 +2498,9 @@ appearance (`notes_table_style`, `notes_appearance_overrides`,
 guidance and Account. Issues (`api/issues.py`): anyone signed in may report one
 with up to 5 files (10 MB each; PNG/JPG/WebP/PDF/.xlsx/.docx judged by content);
 files live under `OUTPUT_DIR/issues/<id>/` and are served only to the reporter or
-an admin; another person's issue reads as 404. Only admins change status/reply or
+an admin; another person's issue reads as 404. Page context accepts only the
+declared string fields and an integer run id; malformed context is rejected
+before storing an issue. Only admins change status/reply or
 delete, and deletion is the only way issue files are removed. `issues.run_id` is
 `ON DELETE SET NULL` so an issue outlives its run. Pinned by
 `tests/test_admin_routes.py`, `tests/test_issues_routes.py`,
