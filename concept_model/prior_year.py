@@ -14,7 +14,8 @@ SOURCE = "prior_year_workbook"
 
 def _require_blank_current_year(facts):
     if any(
-        f["period"] == "CY" and f["value"] is not None and not f["calculated"]
+        f["period"] == "CY" and f["value"] is not None
+        and not (f["calculated"] and f["is_formula"])
         for f in facts
     ):
         raise ValueError(
@@ -31,7 +32,7 @@ def _prior_year_inputs(conn, facts):
     conn.row_factory = sqlite3.Row  # required by the facts_api lookups
     try:
         for f in facts:
-            if f["period"] != "PY" or f["value"] is None or f["calculated"]:
+            if f["period"] != "PY" or f["value"] is None or (f["calculated"] and f["is_formula"]):
                 continue
             # A native typed subtotal is a source observation, even when the
             # internal template calculates it. Preserve it through the existing
@@ -184,7 +185,7 @@ def inspect_workbook(conn, config: dict, path: Path, unit: str, infopack=None):
         raise ValueError(
             "The workbook reporting dates do not match the financial statements. Use the rolled-forward workbook for this filing year."
         )
-    read = read_human_file(conn, 0, path, unit, shape=shape, include_notes=False)
+    read = read_human_file(conn, 0, path, unit, shape=shape, include_notes=False, include_typed_totals=True)
     _require_blank_current_year(read.facts)
     inputs = _prior_year_inputs(conn, read.facts)
     if not inputs:
@@ -452,7 +453,7 @@ def compare_value(
         row = conn.execute(
             "SELECT f.value FROM run_concept_facts f JOIN concept_nodes n USING(concept_uuid) "
             "WHERE f.run_id=? AND f.concept_uuid=? AND f.period='PY' AND f.entity_scope=? "
-            "AND f.dimension_key=? AND f.source=? AND (? IS NULL OR n.template_id=?)",
+            "AND f.dimension_key=? AND f.source IN (?, 'cascade') AND (? IS NULL OR n.template_id=?)",
             (
                 run_id,
                 concept_uuid,
@@ -581,6 +582,24 @@ def check_results(db_path, run_id):
                         message=f"Imported prior-year figure differs from the current report. {detail['evidence']}",
                     )
                 )
+        imported_keys = {(uid, scope, dims) for uid, scope, dims, _ in facts}
+        labels = dict(conn.execute("SELECT concept_uuid,canonical_label FROM concept_nodes"))
+        for (uid, scope, dims), (residual, raw, status) in comparisons.items():
+            if (uid, scope, dims) in imported_keys or residual == 0:
+                continue
+            if status != "open":
+                accepted += 1
+                continue
+            detail = json.loads(raw)
+            results.append(
+                CrossCheckResult(
+                    name=f"Prior-year comparative: {labels.get(uid, uid)} [{scope}] {dims}",
+                    status="failed",
+                    expected=detail["imported"],
+                    actual=detail["report"],
+                    message=f"Calculated prior-year total differs from the current report. {detail['evidence']}",
+                )
+            )
         results.append(
             CrossCheckResult(
                 name="Prior-year comparative coverage",
@@ -635,7 +654,7 @@ def validate_export_source(conn, run_id, path, *, require_blank_current_year=Tru
         read = read_human_file(
             conn, run_id, path, unit, shape=shape,
             periods=("CY", "PY") if require_blank_current_year else ("PY",),
-            include_notes=False,
+            include_notes=False, include_typed_totals=True,
         )
     except ValueError as exc:
         raise ValueError(

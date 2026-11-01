@@ -75,6 +75,19 @@ def test_import_guidance_retry_protection_and_comparative_checks(tmp_path):
     assert facts[0][0] in text
     assert str(facts[0][2]) in text
     assert any(r.status == "warning" for r in check_results(db, run))
+    # Formula totals are canonical comparatives too, not blank workbook inputs.
+    with sqlite3.connect(db) as conn:
+        total_uid, total_value = conn.execute(
+            "SELECT f.concept_uuid,f.value FROM run_concept_facts f JOIN concept_nodes n USING(concept_uuid) "
+            "WHERE f.run_id=? AND f.period='PY' AND f.source='cascade' AND n.kind='COMPUTED' AND f.value!=0 LIMIT 1",
+            (run,),
+        ).fetchone()
+    assert compare_value(db, run, SOFP, total_uid, total_value, "PDF page 8: total") == "Comparative agrees."
+    assert "differs" in compare_value(db, run, SOFP, total_uid, total_value + 7, "PDF page 8: revised total")
+    failed_total = next(r for r in check_results(db, run) if r.actual == total_value + 7 and r.status == "failed")
+    assert failed_total.expected == total_value
+    assert "blank" not in failed_total.message
+    compare_value(db, run, SOFP, total_uid, total_value, "PDF page 8: total")
     assert "differs" in compare_value(
         db, run, SOFP, facts[0][0], facts[0][2] + 5, "PDF page 8: restated comparative"
     )
@@ -118,7 +131,7 @@ def test_import_guidance_retry_protection_and_comparative_checks(tmp_path):
                 "SELECT COUNT(*) FROM run_concept_conflicts WHERE run_id=? AND kind='prior_year_comparative'",
                 (run,),
             ).fetchone()[0]
-            == 1
+            == 2  # the restated input and the calculated total
         )
     for uid, _, value in facts:
         compare_value(db, run, SOFP, uid, value, "PDF page 8: comparative")
@@ -784,3 +797,87 @@ def test_native_subtotal_inputs_are_preserved_and_verified(tmp_path, component, 
             validate_export_source(conn, run, changed)
         with pytest.raises(ValueError, match="values changed during preparation"):
             verify_preservation(conn, run, workbook, changed)
+
+    with sqlite3.connect(db) as conn:
+        template_id = conn.execute(
+            "SELECT n.template_id FROM run_concept_facts f JOIN concept_nodes n USING(concept_uuid) "
+            "WHERE f.run_id=? AND f.source=? LIMIT 1", (run, SOURCE),
+        ).fetchone()[0]
+        if disagrees:
+            # Warnings for other instances still belong to the discarded attempt.
+            for period, scope, dims in (("CY", "Company", ""), ("PY", "Group", ""), ("PY", "Company", '{"axis":"other"}')):
+                conn.execute(
+                    "INSERT INTO run_concept_conflicts(run_id,concept_uuid,period,entity_scope,dimension_key,kind,residual,detail,status,created_at) "
+                    "SELECT run_id,concept_uuid,?,?,?,kind,residual,detail,status,created_at "
+                    "FROM run_concept_conflicts WHERE run_id=? AND kind='parent_child_disagree' AND period='PY' "
+                    "AND entity_scope='Company' AND dimension_key='' LIMIT 1",
+                    (period, scope, dims, run),
+                )
+    clear_facts_for_template(db, run, template_id)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            "SELECT residual FROM run_concept_conflicts WHERE run_id=? AND period='PY' "
+            "AND kind='parent_child_disagree' AND status='open'", (run,),
+        ).fetchall() == ([(50,)] if disagrees else [])
+        assert conn.execute(
+            "SELECT COUNT(*) FROM run_concept_conflicts WHERE run_id=? AND kind='parent_child_disagree'",
+            (run,),
+        ).fetchone()[0] == int(disagrees)
+
+
+@pytest.mark.parametrize("period", ["CY", "PY"])
+@pytest.mark.parametrize("with_components", [False, True])
+def test_typed_linear_subtotals_are_inputs_not_formula_results(tmp_path, period, with_components):
+    from openpyxl import load_workbook
+    from concept_model.prior_year import validate_export_source, verify_preservation
+
+    db, run, session_dir, config, workbook, _ = setup_file(tmp_path)
+    import_workbook(db, run, session_dir, config)
+    with sqlite3.connect(db) as conn:
+        uid, amount, sheet, row, col = conn.execute(
+            "SELECT f.concept_uuid,f.value,t.target_sheet,t.target_row,t.target_col "
+            "FROM run_concept_facts f JOIN concept_nodes n USING(concept_uuid) "
+            "JOIN concept_targets t USING(concept_uuid) "
+            "WHERE f.run_id=? AND f.period='PY' AND f.source='cascade' AND f.value!=0 "
+            "AND n.kind='COMPUTED' AND t.period=? AND t.entity_scope='Company' LIMIT 1",
+            (run, period),
+        ).fetchone()
+    typed = amount + 17
+    wb = load_workbook(workbook)
+    if not with_components:
+        with sqlite3.connect(db) as conn:
+            for source_sheet, source_row, source_col in conn.execute(
+                "SELECT t.target_sheet,t.target_row,t.target_col FROM concept_targets t "
+                "JOIN run_concept_facts f USING(concept_uuid,period,entity_scope) "
+                "WHERE f.run_id=? AND f.source=?", (run, SOURCE),
+            ):
+                wb[source_sheet][f"{source_col}{source_row}"] = None
+    wb[sheet][f"{col}{row}"] = typed
+    workbook = tmp_path / "typed-total.xlsx"
+    wb.save(workbook)
+    wb.close()
+    if period == "CY":
+        with sqlite3.connect(db) as conn, pytest.raises(ValueError, match="already contains current-year"):
+            inspect_workbook(conn, config, workbook, "units")
+        return
+
+    token = hashlib.sha256(workbook.read_bytes()).hexdigest()
+    retained = session_dir / "prior_year" / f"{token}.xlsx"
+    retained.write_bytes(workbook.read_bytes())
+    retained.with_suffix(".json").write_text(json.dumps({"filename": workbook.name, "unit": "units"}))
+    config["prior_year_workbook"] = token
+    run = add_run(db, config, "running")
+    import_workbook(db, run, session_dir, config)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            "SELECT value,children_status,source FROM run_concept_facts "
+            "WHERE run_id=? AND concept_uuid=? AND period='PY' AND entity_scope='Company' AND dimension_key=''",
+            (run, uid),
+        ).fetchone() == (typed, "aggregate_only", SOURCE)
+        assert conn.execute(
+            "SELECT residual FROM run_concept_conflicts WHERE run_id=? AND concept_uuid=? "
+            "AND kind='parent_child_disagree'", (run, uid),
+        ).fetchone() == ((17,) if with_components else None)
+        validate_export_source(conn, run, workbook)
+        assert verify_preservation(conn, run, workbook, workbook)["status"] == "ok"
+    assert compare_value(db, run, SOFP, uid, typed, "PDF page 8: typed total") == "Comparative agrees."

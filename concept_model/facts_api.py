@@ -478,7 +478,14 @@ def clear_facts_for_template(db_path, run_id: int, template_id: str) -> int:
         )
         conn.execute(
             "DELETE FROM run_concept_conflicts WHERE run_id = ? "
-            "AND kind != 'prior_year_comparative' AND concept_uuid IN "
+            "AND kind != 'prior_year_comparative' "
+            "AND NOT EXISTS (SELECT 1 FROM run_concept_facts f "
+            "WHERE f.run_id = run_concept_conflicts.run_id "
+            "AND f.concept_uuid = run_concept_conflicts.concept_uuid "
+            "AND f.period = run_concept_conflicts.period "
+            "AND f.entity_scope = run_concept_conflicts.entity_scope "
+            "AND f.dimension_key = run_concept_conflicts.dimension_key "
+            "AND f.source = 'prior_year_workbook') AND concept_uuid IN "
             "(SELECT concept_uuid FROM concept_nodes WHERE template_id = ?)",
             (run_id, template_id),
         )

@@ -596,6 +596,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
   const detectSeq = useRef(0);
   const previewSeq = useRef(0);
   const sessionSeq = useRef(0);
+  const fileChoiceSeq = useRef(0);
   const preflightSeq = useRef(0);
   const fillButtonRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -634,6 +635,8 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
     if (!open) return;
     const session = ++sessionSeq.current;
     const current = () => session === sessionSeq.current;
+    const fileChoice = fileChoiceSeq.current;
+    const savedFileCurrent = () => current() && fileChoice === fileChoiceSeq.current;
     setBusy(false);
     setDownloading(false);
     setDetectBusy(false);
@@ -694,8 +697,8 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
           const name = disposition.match(/filename="([^"]+)"/)?.[1] ?? "rolled-forward.xlsx";
           return new File([await r.blob()], name);
         })
-        .then((saved) => { if (current() && saved) { setPreservePriorYear(true); setFile(saved); } })
-        .catch((e) => { if (current()) setLoadErr(`Could not load the saved rolled-forward workbook. ${fillErrorMessage(e)}`); });
+        .then((saved) => { if (savedFileCurrent() && saved) { setPreservePriorYear(true); setFile(saved); } })
+        .catch((e) => { if (savedFileCurrent()) setLoadErr(`Could not load the saved rolled-forward workbook. ${fillErrorMessage(e)}`); });
     };
     fetch(`/api/runs/${runId}/mtool-fill`)
       .then(async (r) => {
@@ -1050,6 +1053,7 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
       setPatchErr("Choose a non-empty .xlsx template exported from mTool, up to 25 MB.");
       return;
     }
+    fileChoiceSeq.current += 1;
     previewSeq.current += 1;
     detectSeq.current += 1;
     setPreviewBusy(false);
