@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { useState } from "react";
 
 vi.mock("../lib/api", async () => {
@@ -179,9 +179,23 @@ describe("IssueDialog", () => {
 
   test("a successful send calls onSent and clears the draft", async () => {
     const onSent = vi.fn();
+    let finish!: (value: { ok: boolean; id: number }) => void;
+    reportIssue.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     render(<Harness onSent={onSent} />);
     fireEvent.change(whatHappened(), { target: { value: "Done" } });
+    paste(whatHappened(), [file("sent.png", "image/png")]);
     fireEvent.click(sendButton());
+    expect(whatHappened()).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Choose files" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove sent.png" })).toBeDisabled();
+    expect(screen.getByRole("checkbox")).toBeDisabled();
+    paste(screen.getByRole("dialog"), [file("late.png", "image/png")]);
+    fireEvent.drop(screen.getByRole("group", { name: "Screenshots and files" }), {
+      dataTransfer: { files: [file("dropped.png", "image/png")] },
+    });
+    expect(screen.queryByRole("button", { name: "Remove late.png" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove dropped.png" })).toBeNull();
+    await act(async () => finish({ ok: true, id: 42 }));
     await waitFor(() => expect(onSent).toHaveBeenCalledWith(42));
     fireEvent.click(screen.getByRole("button", { name: "Open dialog" }));
     expect(whatHappened()).toHaveValue("");

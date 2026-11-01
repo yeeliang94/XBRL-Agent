@@ -246,7 +246,7 @@ export function IssueDialog({ open, onClose, context, contextLabel, onSent, draf
   if (!open) return null;
 
   const addFiles = (incoming: File[]) => {
-    if (incoming.length === 0) return;
+    if (sendingRef.current || incoming.length === 0) return;
     let error: string | null = null;
     const accepted: Attachment[] = [];
     let room = MAX_FILES - attachments.length;
@@ -403,6 +403,7 @@ export function IssueDialog({ open, onClose, context, contextLabel, onSent, draf
             id={descriptionId}
             ref={textareaRef}
             value={description}
+            disabled={sending}
             onChange={(e) => setDescription(e.target.value)}
             rows={4}
             style={{ ...ui.textarea, width: "100%", boxSizing: "border-box" }}
@@ -421,6 +422,7 @@ export function IssueDialog({ open, onClose, context, contextLabel, onSent, draf
             style={styles.dropArea}
             onDragOver={(e) => {
               e.preventDefault();
+              if (sending) return;
               if (!dragging) setDragging(true);
             }}
             onDragLeave={(e) => {
@@ -438,6 +440,7 @@ export function IssueDialog({ open, onClose, context, contextLabel, onSent, draf
               ref={chooseFilesRef}
               type="button"
               style={styles.linkButton}
+              disabled={sending}
               onClick={() => fileInputRef.current?.click()}
             >
               Choose files
@@ -445,6 +448,7 @@ export function IssueDialog({ open, onClose, context, contextLabel, onSent, draf
             <input
               ref={fileInputRef}
               type="file"
+              disabled={sending}
               multiple
               accept={ALLOWED_EXTENSIONS.join(",")}
               aria-label="Files to attach"
@@ -470,6 +474,7 @@ export function IssueDialog({ open, onClose, context, contextLabel, onSent, draf
                     <button
                       type="button"
                       data-remove-file=""
+                      disabled={sending}
                       aria-label={`Remove ${a.file.name}`}
                       title={`Remove ${a.file.name}`}
                       style={styles.thumbRemove}
@@ -486,6 +491,7 @@ export function IssueDialog({ open, onClose, context, contextLabel, onSent, draf
                     <button
                       type="button"
                       data-remove-file=""
+                      disabled={sending}
                       aria-label={`Remove ${a.file.name}`}
                       title={`Remove ${a.file.name}`}
                       style={styles.chipRemove}
@@ -506,6 +512,7 @@ export function IssueDialog({ open, onClose, context, contextLabel, onSent, draf
             <input
               type="checkbox"
               checked={attachContext}
+              disabled={sending}
               onChange={(e) => setAttachContext(e.target.checked)}
               style={ui.checkbox}
             />

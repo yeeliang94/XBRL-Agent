@@ -2488,7 +2488,9 @@ returns 403 `reason: "password_change_required"` for every guarded route
 Completing that forced change revokes all temporary-password sessions and
 issues a fresh session to the person choosing the password. Credential checks
 and password changes are serialized in database write transactions.
-Reset also signs the person out. `last_sign_in_at` is stamped on login. Add
+Reset also signs the person out. Administrators change their own password in
+Account; the administrator reset endpoint refuses self-reset so the temporary
+password cannot be lost after sign-out. `last_sign_in_at` is stamped on login. Add
 refuses an existing email (409) instead of overwriting it. Every admin account
 change and every issue update or deletion writes `auth_audit_events` in the same
 transaction (`GET /api/admin/audit`, admin only). Runs stay shared: everyone sees,

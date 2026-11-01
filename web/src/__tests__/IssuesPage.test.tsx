@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 
 vi.mock("../lib/api", async () => {
   const actual = await vi.importActual<typeof import("../lib/api")>("../lib/api");
@@ -119,6 +119,8 @@ describe("IssuesPage list", () => {
 
 describe("IssuesPage detail", () => {
   test("admins edit the reply and status and save both", async () => {
+    let finish!: (value: IssueSummary) => void;
+    updateIssue.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     const p = props({ issueId: 42 });
     render(<IssuesPage {...p} />);
     expect(await screen.findByRole("heading", { name: "Issue 42 · Wrong figure" })).toBeInTheDocument();
@@ -135,7 +137,11 @@ describe("IssuesPage detail", () => {
     await waitFor(() =>
       expect(updateIssue).toHaveBeenCalledWith(42, { status: "resolved", admin_reply: "Fixed in next run" }),
     );
+    expect(screen.getByRole("textbox", { name: "Reply" })).toBeDisabled();
+    expect(within(statusGroup()).getByRole("button", { name: "New" })).toBeDisabled();
+    await act(async () => finish({ ...ISSUE, status: "resolved", admin_reply: "Fixed in next run" }));
     expect(await screen.findByText("Saved")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Reply" })).toBeEnabled();
   });
 
   test("delete confirms first, then returns to the list", async () => {

@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { guardNavigationHistory } from "../lib/navigationHistory";
 import type { CSSProperties } from "react";
 import { deleteIssue, getIssue, issueFileUrl, listIssues, updateIssue } from "../lib/api";
 import type { IssueContext, IssueDetail, IssueKind, IssueStatus, IssueSummary } from "../lib/api";
@@ -99,11 +100,13 @@ function Segmented<T extends string>({
   options,
   value,
   onChange,
+  disabled = false,
 }: {
   label: string;
   options: { value: T; label: string }[];
   value: T;
   onChange: (v: T) => void;
+  disabled?: boolean;
 }) {
   return (
     <div role="group" aria-label={label} className="segmented-control-group" style={styles.segmentWrap}>
@@ -115,6 +118,7 @@ function Segmented<T extends string>({
             type="button"
             className="segmented-control-button"
             aria-pressed={active}
+            disabled={disabled}
             onClick={() => onChange(o.value)}
             style={{ ...ui.segmentButton, ...(active ? ui.segmentButtonActive : {}) }}
           >
@@ -298,6 +302,21 @@ function IssueDetailView({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const deleted = useRef(false);
+  const dirty = issue?.can_manage && (reply !== issue.admin_reply || status !== issue.status);
+
+  useEffect(() => {
+    if (!dirty && !saving && !deleting) return;
+    const unguard = guardNavigationHistory(() => deleted.current
+      || (!saving && !deleting && window.confirm("Discard unsaved issue changes?")));
+    const unload = (event: BeforeUnloadEvent) => {
+      if (deleted.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", unload);
+    return () => { unguard(); window.removeEventListener("beforeunload", unload); };
+  }, [dirty, saving, deleting]);
 
   useEffect(() => {
     let cancelled = false;
@@ -340,6 +359,8 @@ function IssueDetailView({
     try {
       const updated = await updateIssue(issue.id, { status, admin_reply: reply });
       setIssue({ ...issue, ...updated, files: issue.files, can_manage: issue.can_manage });
+      setReply(updated.admin_reply);
+      setStatus(updated.status);
       setSaved(true);
     } catch (err) {
       setSaveError(userMessage(err));
@@ -353,6 +374,7 @@ function IssueDetailView({
     setDeleteError(null);
     try {
       await deleteIssue(issue.id);
+      deleted.current = true;
       setConfirmDelete(false);
       onOpenIssue(null);
     } catch (err) {
@@ -430,7 +452,8 @@ function IssueDetailView({
             <textarea
               id="issue-reply"
               value={reply}
-              onChange={(e) => setReply(e.target.value)}
+              disabled={saving || deleting}
+              onChange={(e) => { setReply(e.target.value); setSaved(false); }}
               rows={4}
               style={{ ...ui.textarea, width: "100%", boxSizing: "border-box" }}
             />
@@ -442,7 +465,8 @@ function IssueDetailView({
                 label="Status"
                 options={STATUSES.map((s) => ({ value: s, label: ISSUE_STATUS_LABELS[s] }))}
                 value={status}
-                onChange={setStatus}
+                disabled={saving || deleting}
+                onChange={(value) => { setStatus(value); setSaved(false); }}
               />
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: ds.space.md }}>

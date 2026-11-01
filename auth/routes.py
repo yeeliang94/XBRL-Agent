@@ -480,6 +480,11 @@ async def admin_reset_password(request: Request, email: str):
                 status_code=status.HTTP_404_NOT_FOUND,
                 content={"detail": "No such account."},
             )
+        if user.email == _actor_email(request):
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={"detail": "Use Account to change your own password."},
+            )
         repo.set_auth_user_password(
             conn, user.email, passwords.hash_password(temporary),
             must_change_password=True,

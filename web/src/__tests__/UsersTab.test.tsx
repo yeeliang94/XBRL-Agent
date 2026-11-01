@@ -206,7 +206,9 @@ describe("UsersTab", () => {
     expect(screen.queryByRole("dialog", { name: /Disable Ana Lim|Remove administrator role/ })).toBeNull();
     expect(api.adminSetDisabled).not.toHaveBeenCalled();
     expect(api.adminSetAdmin).not.toHaveBeenCalled();
-    expect(within(dialog).getByRole("button", { name: "Reset password" })).toBeEnabled();
+    expect(within(dialog).queryByRole("button", { name: "Reset password" })).toBeNull();
+    expect(within(dialog).getByText("Change your password in Account.")).toBeInTheDocument();
+    expect(api.adminResetPassword).not.toHaveBeenCalled();
   });
 
   test("a role change confirms and shows the last-admin refusal in the dialog", async () => {

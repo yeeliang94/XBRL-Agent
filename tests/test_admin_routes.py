@@ -183,6 +183,17 @@ def test_reset_issues_a_temporary_password_and_signs_the_person_out(env):
     assert not passwords.verify_password(account.password_hash, "user-password")
 
 
+def test_admin_self_reset_is_refused_without_changing_password_or_session(env):
+    admin = TestClient(server.app)
+    _login(admin, "admin@firm.com", "admin-password")
+    before = _fetch(env, "admin@firm.com").password_hash
+    response = admin.post("/api/admin/users/admin@firm.com/reset-password")
+    assert response.status_code == 409
+    assert "Account" in response.json()["detail"]
+    assert _fetch(env, "admin@firm.com").password_hash == before
+    assert admin.get("/api/admin/users").status_code == 200
+
+
 def test_account_changes_are_recorded_in_the_audit_log(env):
     admin = TestClient(server.app)
     _login(admin, "admin@firm.com", "admin-password")

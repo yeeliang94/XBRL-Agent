@@ -414,9 +414,9 @@ export default function App() {
     const route = parseRouteFromPath(target.split(/[?#]/)[0]);
     pushNavigationHistory({}, "", target);
     setRunTab(readRunTabFromUrl() ?? "overview");
-    dispatch({ type: "SET_VIEW", payload: route.view === "extract" ? "history" : route.view });
-    dispatch({ type: "SET_SELECTED_RUN_ID", payload: route.view === "extract" ? runId : route.selectedRunId });
-    dispatch({ type: "SET_CURRENT_RUN_ID", payload: null });
+    dispatch({ type: "SET_VIEW", payload: route.view });
+    dispatch({ type: "SET_SELECTED_RUN_ID", payload: route.selectedRunId });
+    dispatch({ type: "SET_CURRENT_RUN_ID", payload: route.currentRunId });
   };
   const restoreDocument = () => {
     if (!confirmNavigationLeave()) return;

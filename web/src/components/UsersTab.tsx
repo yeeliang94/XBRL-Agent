@@ -615,9 +615,9 @@ function ManagePersonDialog({
         <div style={styles.manageRow}>
           <span style={styles.fieldLabel}>Password</span>
           <span>
-            <button type="button" className={uiClass.btnSecondary} style={ui.buttonSecondary} disabled={busy} onClick={askReset}>
+            {isSelf ? <span>Change your password in Account.</span> : <button type="button" className={uiClass.btnSecondary} style={ui.buttonSecondary} disabled={busy} onClick={askReset}>
               Reset password
-            </button>
+            </button>}
           </span>
         </div>
         <div style={styles.manageRow}>
