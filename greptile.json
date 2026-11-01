@@ -1,5 +1,7 @@
 {
-  "autoReview": ["open", "push", "rebase"],
+  "autoReview": [
+    "open"
+  ],
   "triggerOnDrafts": true,
   "strictness": 2,
   "fixWithAI": true,
