@@ -130,7 +130,7 @@ describe("ConfirmDialog", () => {
     expect(btn.disabled).toBe(true);
   });
 
-  test("focuses confirm on open", () => {
+  test("a destructive confirm focuses Cancel on open", () => {
     render(
       <ConfirmDialog
         isOpen
@@ -142,7 +142,7 @@ describe("ConfirmDialog", () => {
       />,
     );
     expect(document.activeElement).toBe(
-      screen.getByRole("button", { name: "Delete" }),
+      screen.getByRole("button", { name: "Cancel" }),
     );
   });
 

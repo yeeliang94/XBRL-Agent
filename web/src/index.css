@@ -307,12 +307,12 @@ h2 {
   to { opacity: 1; }
 }
 
-/* Toast entrance — slide in from the right edge with a fade (motion-polish).
-   transform/opacity only so it costs nothing; the toast docks top-right, so
-   an 8px rightward start reads as "arriving" without shifting neighbours. */
-@keyframes slide-in-right {
-  from { opacity: 0; transform: translateX(8px); }
-  to { opacity: 1; transform: translateX(0); }
+/* Toast entrance — rise from the bottom edge with a fade (motion-polish).
+   transform/opacity only so it costs nothing; the toast docks bottom centre,
+   so an 8px upward start reads as "arriving" without shifting neighbours. */
+@keyframes slide-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes status-arrive {
@@ -335,7 +335,7 @@ details[open] > .app-disclosure-content {
   animation: status-arrive var(--motion-fast) var(--motion-standard) both;
 }
 .app-toast-enter {
-  animation: slide-in-right var(--motion-base) var(--motion-standard) both;
+  animation: slide-in-up var(--motion-base) var(--motion-standard) both;
 }
 .reasoning-stream-enter {
   animation: fade-in var(--motion-fast) var(--motion-standard) both;
@@ -483,19 +483,19 @@ input[type="search"]:focus {
     box-shadow var(--motion-fast) var(--motion-standard),
     transform var(--motion-instant) var(--motion-standard);
 }
-.app-btn-primary:hover:not(:disabled) {
+.app-btn-primary:hover:not(:disabled):not([aria-disabled="true"]) {
   background: #000000 !important;
   border-color: #000000 !important;
   opacity: 0.86;
 }
-.app-btn-secondary:hover:not(:disabled) {
+.app-btn-secondary:hover:not(:disabled):not([aria-disabled="true"]) {
   background: #F5F7F8 !important;
   border-color: #6B7280 !important;
 }
-.app-btn-quiet:hover:not(:disabled) {
+.app-btn-quiet:hover:not(:disabled):not([aria-disabled="true"]) {
   background: #EEEFF1 !important;
 }
-.app-btn-danger:hover:not(:disabled) {
+.app-btn-danger:hover:not(:disabled):not([aria-disabled="true"]) {
   background: #FFF5ED !important;
   border-color: #FD5108 !important;
 }
@@ -672,10 +672,6 @@ input[type="search"]:focus {
   max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
-}
-
-.settings-users-table {
-  min-width: 640px;
 }
 
 /* Inactive top-nav destination hover — quiet surface + readable text. */
@@ -963,21 +959,6 @@ details[open] > summary::after {
     max-width: 100% !important;
   }
 
-  .settings-users-add-row {
-    align-items: stretch !important;
-    flex-direction: column !important;
-  }
-
-  .settings-users-field,
-  .settings-users-field input,
-  .settings-users-add-button {
-    width: 100% !important;
-  }
-
-  .settings-users-checkbox {
-    min-height: 44px;
-  }
-
   .app-main {
     min-width: 0 !important;
     padding: 24px 16px 130px !important;
@@ -1156,7 +1137,8 @@ details[open] > summary::after {
   .app-rail-toggle { display: none !important; }
 }
 @media (max-width: 780px) {
-  .app-shell { grid-template-columns: minmax(0, 1fr) !important; }
+  /* The stacked sidebar takes its own height; the workspace takes the rest. */
+  .app-shell { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: auto minmax(0, 1fr); }
   .app-sidebar { position: static !important; min-height: 0 !important; max-height: none !important; overflow: visible !important; flex-direction: row !important; flex-wrap: wrap; gap: 8px !important; padding: 16px !important; border-right: 0 !important; }
   .app-sidebar .app-navigation-label { display: inline !important; }
   .app-sidebar .app-rail-brand { width: 100%; padding: 0 !important; justify-content: flex-start; }
@@ -1168,7 +1150,9 @@ details[open] > summary::after {
   .app-document-navigation > .app-navigation-label { width: 100%; }
   .app-document-list { width: 100%; flex-direction: row !important; flex-wrap: wrap; overflow: visible !important; }
   .app-document-navigation .app-navigation-link { max-width: 100%; }
-  .app-sidebar .app-rail-footer { margin: 0 !important; }
+  .app-sidebar .app-rail-footer { margin: 0 !important; flex-direction: row !important; flex-wrap: wrap; }
+  .app-sidebar .app-primary-navigation,
+  .app-sidebar .app-rail-footer { align-self: flex-start; }
   .app-sidebar [data-tooltip]::after { display: none; }
   .app-rail-toggle { display: none !important; }
   /* Phones keep only the log-out action from the user row. */
@@ -1213,4 +1197,22 @@ details[open] > summary::after {
 @media (max-width: 640px) {
   .human-comparison-score { position: static !important; }
   .human-comparison-score-panel { left: auto !important; right: 0; max-width: 100% !important; }
+}
+
+/* Issues page (feat/roles-accounts-issues) */
+/* The issue table fits its pane: Document hides first, then Raised and By.
+   #, What happened and Status stay visible at every width. */
+@media (max-width: 1180px) {
+  .issues-col-document { display: none; }
+}
+@media (max-width: 900px) {
+  .issues-col-raised,
+  .issues-col-by { display: none; }
+}
+.issues-row:focus-visible {
+  outline: 2px solid #000;
+  outline-offset: -2px;
+}
+.issues-row:focus:not(:focus-visible) {
+  outline: none;
 }

@@ -13,9 +13,9 @@
 export function statusSentence(status: number): string {
   switch (status) {
     case 400:
-      return "The request couldn't be completed. Please check your entries and try again.";
+      return "The request couldn't be completed. Check your entries and try again.";
     case 401:
-      return "Your session expired. Please sign in again.";
+      return "Your session expired. Sign in again.";
     case 403:
       return "You don't have permission to do that.";
     case 404:
@@ -25,13 +25,13 @@ export function statusSentence(status: number): string {
     case 413:
       return "That file or content is too large to accept.";
     case 422:
-      return "Some of the details weren't valid. Please check your entries and try again.";
+      return "Some of the details weren't valid. Check your entries and try again.";
     case 429:
-      return "Too many requests in a short time. Please wait a moment and try again.";
+      return "Too many requests in a short time. Wait a moment and try again.";
     default:
-      if (status >= 500) return "The server ran into a problem. Please try again in a moment.";
-      if (status >= 400) return "The request couldn't be completed. Please try again.";
-      return "Something went wrong. Please try again.";
+      if (status >= 500) return "The server ran into a problem. Try again in a moment.";
+      if (status >= 400) return "The request couldn't be completed. Try again.";
+      return "Something went wrong. Try again.";
   }
 }
 
@@ -168,11 +168,11 @@ export function userMessage(err: unknown): string {
   if (err instanceof ApiError) return err.message;
   if (err instanceof Error) {
     const m = err.message?.trim();
-    if (!m || isBareStatusMessage(m)) return "Something went wrong. Please try again.";
+    if (!m || isBareStatusMessage(m)) return "Something went wrong. Try again.";
     return m;
   }
   if (typeof err === "string" && err.trim() && !isBareStatusMessage(err)) return err.trim();
-  return "Something went wrong. Please try again.";
+  return "Something went wrong. Try again.";
 }
 
 /** The raw technical string for a collapsed disclosure, or null when there's

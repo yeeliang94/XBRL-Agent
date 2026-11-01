@@ -35,7 +35,7 @@ describe("moveNotesCell", () => {
 
   test("a non-JSON server failure still gives an actionable error", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("Bad gateway", { status: 502 })));
-    await expect(moveNotesCell(42, "Notes-CI", 5, "Notes-CI", 7, 1, null)).rejects.toThrow("Please try again");
+    await expect(moveNotesCell(42, "Notes-CI", 5, "Notes-CI", 7, 1, null)).rejects.toThrow("Try again");
   });
 });
 

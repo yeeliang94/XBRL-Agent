@@ -3342,6 +3342,10 @@ class AuthUser:
     # caller constructing an AuthUser by hand (and any pre-v20 row) is treated
     # as an ordinary user until explicitly promoted.
     is_admin: bool = False
+    # v55: an admin-issued temporary password must be replaced before the
+    # account can use anything but /api/auth/*; last_sign_in_at feeds Users.
+    must_change_password: bool = False
+    last_sign_in_at: Optional[str] = None
 
 
 @dataclass
@@ -3368,7 +3372,8 @@ def _row_to_auth_user(row: sqlite3.Row) -> AuthUser:
     in sync as columns are added. `is_admin` is read defensively (guard on the
     column being present) so a read against a not-yet-migrated DB degrades to a
     non-admin user rather than raising."""
-    has_admin = "is_admin" in row.keys()
+    keys = row.keys()
+    has_admin = "is_admin" in keys
     return AuthUser(
         email=row["email"],
         display_name=row["display_name"] or "",
@@ -3377,7 +3382,66 @@ def _row_to_auth_user(row: sqlite3.Row) -> AuthUser:
         created_at=row["created_at"] or "",
         password_set_at=row["password_set_at"],
         is_admin=bool(row["is_admin"]) if has_admin else False,
+        must_change_password=bool(row["must_change_password"]) if "must_change_password" in keys else False,
+        last_sign_in_at=row["last_sign_in_at"] if "last_sign_in_at" in keys else None,
     )
+
+
+def create_auth_user(
+    conn: sqlite3.Connection,
+    email: str,
+    display_name: str,
+    password_hash: str,
+    *,
+    is_admin: bool = False,
+    must_change_password: bool = False,
+) -> bool:
+    """Insert a new account. Returns False (and changes nothing) when the email
+    already exists, so the web Add person path never overwrites an account."""
+    now = _now()
+    cur = conn.execute(
+        """
+        INSERT INTO auth_users(email, display_name, password_hash, disabled,
+                               created_at, password_set_at, is_admin,
+                               must_change_password)
+        VALUES (?, ?, ?, 0, ?, ?, ?, ?)
+        ON CONFLICT(email) DO NOTHING
+        """,
+        (_normalize_email(email), display_name or "", password_hash, now, now,
+         1 if is_admin else 0, 1 if must_change_password else 0),
+    )
+    return cur.rowcount > 0
+
+
+def set_auth_user_password(
+    conn: sqlite3.Connection,
+    email: str,
+    password_hash: str,
+    *,
+    must_change_password: bool,
+) -> bool:
+    """Replace an account's password hash. An admin reset sets
+    must_change_password; the owner's own change clears it."""
+    cur = conn.execute(
+        "UPDATE auth_users SET password_hash = ?, password_set_at = ?, "
+        "must_change_password = ? WHERE email = ?",
+        (password_hash, _now(), 1 if must_change_password else 0,
+         _normalize_email(email)),
+    )
+    return cur.rowcount > 0
+
+
+def record_auth_sign_in(conn: sqlite3.Connection, email: str) -> None:
+    """Stamp the time of a successful sign-in."""
+    conn.execute(
+        "UPDATE auth_users SET last_sign_in_at = ? WHERE email = ?",
+        (_now(), _normalize_email(email)),
+    )
+
+
+def delete_auth_sessions_for(conn: sqlite3.Connection, email: str) -> None:
+    """Sign an account out everywhere (used after an admin password reset)."""
+    conn.execute("DELETE FROM auth_sessions WHERE email = ?", (_normalize_email(email),))
 
 
 def upsert_auth_user(
@@ -3571,3 +3635,203 @@ def sweep_expired_auth_sessions(conn: sqlite3.Connection, cutoff_iso: str) -> in
         "DELETE FROM auth_sessions WHERE last_seen_at <= ?", (cutoff_iso,)
     )
     return cur.rowcount
+
+
+# ---------------------------------------------------------------------------
+# Administrator audit log (v55)
+# ---------------------------------------------------------------------------
+
+def insert_audit_event(
+    conn: sqlite3.Connection,
+    actor_email: str,
+    action: str,
+    target: str,
+    detail: Optional[dict] = None,
+) -> None:
+    """Record one administrator action in the caller's transaction."""
+    conn.execute(
+        "INSERT INTO auth_audit_events(at, actor_email, action, target, detail_json) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (_now(), _normalize_email(actor_email), action, target,
+         json.dumps(detail) if detail else None),
+    )
+
+
+def list_audit_events(
+    conn: sqlite3.Connection, *, limit: int = 50, before_id: Optional[int] = None
+) -> list[dict]:
+    """Newest first, paged by id. Actor and target names are joined in so the
+    log can read as plain sentences."""
+    sql = (
+        "SELECT e.id, e.at, e.actor_email, e.action, e.target, e.detail_json, "
+        "a.display_name AS actor_name, t.display_name AS target_name "
+        "FROM auth_audit_events e "
+        "LEFT JOIN auth_users a ON a.email = e.actor_email "
+        "LEFT JOIN auth_users t ON t.email = e.target"
+    )
+    params: list = []
+    if before_id is not None:
+        sql += " WHERE e.id < ?"
+        params.append(before_id)
+    sql += " ORDER BY e.id DESC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(sql, params).fetchall()
+    return [
+        {
+            "id": r["id"],
+            "at": r["at"],
+            "actor_email": r["actor_email"],
+            "actor_name": r["actor_name"] or "",
+            "action": r["action"],
+            "target": r["target"],
+            "target_name": r["target_name"] or "",
+            "detail": json.loads(r["detail_json"]) if r["detail_json"] else None,
+        }
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Reported issues (v55)
+# ---------------------------------------------------------------------------
+
+ISSUE_KINDS = ("wrong_figure", "notes", "formatting", "app_error", "other")
+ISSUE_STATUSES = ("new", "in_progress", "resolved")
+
+
+def create_issue(
+    conn: sqlite3.Connection,
+    reporter_email: str,
+    kind: str,
+    description: str,
+    run_id: Optional[int],
+    context: Optional[dict],
+) -> int:
+    cur = conn.execute(
+        "INSERT INTO issues(reporter_email, created_at, kind, description, status, "
+        "run_id, context_json) VALUES (?, ?, ?, ?, 'new', ?, ?)",
+        (_normalize_email(reporter_email), _now(), kind, description, run_id,
+         json.dumps(context) if context else None),
+    )
+    return int(cur.lastrowid)
+
+
+def add_issue_file(
+    conn: sqlite3.Connection,
+    issue_id: int,
+    stored_name: str,
+    original_name: str,
+    content_type: str,
+    size_bytes: int,
+    sha256: str,
+) -> int:
+    cur = conn.execute(
+        "INSERT INTO issue_files(issue_id, stored_name, original_name, content_type, "
+        "size_bytes, sha256) VALUES (?, ?, ?, ?, ?, ?)",
+        (issue_id, stored_name, original_name, content_type, size_bytes, sha256),
+    )
+    return int(cur.lastrowid)
+
+
+_ISSUE_SELECT = (
+    "SELECT i.*, u.display_name AS reporter_name, r.pdf_filename AS run_filename, "
+    "(SELECT COUNT(*) FROM issue_files f WHERE f.issue_id = i.id) AS file_count "
+    "FROM issues i "
+    "LEFT JOIN auth_users u ON u.email = i.reporter_email "
+    "LEFT JOIN runs r ON r.id = i.run_id"
+)
+
+
+def _issue_row(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "reporter_email": row["reporter_email"],
+        "reporter_name": row["reporter_name"] or "",
+        "created_at": row["created_at"],
+        "kind": row["kind"],
+        "description": row["description"],
+        "status": row["status"],
+        "run_id": row["run_id"],
+        "run_filename": row["run_filename"],
+        "context": json.loads(row["context_json"]) if row["context_json"] else None,
+        "admin_reply": row["admin_reply"],
+        "updated_by": row["updated_by"],
+        "updated_at": row["updated_at"],
+        "file_count": row["file_count"],
+    }
+
+
+def list_issues(
+    conn: sqlite3.Connection,
+    *,
+    reporter_email: Optional[str] = None,
+    status: Optional[str] = None,
+    kind: Optional[str] = None,
+) -> list[dict]:
+    """Issues newest first, optionally limited to one reporter, status or kind."""
+    clauses, params = [], []
+    if reporter_email is not None:
+        clauses.append("i.reporter_email = ?")
+        params.append(_normalize_email(reporter_email))
+    if status is not None:
+        clauses.append("i.status = ?")
+        params.append(status)
+    if kind is not None:
+        clauses.append("i.kind = ?")
+        params.append(kind)
+    sql = _ISSUE_SELECT
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY i.id DESC"
+    return [_issue_row(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def count_issues_by_status(
+    conn: sqlite3.Connection, *, reporter_email: Optional[str] = None
+) -> dict[str, int]:
+    sql = "SELECT status, COUNT(*) FROM issues"
+    params: list = []
+    if reporter_email is not None:
+        sql += " WHERE reporter_email = ?"
+        params.append(_normalize_email(reporter_email))
+    sql += " GROUP BY status"
+    counts = {s: 0 for s in ISSUE_STATUSES}
+    for status, n in conn.execute(sql, params).fetchall():
+        counts[status] = int(n)
+    return counts
+
+
+def fetch_issue(conn: sqlite3.Connection, issue_id: int) -> Optional[dict]:
+    row = conn.execute(_ISSUE_SELECT + " WHERE i.id = ?", (issue_id,)).fetchone()
+    return _issue_row(row) if row is not None else None
+
+
+def list_issue_files(conn: sqlite3.Connection, issue_id: int) -> list[dict]:
+    rows = conn.execute(
+        "SELECT id, stored_name, original_name, content_type, size_bytes "
+        "FROM issue_files WHERE issue_id = ? ORDER BY id",
+        (issue_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_issue(
+    conn: sqlite3.Connection,
+    issue_id: int,
+    *,
+    status: str,
+    admin_reply: str,
+    updated_by: str,
+) -> bool:
+    cur = conn.execute(
+        "UPDATE issues SET status = ?, admin_reply = ?, updated_by = ?, updated_at = ? "
+        "WHERE id = ?",
+        (status, admin_reply, _normalize_email(updated_by), _now(), issue_id),
+    )
+    return cur.rowcount > 0
+
+
+def delete_issue(conn: sqlite3.Connection, issue_id: int) -> bool:
+    """Delete an issue and its file rows (cascade). The caller removes files."""
+    cur = conn.execute("DELETE FROM issues WHERE id = ?", (issue_id,))
+    return cur.rowcount > 0

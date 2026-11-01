@@ -6,8 +6,10 @@ import { ui, uiClass } from "./lib/uiStyles";
 import { appReducer, bootState, parseRouteFromPath } from "./lib/appReducer";
 import { uploadPdf, abortAll, abortAgent } from "./lib/api";
 import { getAuthMe, logout as apiLogout, refreshAuth } from "./lib/api";
-import type { AuthMe } from "./lib/api";
-import { LoginPage } from "./pages/LoginPage";
+import type { AuthMe, IssueContext } from "./lib/api";
+import { ChoosePasswordPage, LoginPage } from "./pages/LoginPage";
+import { IssueDialog, clearIssueDrafts, issueDraftKey } from "./components/IssueDialog";
+import { IssuesPage } from "./pages/IssuesPage";
 import {
   createMultiAgentSSE,
   createMultiAgentSSEByRunId,
@@ -19,7 +21,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { TopNav } from "./components/TopNav";
 import { SuccessToast } from "./components/SuccessToast";
 import { Icon, SettingsIcon } from "./components/icons";
-import { ArrowBack, ArrowForward, LeftPanelClose, LeftPanelOpen, Logout } from "./components/iconGlyphs";
+import { ArrowBack, ArrowForward, Feedback, LeftPanelClose, LeftPanelOpen, Logout } from "./components/iconGlyphs";
 import { StatusIcon } from "./components/StatusIcon";
 import { DocumentsPage, useDocuments, documentStageLabel, documentStageSymbol } from "./pages/DocumentsPage";
 import { HistoryPage } from "./pages/HistoryPage";
@@ -39,6 +41,18 @@ import { confirmNavigationLeave, initializeNavigationHistory, pushNavigationHist
 // ---------------------------------------------------------------------------
 
 const SIDEBAR_DOCUMENT_LIMIT = 3;
+
+// The run tab names people see, for the "Attach this page" line on an issue.
+const RUN_TAB_LABELS: Record<RunTabKey, string> = {
+  overview: "Overview", values: "Figures", notes: "Notes", reports: "Reports",
+  checks: "Cross-checks", agents: "Activity", review: "AI review", telemetry: "Telemetry",
+};
+
+const ISSUE_PATH_RE = /^\/issues\/(\d+)\/?$/;
+const issueIdFromPath = (pathname: string): number | null => {
+  const m = ISSUE_PATH_RE.exec(pathname);
+  return m ? Number(m[1]) : null;
+};
 
 const styles = {
   headerTitle: {
@@ -146,6 +160,13 @@ export default function App() {
   // AUTH_MODE=dev the backend returns a dev user so the app just renders.
   const [authStatus, setAuthStatus] = useState<"authed" | "anon">("authed");
   const [user, setUser] = useState<AuthMe | null>(null);
+  // Issues: the open issue (null = the list) and the report dialog. The dialog
+  // stays mounted so a half-written issue survives closing and reopening.
+  const [issueId, setIssueId] = useState<number | null>(() =>
+    typeof window === "undefined" ? null : issueIdFromPath(window.location.pathname));
+  const [issueDialogOpen, setIssueDialogOpen] = useState(false);
+  // An open session that ends (expiry, reset or disable) says so on the sign-in page.
+  const [signedOut, setSignedOut] = useState(false);
 
   const checkAuth = useCallback(() => {
     return getAuthMe()
@@ -182,7 +203,7 @@ export default function App() {
   // the login page.
   useEffect(() => {
     const onUnauthorized = () => {
-      setUser(null);
+      setUser((current) => { if (current) setSignedOut(true); return null; });
       setAuthStatus("anon");
     };
     window.addEventListener("auth:unauthorized", onUnauthorized);
@@ -211,8 +232,11 @@ export default function App() {
 
   const handleLogout = useCallback(() => {
     if (!confirmNavigationLeave()) return;
+    // An unsent issue can hold client figures; never leave it for the next person.
+    clearIssueDrafts();
     apiLogout().finally(() => {
       setUser(null);
+      setSignedOut(false);
       setAuthStatus("anon");
     });
   }, []);
@@ -274,6 +298,8 @@ export default function App() {
     } else if (state.view === "settings") {
       // Singleton settings surface — no entity id rides along.
       expected = "/settings";
+    } else if (state.view === "issues") {
+      expected = issueId != null ? `/issues/${issueId}` : "/issues";
     } else if (state.view === "history") {
       expected = state.selectedRunId != null
         ? `/history/${state.selectedRunId}`
@@ -294,10 +320,10 @@ export default function App() {
         expected,
       );
     }
-  }, [state.view, state.selectedRunId, state.currentRunId]);
+  }, [state.view, state.selectedRunId, state.currentRunId, issueId]);
 
   useEffect(() => {
-    if (state.view === "settings" || (state.view === "concepts" && state.selectedRunId == null)) return;
+    if (state.view === "settings" || state.view === "issues" || (state.view === "concepts" && state.selectedRunId == null)) return;
     const path = window.location.pathname + window.location.search + window.location.hash;
     setReturnPath(path);
     try { window.sessionStorage.setItem("xbrl-document-return", path); } catch { /* storage is optional */ }
@@ -322,7 +348,8 @@ export default function App() {
       // and popstate agree on how a URL maps to state — including the
       // "any /history/<garbage> still lands on the list" forgiveness path.
       const route = parseRouteFromPath(window.location.pathname);
-      if (route.currentRunId !== stateRef.current.currentRunId && route.view !== "settings") {
+      setIssueId(issueIdFromPath(window.location.pathname));
+      if (route.currentRunId !== stateRef.current.currentRunId && route.view !== "settings" && route.view !== "issues") {
         streamGeneration.current += 1;
         sseControllerRef.current?.abort();
         dispatch({ type: "RESET" });
@@ -371,6 +398,25 @@ export default function App() {
     handleReset();
     setExtractMode("new");
     pushNavigationHistory({}, "", "/#new-extraction");
+  };
+  const openIssues = (id: number | null = null) => {
+    if (!confirmNavigationLeave()) return;
+    setIssueId(id);
+    dispatch({ type: "SET_VIEW", payload: "issues" });
+  };
+  // Open the run where the issue was raised: same document, tab and view when
+  // the recorded page belongs to this run, otherwise its Overview.
+  const openIssueRun = (runId: number, path: string | null) => {
+    if (!confirmNavigationLeave()) return;
+    handleReset();
+    const recorded = path && new RegExp(`^/(?:run|history|concepts)/${runId}(?:[/?#]|$)`).test(path) ? path : null;
+    const target = recorded ?? `/history/${runId}`;
+    const route = parseRouteFromPath(target.split(/[?#]/)[0]);
+    pushNavigationHistory({}, "", target);
+    setRunTab(readRunTabFromUrl() ?? "overview");
+    dispatch({ type: "SET_VIEW", payload: route.view });
+    dispatch({ type: "SET_SELECTED_RUN_ID", payload: route.selectedRunId });
+    dispatch({ type: "SET_CURRENT_RUN_ID", payload: route.currentRunId });
   };
   const restoreDocument = () => {
     if (!confirmNavigationLeave()) return;
@@ -677,7 +723,12 @@ export default function App() {
 
   // Auth gate: once /api/auth/me (or any 401) reports anonymous, show login.
   if (authStatus === "anon") {
-    return <LoginPage onAuthenticated={checkAuth} />;
+    return <LoginPage signedOut={signedOut} onAuthenticated={() => { setSignedOut(false); void checkAuth(); }} />;
+  }
+  // An admin-issued temporary password unlocks nothing else server-side.
+  if (user?.must_change_password) {
+    return <ChoosePasswordPage onChanged={checkAuth}
+      onLogout={() => { setUser(null); setSignedOut(false); setAuthStatus("anon"); }} />;
   }
 
   // Settings is a utility surface opened from the sidebar, not a signal that
@@ -714,7 +765,7 @@ export default function App() {
   );
   const keepExtractWorkspaceMounted =
     state.view === "extract"
-    || (state.view === "settings" && state.sessionId != null);
+    || ((state.view === "settings" || state.view === "issues") && state.sessionId != null);
   const documentId = state.view === "extract" ? state.currentRunId : state.selectedRunId;
   const reviewFocused = state.selectedRunId != null && (runTab === "notes" || runTab === "values");
   const documentList = (state.view === "extract" && state.currentRunId == null && !state.sessionId && extractMode === "queue")
@@ -722,8 +773,33 @@ export default function App() {
   const sidebarDocuments = documents.recentDocuments.slice(0, SIDEBAR_DOCUMENT_LIMIT);
   // The top bar never repeats the page title. Sub-pages get one back link in
   // one style; the main pages (Work queue, Add documents, History) leave it empty.
+  // What the person is looking at, in their words, for "Attach this page".
+  const issueRun = documentId != null && state.view !== "settings" && state.view !== "issues"
+    ? documents.recentDocuments.find((run) => run.id === documentId) ?? documents.runs.find((run) => run.id === documentId) ?? null
+    : null;
+  const issueDocument = issueRun?.pdf_filename.replace(/\.pdf$/i, "") ?? null;
+  const issuePage = state.view === "settings" ? "Settings"
+    : state.view === "issues" ? "Issues"
+    : documentId != null ? RUN_TAB_LABELS[runTab]
+    : state.view === "history" ? "History"
+    : state.view === "concepts" ? "Field labels"
+    : extractMode === "new" ? "Add documents" : "Work queue";
+  const issueContext: IssueContext = {
+    ...(documentId != null && state.view !== "settings" && state.view !== "issues" ? { run_id: documentId } : {}),
+    ...(issueDocument ? { document: issueDocument } : {}),
+    page: issuePage,
+    path: window.location.pathname + window.location.search,
+    browser: navigator.userAgent,
+    window: `${window.innerWidth}×${window.innerHeight}`,
+  };
+  // "Attach this page" is offered only on a document; elsewhere the page is still recorded.
+  const issueContextLabel = issueDocument ? `${issueDocument} · ${issuePage}` : "";
   const backLink: { label: string; onClick: () => void } | null =
-    state.view === "settings" || (state.view === "concepts" && documentId == null)
+    state.view === "issues"
+      // Admins reach Issues from the sidebar; everyone else from Settings → Account.
+      ? issueId != null ? { label: user?.is_admin ? "Back to issues" : "Back to your issues", onClick: () => openIssues(null) }
+        : user?.is_admin ? null : { label: "Back to settings", onClick: () => { if (confirmNavigationLeave()) dispatch({ type: "SET_VIEW", payload: "settings" }); } }
+      : state.view === "settings" || (state.view === "concepts" && documentId == null)
       ? { label: returnPath.match(/\/(?:run|history|concepts)\/\d+/) ? "Back to document" : "Back to work queue", onClick: restoreDocument }
       : documentId != null
         ? state.view === "extract"
@@ -742,12 +818,13 @@ export default function App() {
           <span className="app-navigation-label" style={styles.headerTitle}>XBRL Agent</span>
         </div>
         <TopNav view={state.view} extractMode={extractMode} hasDocument={documentId != null}
-          onAdd={addDocuments} onViewChange={(view) => showDocuments(view === "history" ? "history" : "progress")} />
+          onAdd={addDocuments} onViewChange={(view) => showDocuments(view === "history" ? "history" : "progress")}
+          onIssues={user?.is_admin ? () => openIssues(null) : undefined} />
         <nav className="app-document-navigation" aria-label="Recent documents" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0 }}>
           {(sidebarDocuments.length > 0) && <span className="app-navigation-label" style={{ ...ui.metadata, fontSize: 12, padding: "0 10px 4px" }}>Recent</span>}
           <div className="app-document-list" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0 }}>
           {sidebarDocuments.map((run) => {
-            const active = documentId === run.id && state.view !== "settings";
+            const active = documentId === run.id && state.view !== "settings" && state.view !== "issues";
             const stage = run.status === "draft" || run.status === "running" ? documentStageLabel(run) : null;
             return <button key={run.id} type="button"
               aria-current={active ? "page" : undefined}
@@ -768,6 +845,14 @@ export default function App() {
           </button>
         </nav>
         <div className="app-rail-footer" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: "auto" }}>
+          {/* Opens a dialog over the current page; never navigates, so open
+              edits, the selected field, PDF page and running work stay put. */}
+          <button type="button" aria-label="Report an issue" data-tooltip="Report an issue"
+            aria-haspopup="dialog" aria-expanded={issueDialogOpen}
+            style={ui.navLink} className={`${uiClass.btnSubtle} app-navigation-link`}
+            onClick={() => setIssueDialogOpen(true)}>
+            <Icon glyph={Feedback} size={20} /><span className="app-navigation-label">Report an issue</span>
+          </button>
           <button type="button" aria-label="Settings" data-tooltip="Settings"
             aria-current={state.view === "settings" ? "page" : undefined}
             style={{ ...ui.navLink, ...(state.view === "settings" ? ui.navLinkActive : {}) }}
@@ -801,14 +886,17 @@ export default function App() {
         <button type="button" className={uiClass.btnQuiet} style={{ ...ui.buttonQuiet, marginLeft: -10, padding: "0 10px" }} onClick={backLink.onClick}><ArrowBack size={20} />{backLink.label}</button>
       </header>}
       <main id="main-content" tabIndex={-1} className="app-main" style={reviewFocused || state.view === "concepts" ? styles.mainFull : styles.mainHistory}>
+        {state.view === "issues" && <IssuesPage isAdmin={Boolean(user?.is_admin)} issueId={issueId}
+          onOpenIssue={(id) => openIssues(id)} onOpenRun={openIssueRun} />}
         {state.view === "settings" && <SettingsPage isAdmin={Boolean(user?.is_admin)} currentEmail={user?.email}
+          onOpenIssues={() => openIssues(null)}
           onFieldLabels={canonicalEnabled ? () => { if (!confirmNavigationLeave()) return; dispatch({ type: "SET_VIEW", payload: "concepts" }); dispatch({ type: "SET_SELECTED_RUN_ID", payload: null }); } : undefined} />}
         {documentList && <DocumentsPage documents={documents} section={state.view === "history" ? "history" : "progress"}
           onSection={showDocuments} onAdd={addDocuments} onOpen={openDocument} />}
         {keepExtractWorkspaceMounted && !documentList && <div aria-hidden={state.view === "settings" ? true : undefined}
           style={{ display: state.view === "extract" ? "contents" : "none" }}>{extractWorkspace}</div>}
         {state.view === "concepts" && state.selectedRunId == null && <ConceptsPage runId={null} />}
-        {state.view !== "settings" && state.view !== "extract" && state.selectedRunId != null &&
+        {state.view !== "settings" && state.view !== "issues" && state.view !== "extract" && state.selectedRunId != null &&
           <HistoryPage key={state.selectedRunId} canonicalEnabled={canonicalEnabled} selectedId={state.selectedRunId}
             initialRunTab={state.view === "concepts" ? "values" : undefined} hideDetailBack
             onSelectRun={(id) => { if (id == null) showDocuments("history"); else openDocument({ id, status: "running" }); }}
@@ -816,6 +904,13 @@ export default function App() {
       </main>
       </div>
       <SuccessToast toast={state.toast} onDismiss={() => dispatch({ type: "DISMISS_TOAST" })} />
+      <IssueDialog open={issueDialogOpen} onClose={() => setIssueDialogOpen(false)}
+        draftKey={issueDraftKey(user?.email ?? "anonymous")}
+        context={issueContext} contextLabel={issueContextLabel || null}
+        onSent={(id) => {
+          setIssueDialogOpen(false);
+          dispatch({ type: "SHOW_TOAST", payload: { message: `Issue ${id} sent`, tone: "success" } });
+        }} />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 """Admin gate on /api/settings (docs/PLAN-ui-ux-plain-language-overhaul.md
-Phase 6). AI-plumbing + firm-wide run-default keys are admin-only server-side;
-cosmetic keys (notes_table_style) stay writable by everyone. Runs with
+Phase 6). AI-plumbing, firm-wide run defaults and the shared notes appearance
+are admin-only server-side. Runs with
 AUTH_MODE unset so real sessions apply (dev-bypass would waive the gate).
 """
 from __future__ import annotations
@@ -62,14 +62,18 @@ def test_admin_can_write_ai_plumbing(env):
     assert r.status_code == 200
 
 
-def test_non_admin_can_write_cosmetic_only(env):
-    """A non-admin write touching only the cosmetic firm default is allowed."""
-    client = TestClient(server.app)
-    _login(client, "user@firm.com", "user-password")
-    r = client.post("/api/settings", json={
-        "notes_appearance_overrides": {"headerFill": "#f4f4f4"},
-    })
-    assert r.status_code == 200
+@pytest.mark.parametrize("body", [
+    {"notes_appearance_overrides": {"headerFill": "#f4f4f4"}},
+    {"notes_appearance_reset": True},
+])
+def test_shared_notes_appearance_is_admin_only(env, body):
+    """The house notes look applies to everyone's runs, so only admins set it."""
+    member = TestClient(server.app)
+    _login(member, "user@firm.com", "user-password")
+    assert member.post("/api/settings", json=body).status_code == 403
+    admin = TestClient(server.app)
+    _login(admin, "admin@firm.com", "admin-password")
+    assert admin.post("/api/settings", json=body).status_code == 200
 
 
 def test_non_admin_cannot_test_connection(env):
@@ -101,3 +105,16 @@ def test_non_admin_cannot_reset_shared_defaults(env):
     _login(client, "user@firm.com", "user-password")
     r = client.post("/api/settings", json={"reset_shared_defaults": True})
     assert r.status_code == 403
+
+
+def test_connection_details_are_not_sent_to_non_admins(env, monkeypatch):
+    monkeypatch.setenv("LLM_PROXY_URL", "https://proxy.example.com")
+    monkeypatch.setattr(server, "_resolve_api_key", lambda: "sk-test-1234567890")
+    member = TestClient(server.app)
+    _login(member, "user@firm.com", "user-password")
+    body = member.get("/api/settings").json()
+    assert body["proxy_url"] == "" and body["api_key_preview"] == "" and body["api_key_set"] is True
+    admin = TestClient(server.app)
+    _login(admin, "admin@firm.com", "admin-password")
+    body = admin.get("/api/settings").json()
+    assert body["proxy_url"] == "https://proxy.example.com" and body["api_key_preview"].startswith("sk-t")

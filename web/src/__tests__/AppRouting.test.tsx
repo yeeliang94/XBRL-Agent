@@ -28,6 +28,12 @@ vi.mock("../lib/api", async () => {
     })),
     logout: vi.fn(async () => {}),
     updateSettings: vi.fn(async () => ({ status: "ok" })),
+    getIssue: vi.fn(async () => ({
+      id: 42, reporter_email: "dev@localhost", reporter_name: "Dev", created_at: "2026-11-01T10:00:00Z",
+      kind: "other" as const, description: "Check this page", status: "new" as const, run_id: 42,
+      run_filename: "Draft.pdf", context: { path: "/run/42" }, admin_reply: "", updated_by: null,
+      updated_at: null, file_count: 0, files: [], can_manage: true,
+    })),
     getExtendedSettings: vi.fn(async () => ({
       model: "x",
       proxy_url: "",
@@ -64,6 +70,54 @@ vi.mock("../lib/api", async () => {
 // makes a network call in Phase 5, but for routing tests we only exercise
 // the extract view.
 describe("App routing", () => {
+  test("unsaved issue edits guard leaving and reloads until saved", async () => {
+    const api = await import("../lib/api");
+    const save = vi.spyOn(api, "updateIssue").mockImplementation(async (_id, body) => ({
+      ...await api.getIssue(42), ...body,
+    }));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    window.history.replaceState({}, "", "/issues/42");
+    try {
+      const { default: App } = await import("../App");
+      render(<App />);
+      fireEvent.change(await screen.findByRole("textbox", { name: "Reply" }), { target: { value: "Unsaved reply" } });
+      fireEvent.click(screen.getByRole("link", { name: "Work queue" }));
+      expect(confirm).toHaveBeenCalled();
+      expect(window.location.pathname).toBe("/issues/42");
+      fireEvent.click(screen.getByRole("button", { name: "Open in run" }));
+      expect(window.location.pathname).toBe("/issues/42");
+      const unload = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(unload);
+      expect(unload.defaultPrevented).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await screen.findByText("Saved");
+      const savedUnload = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(savedUnload);
+      expect(savedUnload.defaultPrevented).toBe(false);
+      fireEvent.click(screen.getByRole("link", { name: "Work queue" }));
+      expect(window.location.pathname).toBe("/");
+    } finally { cleanup(); confirm.mockRestore(); save.mockRestore(); }
+  });
+
+  test("an issue opens draft setup with one history entry and Back returns to the issue", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.fetchRunDetail).mockResolvedValueOnce({
+      ...await api.fetchRunDetail(42), id: 42, status: "draft", session_id: "draft_42", pdf_filename: "Draft.pdf",
+    });
+    window.history.replaceState({}, "", "/issues/42");
+    const { default: App } = await import("../App");
+    render(<App />);
+    const open = await screen.findByRole("button", { name: "Open in run" });
+    const length = window.history.length;
+    fireEvent.click(open);
+    await waitFor(() => expect(screen.getAllByText("Draft.pdf").length).toBeGreaterThan(0));
+    expect(window.location.pathname).toBe("/run/42");
+    expect(window.history.length).toBe(length + 1);
+    act(() => window.history.back());
+    await waitFor(() => expect(window.location.pathname).toBe("/issues/42"));
+    expect(await screen.findByRole("button", { name: "Open in run" })).toBeInTheDocument();
+  });
+
   test("appearance saves block leaving Settings and reloading until confirmed", async () => {
     const api = await import("../lib/api");
     const output = await import("../lib/notesOutput");
@@ -73,6 +127,10 @@ describe("App routing", () => {
     });
     let finishSave!: (value: { status: string }) => void;
     vi.mocked(api.updateSettings).mockImplementationOnce(() => new Promise(resolve => { finishSave = resolve; }));
+    // Notes appearance is shared by everyone, so only administrators see it.
+    vi.mocked(api.getAuthMe).mockResolvedValueOnce({
+      email: "admin@localhost", display_name: "Admin", provider: "dev", is_admin: true,
+    });
     window.history.replaceState({}, "", "/settings");
     try {
       const { default: App } = await import("../App");
@@ -235,7 +293,7 @@ describe("App routing", () => {
       expect(editor).toHaveValue("Unsaved practice");
       confirm.mockReturnValue(true);
       fireEvent.click(screen.getByRole("button", { name: "Log out" }));
-      await screen.findByText("Sign in to continue");
+      await screen.findByRole("button", { name: "Sign in" });
       expect(api.logout).toHaveBeenCalledTimes(1);
       expect(screen.queryByLabelText("Additional instructions")).not.toBeInTheDocument();
     } finally {

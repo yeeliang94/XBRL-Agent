@@ -2479,6 +2479,36 @@ gotcha #11 (v18 `auth_users` / `auth_sessions`); the operational invariants:
   `test_change_password.py`, `test_auth_me_reports_admin.py`,
   `test_db_schema_v20.py`, and `web` `SettingsPage`/`AccountTab`/`UsersTab` tests.
 
+**Provisioning, audit and issues (schema v55).** Admins add a person or reset a
+password without typing one: the server returns a one-time temporary password
+and sets `auth_users.must_change_password`. While it is set, the auth middleware
+returns 403 `reason: "password_change_required"` for every guarded route
+(`/api/auth/*` stays open) and the SPA shows only "Choose a new password";
+`/api/auth/change-password` skips the current-password check on that path.
+Completing that forced change revokes all temporary-password sessions and
+issues a fresh session to the person choosing the password. Credential checks
+and password changes are serialized in database write transactions.
+Reset also signs the person out. Administrators change their own password in
+Account; the administrator reset endpoint refuses self-reset so the temporary
+password cannot be lost after sign-out. `last_sign_in_at` is stamped on login. Add
+refuses an existing email (409) instead of overwriting it. Every admin account
+change and every issue update or deletion writes `auth_audit_events` in the same
+transaction (`GET /api/admin/audit`, admin only). Runs stay shared: everyone sees,
+opens and may delete every run (owner decision 2026-11-01). The shared notes
+appearance (`notes_table_style`, `notes_appearance_overrides`,
+`notes_appearance_reset`) is admin-only; non-admin Settings shows only Team
+guidance and Account. Issues (`api/issues.py`): anyone signed in may report one
+with up to 5 files (10 MB each; PNG/JPG/WebP/PDF/.xlsx/.docx judged by content);
+files live under `OUTPUT_DIR/issues/<id>/` and are served only to the reporter or
+an admin; another person's issue reads as 404. Page context accepts only the
+declared string fields and an integer run id; malformed context is rejected
+before storing an issue. Only admins change status/reply or
+delete, and deletion is the only way issue files are removed. `issues.run_id` is
+`ON DELETE SET NULL` so an issue outlives its run. Pinned by
+`tests/test_admin_routes.py`, `tests/test_issues_routes.py`,
+`tests/test_settings_admin_gate.py`, `tests/test_db_schema_v55.py`, and the web
+`UsersTab`, `IssueDialog`, `IssuesPage` and `SettingsPage` tests.
+
 Shared supplemental guidance lives in `agent_instructions`, never local JSON
 settings. A dedicated `runs.agent_instructions_json` snapshot is captured in the
 run-start transaction and retained for review. New/redo runs capture current
