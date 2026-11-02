@@ -12,17 +12,6 @@ from pathlib import Path
 SOURCE = "prior_year_workbook"
 
 
-def _require_blank_current_year(facts):
-    if any(
-        f["period"] == "CY" and f["value"] is not None
-        and not (f["calculated"] and f["is_formula"])
-        for f in facts
-    ):
-        raise ValueError(
-            "This workbook already contains current-year numeric inputs. Clear current-year input fields in mTool before using a rolled-forward workbook. Formula totals may remain."
-        )
-
-
 def _prior_year_inputs(conn, facts):
     """Keep every populated PY input, including authoritative typed subtotals."""
     from concept_model.facts_api import _concept_owns_formula, _lookup_concept
@@ -127,7 +116,7 @@ def resolved_config(config: dict, infopack=None) -> dict:
 
 
 def inspect_workbook(conn, config: dict, path: Path, unit: str, infopack=None):
-    from eval.human_file import read_human_file, run_filing_shape
+    from eval.human_file import read_human_file, run_filing_shape, typed_current_year_cells
     from mtool.column_detect import (
         detect_column_map,
         period_compatibility_issues,
@@ -185,8 +174,8 @@ def inspect_workbook(conn, config: dict, path: Path, unit: str, infopack=None):
         raise ValueError(
             "The workbook reporting dates do not match the financial statements. Use the rolled-forward workbook for this filing year."
         )
-    read = read_human_file(conn, 0, path, unit, shape=shape, include_notes=False, include_typed_totals=True)
-    _require_blank_current_year(read.facts)
+    # Only comparatives are imported. Current-year cells are handled on export.
+    read = read_human_file(conn, 0, path, unit, shape=shape, periods=("PY",), include_notes=False, include_typed_totals=True)
     inputs = _prior_year_inputs(conn, read.facts)
     if not inputs:
         raise ValueError(
@@ -235,6 +224,7 @@ def inspect_workbook(conn, config: dict, path: Path, unit: str, infopack=None):
         "inputs": len(inputs),
         "aggregate_inputs": sum(f["children_status"] == "aggregate_only" for f in inputs),
         "blank_slots": missing,
+        "current_year_values": len(typed_current_year_cells(conn, path, shape)),
         "unresolved_slots": read.summary["unresolved_slots"],
         "not_in_file": read.not_compared,
         "period_issues": issues,
@@ -664,22 +654,20 @@ def check_results(db_path, run_id):
         return results
 
 
-def validate_export_source(conn, run_id, path, *, require_blank_current_year=True):
-    """Require matching comparatives and blank CY inputs before preparation."""
-    from eval.human_file import read_human_file
-
-    config = json.loads(
+def _export_config(conn, run_id):
+    return json.loads(
         conn.execute(
             "SELECT run_config_json FROM runs WHERE id=?", (run_id,)
         ).fetchone()[0]
     )
-    unit = config.get("prior_year_summary", {}).get(
-        "unit", config.get("denomination", "thousands")
-    )
+
+
+def _export_shape(conn, run_id, config):
+    """The filing shape import used, even if a stopped agent recorded none."""
     from eval.human_file import run_filing_shape
 
     imported_variants = config.get("prior_year_summary", {}).get("variants", {})
-    shape = run_filing_shape(
+    return run_filing_shape(
         conn,
         run_id,
         config={
@@ -687,18 +675,35 @@ def validate_export_source(conn, run_id, path, *, require_blank_current_year=Tru
             "variants": {**(config.get("variants") or {}), **imported_variants},
         },
     )
+
+
+def stale_current_year_cells(conn, run_id, path, column_map=None):
+    """Typed CY cells in the source workbook, which predate this run."""
+    from eval.human_file import typed_current_year_cells
+
+    shape = _export_shape(conn, run_id, _export_config(conn, run_id))
+    return typed_current_year_cells(conn, path, shape, column_map)
+
+
+def validate_export_source(conn, run_id, path):
+    """Require the imported comparatives before preparation."""
+    from eval.human_file import read_human_file
+
+    config = _export_config(conn, run_id)
+    unit = config.get("prior_year_summary", {}).get(
+        "unit", config.get("denomination", "thousands")
+    )
+    shape = _export_shape(conn, run_id, config)
     try:
         read = read_human_file(
             conn, run_id, path, unit, shape=shape,
-            periods=("CY", "PY") if require_blank_current_year else ("PY",),
+            periods=("PY",),
             include_notes=False, include_typed_totals=True,
         )
     except ValueError as exc:
         raise ValueError(
             "This workbook has no readable matching prior-year inputs. Use the saved rolled-forward workbook."
         ) from exc
-    if require_blank_current_year:
-        _require_blank_current_year(read.facts)
     actual = {
         (f["concept_uuid"], f["entity_scope"], f["dimension_key"]): f["value"]
         for f in _prior_year_inputs(conn, read.facts)
@@ -723,8 +728,7 @@ def verify_preservation(conn, run_id, before: Path, after: Path):
     # Cell XML alone cannot detect a shared-string change or a PY input
     # formula whose result changes when a CY operand is filled.
     try:
-        # The prepared workbook legitimately contains canonical CY writes.
-        validate_export_source(conn, run_id, after, require_blank_current_year=False)
+        validate_export_source(conn, run_id, after)
     except ValueError as exc:
         raise ValueError(
             "Prior-year input values changed during preparation. No workbook was released; replace dependent input formulas with fixed prior-year values in Excel."

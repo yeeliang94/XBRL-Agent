@@ -2338,8 +2338,12 @@ canonical totals compare against their derived amounts, never an invented zero.
 Agents follow the imported field choices
 unless a line is absent or has changed in nature (reason in evidence), and
 compare PDF comparatives with `check_prior_year`; differences and
-unassessed coverage remain visible. mTool preparation emits CY numeric writes
-only, validates replacement comparatives and verifies imported cell preservation
+unassessed coverage remain visible. Current-year workbook contents never block
+upload and are never imported. mTool preparation emits CY numeric writes only,
+replaces typed CY numbers where the run has a figure, keeps the rest and lists
+them on the receipt (non-zero ones require review; formulas and locked cells
+stay), validates
+replacement comparatives and verifies imported cell preservation
 before writing the receipt. Redo copies the selected source workbook. See
 `docs/ROLLED-FORWARD-WORKBOOKS.md`; pinned by
 `tests/test_prior_year_workbook.py`, `tests/test_run_restart.py`, and

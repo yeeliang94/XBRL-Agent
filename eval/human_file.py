@@ -461,6 +461,91 @@ def _magnitude_warning(conn, run_id: int, facts: list[dict]) -> str | None:
     return None
 
 
+def _resolve_slots(conn, path, data, workbook_index, shape, column_map=None):
+    """Find each numeric field of this filing in the workbook. An explicit
+    ``column_map`` entry wins over detection for its sheet."""
+    writes = _slot_writes(conn, shape["statements"], shape["level"], shape["standard"],
+                          workbook_index[1])
+    if shape["first_financial_statements"]:
+        writes = [write for write in writes if write["period"] == "CY"]
+    sheets: dict[str, dict] = {}
+    for write in writes:
+        sheets.setdefault(write["sheet"], {"label_column": None, "columns": {}})[
+            "columns"].setdefault(write["column_role"], None)
+    doc = {"meta": {}, "sheets": sheets, "writes": writes, "strict": True}
+    try:
+        detected = detect_column_map(str(path), doc, data=data,
+                                     cells_by_sheet=workbook_index[1])
+    except ConflictingPeriodMarkersError as exc:
+        raise HumanFileError(
+            "The file's year columns could not be told apart.") from exc
+    resolved_map = {s: {"label_column": v.get("label_column"),
+                        "columns": v.get("columns") or {}}
+                    for s, v in detected.items()}
+    for sheet, entry in (column_map or {}).items():
+        current = resolved_map.setdefault(sheet, {"label_column": None, "columns": {}})
+        current["label_column"] = entry.get("label_column") or current["label_column"]
+        current["columns"] = {**current["columns"], **(entry.get("columns") or {})}
+    ready, coverage = resolve_filing_doc(
+        str(path), doc, data=data, column_map=resolved_map,
+        workbook_index=workbook_index)
+    return writes, detected, ready, coverage
+
+
+def _slot_targets(ready, periods, cells_by_sheet):
+    """Yield (write, row, column, dimension key) for each addressed field."""
+    total_columns = {sheet: _category_total_columns(cells_by_sheet.get(sheet, {}))
+                     for sheet in _CATEGORY_AXIS_BY_SHEET}
+    period_blocks = {sheet: _dimensional_period_blocks(cells_by_sheet.get(sheet, {}))
+                     for sheet in _CATEGORY_AXIS_BY_SHEET}
+    category_rows: dict[tuple, tuple[dict, int]] = {}
+    for write in ready["writes"]:
+        if write["period"] not in periods:
+            continue
+        if not write.get("cell"):
+            continue  # label-only fallback: never read by guess
+        col, row = split_ref(write["cell"])
+        dimension_key = write.get("dimension_key") or ""
+        yield write, row, col, dimension_key
+        if dimension_key and total_columns.get(write["sheet"]):
+            category_rows.setdefault(
+                (write["concept_uuid"], write["period"], write["entity_scope"]),
+                (write, row))
+    # The Total column sits on the same row as the field's category columns.
+    for write, row in category_rows.values():
+        block = _block_for_primary_row(period_blocks[write["sheet"]], row)
+        if block is not None:
+            period_role = "current_year" if write["period"] == "CY" else "prior_year"
+            columns = [col for col in total_columns[write["sheet"]].get(block["dom_row"], [])
+                       if block["column_periods"].get(col) == period_role]
+            # Multiple totals for the same period may belong to different
+            # entities. Leave them unmatched rather than guess their scope.
+            if len(columns) == 1:
+                yield write, row, columns[0], ""
+
+
+def typed_current_year_cells(conn: sqlite3.Connection, path: str | Path, shape: dict,
+                             column_map: dict | None = None) -> list[dict]:
+    """Current-year fields holding a typed number. Formulas and locked cells
+    are not included, and unreadable text is never treated as a number."""
+    _, data, _ = load_workbook_entries(str(path))
+    workbook_index = index_workbook(data)
+    cells_by_sheet = workbook_index[1]
+    _, _, ready, _ = _resolve_slots(conn, path, data, workbook_index, shape, column_map)
+    protection = protected_input_cells(data, get_sheet_paths(data))
+    found = {}
+    for write, row, col, _ in _slot_targets(ready, ("CY",), cells_by_sheet):
+        cell = cells_by_sheet.get(write["sheet"], {}).get(row, {}).get(col)
+        value = _cell_number(cell)
+        if value is not None and not is_locked_input(
+                protection, write["sheet"], f"{col}{row}"):
+            found.setdefault((write["sheet"], f"{col}{row}"), {
+                "canonical_sheet": write.get("canonical_sheet", write["sheet"]),
+                "label": write.get("source_label"), "value": value})
+    return [{"sheet": sheet, "cell": addr, **detail}
+            for (sheet, addr), detail in found.items()]
+
+
 def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
                     unit: str, *, shape: dict | None = None,
                     periods: tuple[str, ...] = ("CY", "PY"),
@@ -482,9 +567,8 @@ def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
     _, cells_by_sheet = workbook_index
 
     statements = shape["statements"]
-    writes = _slot_writes(conn, statements, level, standard, cells_by_sheet)
-    if shape["first_financial_statements"]:
-        writes = [write for write in writes if write["period"] == "CY"]
+    writes, detected, ready, coverage = _resolve_slots(
+        conn, path, data, workbook_index, shape)
     unit_by_concept = {
         write["concept_uuid"]: (write["unit_class"], write["label"])
         for write in writes
@@ -493,32 +577,10 @@ def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
     matrix_totals = {r[0] for r in conn.execute(
         "SELECT DISTINCT e.parent_uuid FROM concept_edges e JOIN concept_nodes n "
         "ON n.concept_uuid=e.parent_uuid WHERE n.kind='MATRIX_CELL'")}
-    sheets: dict[str, dict] = {}
-    for write in writes:
-        sheets.setdefault(write["sheet"], {"label_column": None, "columns": {}})[
-            "columns"].setdefault(write["column_role"], None)
-    doc = {"meta": {}, "sheets": sheets, "writes": writes, "strict": True}
-    try:
-        detected = detect_column_map(str(path), doc, data=data,
-                                     cells_by_sheet=cells_by_sheet)
-    except ConflictingPeriodMarkersError as exc:
-        raise HumanFileError(
-            "The file's year columns could not be told apart.") from exc
-    column_map = {s: {"label_column": v.get("label_column"),
-                      "columns": v.get("columns") or {}}
-                  for s, v in detected.items()}
-    ready, coverage = resolve_filing_doc(
-        str(path), doc, data=data, column_map=column_map,
-        workbook_index=workbook_index)
 
     result = HumanFileRead()
     claimed: dict[str, set[tuple[int, str]]] = defaultdict(set)
     by_template: dict[str, list[dict]] = defaultdict(list)
-    total_columns = {sheet: _category_total_columns(cells_by_sheet.get(sheet, {}))
-                     for sheet in _CATEGORY_AXIS_BY_SHEET}
-    period_blocks = {sheet: _dimensional_period_blocks(cells_by_sheet.get(sheet, {}))
-                     for sheet in _CATEGORY_AXIS_BY_SHEET}
-    category_rows: dict[tuple, tuple[dict, int]] = {}
     formula_cells = None
     formula_cache: dict = {}
     protection = protected_input_cells(data, get_sheet_paths(data))
@@ -596,29 +658,8 @@ def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
             "source_sheet": write["sheet"], "source_cell": f"{col}{row}",
         })
 
-    for write in ready["writes"]:
-        if write["period"] not in periods:
-            continue
-        if not write.get("cell"):
-            continue  # label-only fallback: never read by guess
-        col, row = split_ref(write["cell"])
-        dimension_key = write.get("dimension_key") or ""
+    for write, row, col, dimension_key in _slot_targets(ready, periods, cells_by_sheet):
         add_fact(write, row, col, dimension_key)
-        if dimension_key and total_columns.get(write["sheet"]):
-            category_rows.setdefault(
-                (write["concept_uuid"], write["period"], write["entity_scope"]),
-                (write, row))
-    # The Total column sits on the same row as the field's category columns.
-    for write, row in category_rows.values():
-        block = _block_for_primary_row(period_blocks[write["sheet"]], row)
-        if block is not None:
-            period_role = "current_year" if write["period"] == "CY" else "prior_year"
-            columns = [col for col in total_columns[write["sheet"]].get(block["dom_row"], [])
-                       if block["column_periods"].get(col) == period_role]
-            # Multiple totals for the same period may belong to different
-            # entities. Leave them unmatched rather than guess their scope.
-            if len(columns) == 1:
-                add_fact(write, row, columns[0], "")
 
     sheets_by_template = _template_sheets(conn, statements)
     typed_by_sheet = {
