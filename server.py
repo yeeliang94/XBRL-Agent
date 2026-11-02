@@ -6358,7 +6358,7 @@ async def run_multi_agent_stream(
                 terminal_status = "failed"
             if client_connected:
                 yield {"event": "error", "data": {
-                    "message": "The extraction stopped unexpectedly. Please try starting it again.",
+                    "message": "The extraction stopped unexpectedly. Try starting it again.",
                     "traceback": f"{type(e).__name__}: {e}",
                     "bucket": ERROR_BUCKET_FATAL,
                 }}
@@ -6401,7 +6401,7 @@ async def run_multi_agent_stream(
                 terminal_status = "failed"
             if client_connected:
                 yield {"event": "error", "data": {
-                    "message": "The extraction stopped unexpectedly. Please try starting it again.",
+                    "message": "The extraction stopped unexpectedly. Try starting it again.",
                     "traceback": f"{type(e).__name__}: {e}",
                     "bucket": ERROR_BUCKET_FATAL,
                 }}
@@ -8796,6 +8796,17 @@ async def _auth_guard(request: Request, call_next):
         if auth_mw.counts_as_activity(path, request.method) and auth_sessions.should_bump_activity(session):
             repo.touch_auth_session(conn, session.session_id)
         conn.commit()
+        # An admin-issued temporary password unlocks only /api/auth/* (exempt
+        # above), so the person must choose their own before anything else.
+        account = repo.fetch_auth_user(conn, session.email)
+        if account is not None and account.must_change_password:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": "Choose a new password to continue.",
+                    "reason": "password_change_required",
+                },
+            )
     finally:
         conn.close()
     # Make the identity available to downstream handlers (audit/attribution).
@@ -8957,6 +8968,7 @@ from api.files import router as _files_router
 from api.mtool import router as _mtool_router
 from api.human_file import router as _human_file_router
 from api.prior_year import router as _prior_year_router
+from api.issues import router as _issues_router
 from auth.routes import router as _auth_router
 
 app.include_router(_config_router)
@@ -8974,6 +8986,7 @@ app.include_router(_files_router)
 app.include_router(_mtool_router)
 app.include_router(_human_file_router)
 app.include_router(_prior_year_router)
+app.include_router(_issues_router)
 app.include_router(_auth_router)
 
 # Re-export the moved handler functions as ``server.<name>`` so existing tests

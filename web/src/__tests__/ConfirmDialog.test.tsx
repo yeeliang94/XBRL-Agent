@@ -38,11 +38,16 @@ describe("ConfirmDialog", () => {
     expect(dialog.style.background).toBe("rgba(26, 26, 26, 0.45)");
   });
 
-  test("focuses Confirm on open; Cancel fires onCancel once", () => {
+  test("a destructive confirm focuses Cancel on open; Cancel fires onCancel once", () => {
     const { onCancel } = renderDialog();
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Delete run" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  test("a non-destructive confirm focuses Confirm on open", () => {
+    renderDialog({ danger: false, confirmLabel: "Enable account" });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Enable account" }));
   });
 
   test("Escape cancels; busy blocks Escape, both buttons, and swaps the label", () => {

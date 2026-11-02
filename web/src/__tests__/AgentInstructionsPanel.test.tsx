@@ -33,7 +33,9 @@ test("shows saved guidance, saves changes, and loads source text only when opene
 
 test("members can read guidance but cannot edit or save", async () => {
   render(<AgentInstructionsPanel isAdmin={false} onDirtyChange={vi.fn()} />);
-  expect(await screen.findByLabelText("Additional instructions")).toHaveAttribute("readonly");
+  expect(await screen.findByRole("heading", { name: "Additional instructions" })).toBeInTheDocument();
+  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  expect(screen.queryByText(/Describe the situation/)).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Save guidance" })).not.toBeInTheDocument();
 });
 

@@ -61,11 +61,10 @@ def test_non_admin_is_403_on_every_route(env):
     client = TestClient(server.app)
     _login(client, "user@firm.com", "user-password")
     assert client.get("/api/admin/users").status_code == 403
-    assert client.post("/api/admin/users", json={
-        "email": "x@firm.com", "password": "longenough"}).status_code == 403
+    assert client.post("/api/admin/users", json={"email": "x@firm.com"}).status_code == 403
     assert client.post("/api/admin/users/admin@firm.com/disable").status_code == 403
-    assert client.post("/api/admin/users/admin@firm.com/reset-password",
-                       json={"password": "longenough"}).status_code == 403
+    assert client.post("/api/admin/users/admin@firm.com/reset-password").status_code == 403
+    assert client.get("/api/admin/audit").status_code == 403
     assert client.post("/api/admin/users/user@firm.com/admin",
                        json={"is_admin": True}).status_code == 403
     # The non-admin must not have been promoted by the refused call.
@@ -103,29 +102,61 @@ def test_admin_can_list_without_hash(env):
         assert "has_password" in u
 
 
-def test_admin_can_add_user(env):
-    client = TestClient(server.app)
-    _login(client, "admin@firm.com", "admin-password")
-    r = client.post("/api/admin/users", json={
-        "email": "New@Firm.com", "display_name": "New", "password": "longenough"})
+def test_added_person_must_replace_temporary_password_before_using_the_app(env):
+    admin = TestClient(server.app)
+    _login(admin, "admin@firm.com", "admin-password")
+    r = admin.post("/api/admin/users", json={"email": "New@Firm.com", "display_name": "New"})
     assert r.status_code == 200
+    temporary = r.json()["temporary_password"]
     created = _fetch(env, "new@firm.com")
-    assert created is not None and created.is_admin is False
+    assert created.is_admin is False and created.must_change_password is True
+
+    person = TestClient(server.app)
+    login = person.post("/api/auth/login/password",
+                        json={"email": "new@firm.com", "password": temporary})
+    assert login.status_code == 200 and login.json()["must_change_password"] is True
+    assert person.get("/api/auth/me").json()["must_change_password"] is True
+    blocked = person.get("/api/runs")
+    assert blocked.status_code == 403
+    assert blocked.json()["reason"] == "password_change_required"
+
+    other = TestClient(server.app)
+    _login(other, "new@firm.com", temporary)
+    assert other.get("/api/runs").status_code == 403
+
+    # Keeping the temporary password would leave the admin knowing it.
+    assert person.post("/api/auth/change-password",
+                       json={"current_password": "", "new_password": temporary}).status_code == 422
+    # The session was opened with the temporary password, so it is not re-asked.
+    assert person.post("/api/auth/change-password",
+                       json={"current_password": "", "new_password": "chosen-password"}).status_code == 200
+    assert person.get("/api/runs").status_code == 200
+    assert other.get("/api/runs").status_code == 401
+    assert other.post("/api/auth/change-password", json={
+        "current_password": "", "new_password": "another-password"}).status_code == 401
+    assert other.post("/api/auth/login/password", json={
+        "email": "new@firm.com", "password": temporary}).status_code == 401
+    _login(other, "new@firm.com", "chosen-password")
+    assert other.get("/api/runs").status_code == 200
+    assert _fetch(env, "new@firm.com").must_change_password is False
+    assert _fetch(env, "new@firm.com").last_sign_in_at
 
 
 def test_admin_can_add_admin_user(env):
     client = TestClient(server.app)
     _login(client, "admin@firm.com", "admin-password")
-    client.post("/api/admin/users", json={
-        "email": "boss2@firm.com", "password": "longenough", "is_admin": True})
+    client.post("/api/admin/users", json={"email": "boss2@firm.com", "is_admin": True})
     assert _fetch(env, "boss2@firm.com").is_admin is True
 
 
-def test_add_user_rejects_short_password(env):
+def test_adding_an_existing_email_changes_nothing(env):
     client = TestClient(server.app)
     _login(client, "admin@firm.com", "admin-password")
-    r = client.post("/api/admin/users", json={"email": "z@firm.com", "password": "short"})
-    assert r.status_code == 422
+    before = _fetch(env, "user@firm.com").password_hash
+    r = client.post("/api/admin/users", json={"email": "USER@firm.com", "is_admin": True})
+    assert r.status_code == 409
+    after = _fetch(env, "user@firm.com")
+    assert after.password_hash == before and after.is_admin is False
 
 
 def test_admin_can_disable_and_enable(env):
@@ -137,16 +168,51 @@ def test_admin_can_disable_and_enable(env):
     assert _fetch(env, "user@firm.com").disabled is False
 
 
-def test_admin_can_reset_password(env):
-    client = TestClient(server.app)
-    _login(client, "admin@firm.com", "admin-password")
-    old = _fetch(env, "user@firm.com").password_hash
-    r = client.post("/api/admin/users/user@firm.com/reset-password",
-                    json={"password": "brand-new-password"})
+def test_reset_issues_a_temporary_password_and_signs_the_person_out(env):
+    person = TestClient(server.app)
+    _login(person, "user@firm.com", "user-password")
+    admin = TestClient(server.app)
+    _login(admin, "admin@firm.com", "admin-password")
+    r = admin.post("/api/admin/users/user@firm.com/reset-password")
     assert r.status_code == 200
-    new = _fetch(env, "user@firm.com").password_hash
-    assert new != old
-    assert passwords.verify_password(new, "brand-new-password")
+    temporary = r.json()["temporary_password"]
+    assert person.get("/api/runs").status_code == 401
+    account = _fetch(env, "user@firm.com")
+    assert account.must_change_password is True
+    assert passwords.verify_password(account.password_hash, temporary)
+    assert not passwords.verify_password(account.password_hash, "user-password")
+
+
+def test_admin_self_reset_is_refused_without_changing_password_or_session(env):
+    admin = TestClient(server.app)
+    _login(admin, "admin@firm.com", "admin-password")
+    before = _fetch(env, "admin@firm.com").password_hash
+    response = admin.post("/api/admin/users/admin@firm.com/reset-password")
+    assert response.status_code == 409
+    assert "Account" in response.json()["detail"]
+    assert _fetch(env, "admin@firm.com").password_hash == before
+    assert admin.get("/api/admin/users").status_code == 200
+
+
+def test_account_changes_are_recorded_in_the_audit_log(env):
+    admin = TestClient(server.app)
+    _login(admin, "admin@firm.com", "admin-password")
+    admin.post("/api/admin/users", json={"email": "new@firm.com", "display_name": "New"})
+    admin.post("/api/admin/users/user@firm.com/disable")
+    admin.post("/api/admin/users/user@firm.com/enable")
+    admin.post("/api/admin/users/user@firm.com/reset-password")
+    admin.post("/api/admin/users/user@firm.com/admin", json={"is_admin": True})
+    admin.post("/api/admin/users/ghost@firm.com/disable")  # refused: not recorded
+    events = admin.get("/api/admin/audit").json()["events"]
+    assert [(e["action"], e["target"]) for e in events] == [
+        ("role_changed", "user@firm.com"),
+        ("password_reset", "user@firm.com"),
+        ("user_enabled", "user@firm.com"),
+        ("user_disabled", "user@firm.com"),
+        ("user_added", "new@firm.com"),
+    ]
+    assert {e["actor_email"] for e in events} == {"admin@firm.com"}
+    assert events[0]["actor_name"] == "Admin" and events[0]["target_name"] == "User"
 
 
 def test_admin_can_promote_and_demote(env):
@@ -193,7 +259,6 @@ def test_actions_on_unknown_user_are_404(env):
     client = TestClient(server.app)
     _login(client, "admin@firm.com", "admin-password")
     assert client.post("/api/admin/users/ghost@firm.com/disable").status_code == 404
-    assert client.post("/api/admin/users/ghost@firm.com/reset-password",
-                       json={"password": "longenough"}).status_code == 404
+    assert client.post("/api/admin/users/ghost@firm.com/reset-password").status_code == 404
     assert client.post("/api/admin/users/ghost@firm.com/admin",
                        json={"is_admin": True}).status_code == 404

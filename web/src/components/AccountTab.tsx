@@ -103,9 +103,6 @@ export function AccountTab() {
 
   return (
     <div>
-      <p style={styles.helperText}>
-        Change the password for your signed-in account. Your current password is required.
-      </p>
       <div style={styles.fieldGroup}>
         <label style={styles.label}>Current password</label>
         <input
@@ -132,7 +129,7 @@ export function AccountTab() {
           aria-describedby="account-password-requirements account-password-error"
           style={styles.input}
         />
-        <p id="account-password-requirements" style={styles.helperText}>At least {MIN_LEN} characters.</p>
+        <p id="account-password-requirements" style={styles.helperText}>At least {MIN_LEN} characters</p>
       </div>
 
       <div style={styles.fieldGroup}>

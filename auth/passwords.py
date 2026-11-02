@@ -60,3 +60,17 @@ def dummy_verify(password: str) -> None:
         _ph.verify(_DUMMY_HASH, password)
     except (VerifyMismatchError, InvalidHashError):
         pass
+
+
+# Letters and digits that cannot be confused when read aloud or copied by hand
+# (no 0/O, 1/l/I).
+_TEMP_ALPHABET = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def generate_temporary_password() -> str:
+    """A one-time password an admin hands to a person, e.g. ``k7Qm-2xP9-vRaT``.
+    Three groups of four from a 55-character alphabet (~69 bits)."""
+    import secrets
+    return "-".join(
+        "".join(secrets.choice(_TEMP_ALPHABET) for _ in range(4)) for _ in range(3)
+    )

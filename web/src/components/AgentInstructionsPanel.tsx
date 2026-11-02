@@ -76,20 +76,22 @@ export function AgentInstructionsPanel({ isAdmin, onDirtyChange }: {
       </select>
       <p style={styles.meta}>Recipients: {recipients[scope]}</p>
     </div>
-    <div style={styles.field}>
+    {!isAdmin ? <div style={styles.field}>
+      <h3 id="team-guidance-label" style={{ ...ui.fieldLabel, margin: 0 }}>Additional instructions</h3>
+      <p aria-labelledby="team-guidance-label" style={styles.readOnlyText}>{texts[scope] || "None for this scope."}</p>
+    </div> : <div style={styles.field}>
       <label htmlFor="team-guidance" style={ui.fieldLabel}>Additional instructions</label>
-      <textarea id="team-guidance" style={styles.textarea} rows={8} readOnly={!isAdmin} disabled={busy}
+      <textarea id="team-guidance" style={styles.textarea} rows={8} disabled={busy}
         maxLength={saved.max_length} value={texts[scope] ?? ""} aria-describedby="guidance-help"
         placeholder="For [statement and situation], use [intended concept] when [condition]. Otherwise follow the normal mapping instructions."
         onChange={e => { setTexts({ ...texts, [scope]: e.target.value }); setNotice(""); }} />
       <p id="guidance-help" style={styles.meta}>Describe the situation, expected result, and exceptions. Guidance applies to new runs and must follow source and template rules.</p>
-      {!isAdmin && <p style={styles.meta}>An administrator can edit team guidance.</p>}
-    </div>
-    <div style={styles.actions}>
+    </div>}
+    {isAdmin && <div style={styles.actions}>
       <span style={styles.meta}>{saved.updated_at ? `Last saved by ${saved.updated_by}, ${new Date(saved.updated_at).toLocaleString()}` : "No team guidance saved yet."}</span>
-      {isAdmin && <button type="button" style={ui.buttonPrimary} className={uiClass.btnPrimary}
-        disabled={!dirty || busy || conflict} onClick={() => void save()}>{busy ? "Saving…" : "Save guidance"}</button>}
-    </div>
+      <button type="button" style={ui.buttonPrimary} className={uiClass.btnPrimary}
+        disabled={!dirty || busy || conflict} onClick={() => void save()}>{busy ? "Saving…" : "Save guidance"}</button>
+    </div>}
     {error && <div role="alert" style={styles.field}><p style={{ margin: 0 }}>{error}</p>
       {conflict && <button type="button" style={ui.buttonSecondary} onClick={() => {
         if (window.confirm("Discard your unsaved changes and reload saved guidance?")) void load();
@@ -140,6 +142,7 @@ const styles = {
   heading: { margin: 0, fontSize: 16, fontWeight: ds.weight.semibold },
   meta: { margin: 0, fontSize: 13, color: tokens.color.text.secondary },
   textarea: { ...ui.textarea, minHeight: 180, width: "100%", lineHeight: 1.5 } as React.CSSProperties,
+  readOnlyText: { margin: 0, fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxWidth: "70ch" } as React.CSSProperties,
   actions: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: ds.space.md, flexWrap: "wrap" } as React.CSSProperties,
   summary: { cursor: "pointer", fontSize: 14, fontWeight: ds.weight.medium },
   source: { margin: 0, padding: 16, border: `1px solid ${ds.grey200}`, borderRadius: 8, fontFamily: ds.fontBody, fontSize: 14, lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 480, overflow: "auto" } as React.CSSProperties,

@@ -77,6 +77,9 @@ export interface AuthMe {
   // Admin role (schema v20) — gates the Settings → Users tab. Optional so an
   // older backend that omits it reads as non-admin.
   is_admin?: boolean;
+  // An admin-issued temporary password: the app shows only "Choose a new
+  // password" until it is replaced (schema v55).
+  must_change_password?: boolean;
 }
 
 /** One account as returned by the admin user-management API (never the hash). */
@@ -88,6 +91,20 @@ export interface AdminUser {
   has_password: boolean;
   created_at: string;
   password_set_at: string | null;
+  must_change_password: boolean;
+  last_sign_in_at: string | null;
+}
+
+/** One administrator action from the audit log (newest first). */
+export interface AuditEvent {
+  id: number;
+  at: string;
+  actor_email: string;
+  actor_name: string;
+  action: "user_added" | "user_disabled" | "user_enabled" | "password_reset" | "role_changed" | "issue_updated" | "issue_deleted";
+  target: string;
+  target_name: string;
+  detail: Record<string, unknown> | null;
 }
 
 export type LoginResult =
@@ -150,9 +167,8 @@ export async function adminListUsers(): Promise<AdminUser[]> {
 export async function adminAddUser(body: {
   email: string;
   display_name?: string;
-  password: string;
   is_admin?: boolean;
-}): Promise<{ ok: boolean; user: AdminUser }> {
+}): Promise<{ ok: boolean; user: AdminUser; temporary_password: string }> {
   return apiFetch("/api/admin/users", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -165,12 +181,9 @@ export async function adminSetDisabled(email: string, disabled: boolean): Promis
   return apiFetch(`/api/admin/users/${encodeURIComponent(email)}/${action}`, { method: "POST" });
 }
 
-export async function adminResetPassword(email: string, password: string): Promise<{ ok: boolean }> {
-  return apiFetch(`/api/admin/users/${encodeURIComponent(email)}/reset-password`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password }),
-  });
+/** Issue a new one-time password; the person is signed out and must replace it. */
+export async function adminResetPassword(email: string): Promise<{ ok: boolean; temporary_password: string }> {
+  return apiFetch(`/api/admin/users/${encodeURIComponent(email)}/reset-password`, { method: "POST" });
 }
 
 export async function adminSetAdmin(email: string, isAdmin: boolean): Promise<{ ok: boolean; user: AdminUser }> {
@@ -179,6 +192,102 @@ export async function adminSetAdmin(email: string, isAdmin: boolean): Promise<{ 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ is_admin: isAdmin }),
   });
+}
+
+export async function adminAuditLog(before?: number): Promise<{ events: AuditEvent[]; has_more: boolean }> {
+  return apiFetch(`/api/admin/audit${before ? `?before=${before}` : ""}`);
+}
+
+// ---------------------------------------------------------------------------
+// Issues people report from any page. Everyone reads their own; admins read
+// all, reply, change status and delete (enforced server-side).
+// ---------------------------------------------------------------------------
+
+export type IssueKind = "wrong_figure" | "notes" | "formatting" | "app_error" | "other";
+export type IssueStatus = "new" | "in_progress" | "resolved";
+
+/** Where the person was when they reported it, in their own words. */
+export interface IssueContext {
+  run_id?: number;
+  document?: string;
+  page?: string;
+  tab?: string;
+  statement?: string;
+  path?: string;
+  app_version?: string;
+  browser?: string;
+  window?: string;
+}
+
+export interface IssueSummary {
+  id: number;
+  reporter_email: string;
+  reporter_name: string;
+  created_at: string;
+  kind: IssueKind;
+  description: string;
+  status: IssueStatus;
+  run_id: number | null;
+  run_filename: string | null;
+  context: IssueContext | null;
+  admin_reply: string;
+  updated_by: string | null;
+  updated_at: string | null;
+  file_count: number;
+}
+
+export interface IssueFile {
+  id: number;
+  original_name: string;
+  content_type: string;
+  size_bytes: number;
+}
+
+export interface IssueDetail extends IssueSummary {
+  files: IssueFile[];
+  can_manage: boolean;
+}
+
+export async function reportIssue(body: {
+  kind: IssueKind;
+  description: string;
+  context: IssueContext | null;
+  files: File[];
+}): Promise<{ ok: boolean; id: number }> {
+  const form = new FormData();
+  form.append("kind", body.kind);
+  form.append("description", body.description);
+  if (body.context) form.append("context", JSON.stringify(body.context));
+  for (const file of body.files) form.append("files", file, file.name);
+  return apiFetch("/api/issues", { method: "POST", body: form });
+}
+
+export async function listIssues(params: { status?: IssueStatus; kind?: IssueKind } = {}): Promise<{
+  issues: IssueSummary[];
+  counts: Record<IssueStatus, number>;
+  scope: "all" | "own";
+}> {
+  const q = new URLSearchParams();
+  if (params.status) q.set("status", params.status);
+  if (params.kind) q.set("kind", params.kind);
+  const suffix = q.toString();
+  return apiFetch(`/api/issues${suffix ? `?${suffix}` : ""}`);
+}
+
+export const getIssue = (id: number) => apiFetch<IssueDetail>(`/api/issues/${id}`);
+
+export const issueFileUrl = (issueId: number, fileId: number) => `/api/issues/${issueId}/files/${fileId}`;
+
+export async function updateIssue(id: number, body: { status: IssueStatus; admin_reply: string }): Promise<IssueSummary> {
+  return apiFetch(`/api/issues/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteIssue(id: number): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/issues/${id}`, { method: "DELETE" });
 }
 
 /** Throttled activity ping — bumps the sliding-window idle timer. Best-effort;
