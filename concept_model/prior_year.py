@@ -344,6 +344,9 @@ def import_workbook(
                         **summary,
                         "filename": metadata["filename"],
                         "unit": metadata["unit"],
+                        # The layouts used here; export validation must reuse them
+                        # even when a stopped agent never recorded its own.
+                        "variants": resolved_config(config, infopack)["variants"],
                     }
                 ),
                 run_id,
@@ -475,6 +478,12 @@ def compare_value(
                 (concept_uuid, template_id, template_id),
             ).fetchone()
             if known is None or value == 0:
+                # A corrected reading of zero withdraws an earlier comparison.
+                conn.execute(
+                    "DELETE FROM run_concept_conflicts WHERE run_id=? AND concept_uuid=? AND period='PY' "
+                    "AND entity_scope=? AND dimension_key=? AND kind='prior_year_comparative'",
+                    (run_id, concept_uuid, entity_scope, dims),
+                )
                 return "No imported value exists for that exact field, scope and category. Leave the missing comparative visible."
         # A comparative the workbook leaves blank cannot be filed in this mode,
         # so it is recorded as a difference instead of passing silently.
@@ -667,7 +676,15 @@ def validate_export_source(conn, run_id, path, *, require_blank_current_year=Tru
     )
     from eval.human_file import run_filing_shape
 
-    shape = run_filing_shape(conn, run_id, config=config)
+    imported_variants = config.get("prior_year_summary", {}).get("variants", {})
+    shape = run_filing_shape(
+        conn,
+        run_id,
+        config={
+            **config,
+            "variants": {**(config.get("variants") or {}), **imported_variants},
+        },
+    )
     try:
         read = read_human_file(
             conn, run_id, path, unit, shape=shape,

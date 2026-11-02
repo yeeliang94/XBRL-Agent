@@ -19,7 +19,9 @@ from concept_model.prior_year import (
     import_workbook,
     inspect_workbook,
     guidance,
+    validate_export_source,
 )
+from mtool.preflight import evaluate_preflight
 from tests._human_file_fixture import (
     SOFP,
     add_run,
@@ -50,6 +52,11 @@ def setup_file(tmp_path):
     return db, run, session_dir, config, workbook, facts
 
 
+def preflight_codes(db, run):
+    report = evaluate_preflight(db, run, filing_standard="mfrs", filing_level="company")
+    return {item["code"] for item in report["blockers"]}
+
+
 def test_import_guidance_retry_protection_and_comparative_checks(tmp_path):
     db, run, session_dir, config, workbook, facts = setup_file(tmp_path)
     summary = import_workbook(db, run, session_dir, config)
@@ -75,6 +82,7 @@ def test_import_guidance_retry_protection_and_comparative_checks(tmp_path):
     assert facts[0][0] in text
     assert str(facts[0][2]) in text
     assert any(r.status == "warning" for r in check_results(db, run))
+    assert "prior_year_comparatives_unassessed" in preflight_codes(db, run)
     # Formula totals are canonical comparatives too, not blank workbook inputs.
     with sqlite3.connect(db) as conn:
         total_uid, total_value = conn.execute(
@@ -92,6 +100,7 @@ def test_import_guidance_retry_protection_and_comparative_checks(tmp_path):
         db, run, SOFP, facts[0][0], facts[0][2] + 5, "PDF page 8: restated comparative"
     )
     assert any(r.status == "failed" for r in check_results(db, run))
+    assert "prior_year_comparatives_differ" in preflight_codes(db, run)
     # A difference dismissed in review stays accepted when the same figure is
     # rechecked; a new difference reopens it.
     with sqlite3.connect(db) as conn:
@@ -103,6 +112,7 @@ def test_import_guidance_retry_protection_and_comparative_checks(tmp_path):
         db, run, SOFP, facts[0][0], facts[0][2] + 5, "PDF page 8: restated comparative"
     )
     assert not any(r.status == "failed" for r in check_results(db, run))
+    assert "prior_year_comparatives_differ" not in preflight_codes(db, run)
     assert "1 differences accepted" in next(
         r.message for r in check_results(db, run) if r.name == "Prior-year comparative coverage"
     )
@@ -125,6 +135,11 @@ def test_import_guidance_retry_protection_and_comparative_checks(tmp_path):
         )
     assert "No imported value" in compare_value(db, run, SOFP, blank_leaf, 0, "PDF page 8: dash")
     assert "will not be filed" in compare_value(db, run, SOFP, blank_leaf, 500, "PDF page 8: 2024 column")
+    assert any("leaves blank" in r.message for r in check_results(db, run))
+    # A corrected reading of the report withdraws the earlier failure.
+    assert "No imported value" in compare_value(db, run, SOFP, blank_leaf, 0, "PDF page 8: dash, rechecked")
+    assert not any("leaves blank" in r.message for r in check_results(db, run))
+    compare_value(db, run, SOFP, blank_leaf, 500, "PDF page 8: 2024 column")
     results = check_results(db, run)
     assert any(r.status == "failed" and "leaves blank" in r.message for r in results)
     assert not any(r.name == "Prior-year import coverage" for r in results)
@@ -163,6 +178,23 @@ def test_import_guidance_retry_protection_and_comparative_checks(tmp_path):
         ).status
         == "passed"
     )
+
+
+def test_stopped_automatic_layout_run_still_accepts_its_saved_workbook(tmp_path):
+    # A stopped statement has no finished agent row naming its automatic layout.
+    db, run, session_dir, config, workbook, _ = setup_file(tmp_path)
+    automatic = {**config, "variants": {}}
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE runs SET run_config_json=? WHERE id=?", (json.dumps(automatic), run)
+        )
+    import_workbook(db, run, session_dir, automatic)
+    with sqlite3.connect(db) as conn:
+        validate_export_source(conn, run, workbook)
+        stored = json.loads(
+            conn.execute("SELECT run_config_json FROM runs WHERE id=?", (run,)).fetchone()[0]
+        )
+    assert stored["variants"] == {}
 
 
 def test_prior_only_reader_preserves_zero_and_rejects_first_statements(tmp_path):
