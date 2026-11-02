@@ -140,6 +140,8 @@ def test_import_guidance_retry_protection_and_comparative_checks(tmp_path):
     assert "No imported value" in compare_value(db, run, SOFP, blank_leaf, 0, "PDF page 8: dash, rechecked")
     assert not any("leaves blank" in r.message for r in check_results(db, run))
     compare_value(db, run, SOFP, blank_leaf, 500, "PDF page 8: 2024 column")
+    # A call for a field outside the agent's template leaves the failure in place.
+    assert "No imported value" in compare_value(db, run, "other-template", blank_leaf, 500, "PDF page 8")
     results = check_results(db, run)
     assert any(r.status == "failed" and "leaves blank" in r.message for r in results)
     assert not any(r.name == "Prior-year import coverage" for r in results)
@@ -195,6 +197,14 @@ def test_stopped_automatic_layout_run_still_accepts_its_saved_workbook(tmp_path)
             conn.execute("SELECT run_config_json FROM runs WHERE id=?", (run,)).fetchone()[0]
         )
     assert stored["variants"] == {}
+
+
+def test_unreadable_assessment_requires_review_instead_of_failing_preparation(tmp_path):
+    db, run, session_dir, config, _, _ = setup_file(tmp_path)
+    import_workbook(db, run, session_dir, config)
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE runs SET run_config_json='{' WHERE id=?", (run,))
+    assert "prior_year_comparatives_unassessed" in preflight_codes(db, run)
 
 
 def test_prior_only_reader_preserves_zero_and_rejects_first_statements(tmp_path):

@@ -396,9 +396,12 @@ def evaluate_preflight(
 
     # Comparative differences live outside the fact conflicts read above, so a
     # rolled-forward run needs its own readiness check to avoid a clean result.
-    from concept_model.prior_year import check_results
+    from concept_model.prior_year import check_results, incomplete_assessment
 
-    prior_year = check_results(str(db_path), run_id)
+    try:
+        prior_year = check_results(str(db_path), run_id)
+    except Exception:
+        prior_year = [incomplete_assessment()]
     differences = [r for r in prior_year if r.status == "failed"]
     if differences:
         blockers.append({
@@ -414,7 +417,7 @@ def evaluate_preflight(
         blockers.append({
             "code": "prior_year_comparatives_unassessed",
             "count": len(unassessed),
-            "message": "The prior-year comparative assessment is incomplete. Imported figures are preserved but unverified.",
+            "message": "Prior-year checks need review. Imported figures are preserved.",
             "examples": [r.message for r in unassessed[:_EXAMPLE_CAP]],
         })
 
