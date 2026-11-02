@@ -44,8 +44,10 @@ echo ========================================
 echo.
 
 if "%AZ_APP_NAME%"=="CHANGE-ME-app-name" (
-    echo ERROR: Set AZ_APP_NAME ^(and AZ_RESOURCE_GROUP^) at the top of this
-    echo        script or as environment variables before deploying.
+    echo ERROR: Choose the target app first. In this window, run for example:
+    echo          set AZ_RESOURCE_GROUP=rg-xbrl-agent-test
+    echo          set AZ_APP_NAME=xbrl-agent-test
+    echo        then run this script again.
     exit /b 1
 )
 
@@ -115,22 +117,33 @@ if exist "%PKG%" del /q "%PKG%"
 :: robocopy mirrors the tree minus the excluded dirs/files. /XD excludes a dir
 :: by name anywhere in the tree (so backup-originals under XBRL-template-* go);
 :: the XBRL-template-* + SSMxT_2022v1.0 runtime data is copied by default.
+:: Ignored private material (.env files, data, logs, databases, working
+:: documents) must never enter the package; the app reads nothing from docs.
 :: robocopy exit codes 0-7 are success; >=8 is a real error.
 robocopy . "%STAGE%" /E /NFL /NDL /NJH /NJS /NP ^
     /XD output node_modules .git venv .pytest_cache web\node_modules backup-originals __pycache__ .vscode ^
-    /XF .env *.pyc
+        .claude .idea XBRL-Agent data logs ab_work .codex-remote-attachments "%CD%\docs" ^
+    /XF .env .env.* *.pyc *.log *.db *.db-wal *.db-shm
 if %ERRORLEVEL% GEQ 8 ( echo ERROR: staging copy failed. & exit /b 1 )
-powershell -NoProfile -Command "Compress-Archive -Path '%STAGE%\*' -DestinationPath '%PKG%' -Force"
+:: Python's zipfile writes forward-slash entry names. Windows PowerShell 5.1
+:: Compress-Archive writes backslashes, which Linux App Service unpacks as
+:: flat files named "web\dist\index.html" instead of folders.
+python -c "import shutil, sys; shutil.make_archive(sys.argv[1][:-4], 'zip', sys.argv[2])" "%PKG%" "%STAGE%"
 if errorlevel 1 ( echo ERROR: zip failed. & exit /b 1 )
+echo Package: %PKG%
 
 :: ---- 6. Deploy ----
 echo.
 echo [6/6] Deploying to Azure...
 where az >nul 2>&1
 if errorlevel 1 (
-    echo ERROR: the Azure CLI ^(az^) is not installed / not on PATH.
-    echo See PLAN Phase 3.5 for fallbacks ^(per-user pip install azure-cli,
-    echo Azure Cloud Shell, or Kudu drag-drop of %PKG%^).
+    echo The Azure CLI ^(az^) is not installed on this laptop. The package is
+    echo built; deploy it from Azure Cloud Shell instead:
+    echo   1. Open https://portal.azure.com, click the Cloud Shell icon, choose Bash.
+    echo   2. Manage files ^> Upload, and pick %PKG%
+    echo   3. Run:
+    echo      az webapp deploy --resource-group %AZ_RESOURCE_GROUP% --name %AZ_APP_NAME% --src-path xbrl-deploy.zip --type zip
+    echo Kudu's drag-and-drop zip upload does not work for Linux apps.
     exit /b 1
 )
 az webapp deploy --resource-group "%AZ_RESOURCE_GROUP%" --name "%AZ_APP_NAME%" --type zip --src-path "%PKG%"
