@@ -32,6 +32,7 @@ import { abortAgent, updateSettings } from "../lib/api";
 import { VariantSelector } from "./VariantSelector";
 import { StatementRunConfig } from "./StatementRunConfig";
 import { PriorYearWorkbook } from "./PriorYearWorkbook";
+import { SetupChoice } from "./SetupChoice";
 import { NotesRunConfig } from "./NotesRunConfig";
 import { AgentTimeline } from "./AgentTimeline";
 import { humanToolName } from "../lib/toolLabels";
@@ -103,19 +104,10 @@ const styles = {
     gap: ds.space.md,
     minHeight: 40,
   } as React.CSSProperties,
-  sectionBody: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: ds.space.lg,
-  } as React.CSSProperties,
   subsection: {
     display: "flex",
     flexDirection: "column" as const,
     gap: ds.space.sm,
-  } as React.CSSProperties,
-  subsectionTitle: {
-    ...ui.bodyText,
-    fontWeight: ds.weight.medium,
   } as React.CSSProperties,
   exceptionLine: {
     ...ui.bodyText,
@@ -127,16 +119,19 @@ const styles = {
     listStyle: "none",
     margin: 0,
     padding: 0,
-    display: "grid",
-    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-    columnGap: ds.space.xl,
+  } as React.CSSProperties,
+  // Long documents scroll here so the sections and actions stay reachable.
+  noteListScroll: {
+    maxHeight: 322,
+    overflowY: "auto" as const,
+    borderTop: `1px solid ${ds.grey200}`,
   } as React.CSSProperties,
   noteRow: {
     display: "grid",
-    gridTemplateColumns: "40px minmax(0, 1fr) 40px",
+    gridTemplateColumns: "32px minmax(0, 1fr) 40px",
     alignItems: "start",
     minHeight: 40,
-    borderTop: `1px solid ${ds.grey100}`,
+    borderBottom: `1px solid ${ds.grey100}`,
   } as React.CSSProperties,
   noteNumber: {
     ...ui.bodyText,
@@ -166,20 +161,28 @@ const styles = {
     ...ui.bodyText,
     fontWeight: ds.weight.medium,
   } as React.CSSProperties,
-  setupGroup: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: ds.space.lg,
-  } as React.CSSProperties,
-  setupGrid: {
+  // Stays in view on the long page; the page itself is the scroller.
+  actionBar: {
+    position: "sticky" as const,
+    bottom: 0,
+    zIndex: 1,
     display: "flex",
     flexWrap: "wrap" as const,
-    gap: `${ds.space.lg}px ${ds.space.xl}px`,
-    alignItems: "flex-start",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: ds.space.lg,
+    padding: `${ds.space.md}px 0`,
+    borderTop: `1px solid ${ds.grey200}`,
+    background: ds.white,
   } as React.CSSProperties,
-  runButton: {
-    ...ui.buttonPrimary,
-    alignSelf: "flex-end" as const,
+  blockedReason: {
+    ...ui.bodyText,
+    color: ds.grey700,
+  } as React.CSSProperties,
+  reportCell: {
+    height: 48,
+    padding: 0,
+    verticalAlign: "middle" as const,
   } as React.CSSProperties,
   loadingText: {
     fontFamily: ds.fontBody,
@@ -487,13 +490,13 @@ function NotesInventoryEditor({
   return (
     <div style={styles.subsection}>
       <div style={{ ...styles.sectionHead, justifyContent: "space-between" }}>
-        <h3 style={{ ...styles.subsectionTitle, margin: 0 }}>Notes in the document</h3>
+        <h2 style={styles.heading}>Notes in the document</h2>
         {!adding && (
           <button
             type="button"
             onClick={() => setAdding(true)}
-            className={uiClass.btnQuiet}
-            style={ui.buttonQuiet}
+            className={uiClass.btnSecondary}
+            style={ui.buttonSecondary}
           >
             Add note
           </button>
@@ -507,24 +510,6 @@ function NotesInventoryEditor({
         </span>
       )}
       <div id="notes-inventory-list" style={styles.subsection}>
-        <ul aria-label="Discovered notes" className="notes-inventory-columns" style={styles.noteList}>
-          {sorted.map((e, i) => (
-            <li key={`${e.note_num}-${e.title}-${i}`} style={styles.noteRow}>
-              <span style={styles.noteNumber}>{e.note_num}</span>
-              <span style={styles.noteTitle}>{e.title}</span>
-              <button
-                type="button"
-                onClick={() => onChange(entries.filter((x) => x !== e))}
-                aria-label={`Remove note ${e.note_num}`}
-                data-tooltip={`Remove note ${e.note_num}`}
-                className={uiClass.btnQuiet}
-                style={styles.noteRemove}
-              >
-                <CloseIcon />
-              </button>
-            </li>
-          ))}
-        </ul>
         {adding && (
           <div style={styles.subsection}>
             <div style={styles.noteAddRow}>
@@ -572,6 +557,33 @@ function NotesInventoryEditor({
               </span>
             )}
           </div>
+        )}
+        {sorted.length === 0 ? (
+          <span role="status" style={styles.exceptionLine}>
+            <StatusIcon symbol={STATUS_SYMBOLS.attention} />
+            No notes found. Check that the PDF includes readable notes pages.
+          </span>
+        ) : (
+        <div role="region" aria-label="Notes list" tabIndex={0} style={styles.noteListScroll}>
+        <ul aria-label="Discovered notes" className="notes-inventory-columns" style={styles.noteList}>
+          {sorted.map((e, i) => (
+            <li key={`${e.note_num}-${e.title}-${i}`} style={styles.noteRow}>
+              <span style={styles.noteNumber}>{e.note_num}</span>
+              <span style={styles.noteTitle}>{e.title}</span>
+              <button
+                type="button"
+                onClick={() => onChange(entries.filter((x) => x !== e))}
+                aria-label={`Remove note ${e.note_num}`}
+                data-tooltip={`Remove note ${e.note_num}`}
+                className={uiClass.btnQuiet}
+                style={styles.noteRemove}
+              >
+                <CloseIcon />
+              </button>
+            </li>
+          ))}
+        </ul>
+        </div>
         )}
       </div>
     </div>
@@ -634,7 +646,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   const [priorYearWorkbook, setPriorYearWorkbook] = useState<string | null>(
     () => typeof initialConfig?.prior_year_workbook === "string" ? initialConfig.prior_year_workbook : null,
   );
-  const [priorYearBusy, setPriorYearBusy] = useState(false);
+  const [priorYearBlockedReason, setPriorYearBlockedReason] = useState<string | null>(null);
   const [priorYearLayout, setPriorYearLayout] = useState<string | null>(
     () => typeof initialConfig?.prior_year_layout === "string" ? initialConfig.prior_year_layout : null,
   );
@@ -1315,17 +1327,21 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   // PLAN §4 D.2: submitting with no notes selected still runs face-only
   // (current behaviour). Notes-only runs are also allowed so an operator
   // can refill just the notes sheets after an earlier face extraction.
+  const blockedReason =
+    enabledStmts.length === 0 && enabledNotes.length === 0 && reportsEnabled.length === 0
+      ? "Select something to extract"
+      : firstFinancialStatements ? null : priorYearBlockedReason;
   const canRun =
-    (firstFinancialStatements || (!priorYearBusy && priorYearWorkbook !== "")) &&
-    (enabledStmts.length > 0 || enabledNotes.length > 0 || reportsEnabled.length > 0) &&
+    !blockedReason &&
     preparation?.status !== "failed" &&
     preparation?.status !== "cancelled" &&
     (!waitForPreparation || preparation?.status === "succeeded");
 
   const preparationStarted = preparation != null && preparation.status !== "not_started";
+  const showModels = showAdvanced && !preparationStarted;
 
   return (
-    <div style={styles.container}>
+    <div className="filing-setup" style={styles.container}>
       {/* Panel header: title on the left, the Advanced-settings toggle pinned
           to the top-right so it reads as a panel-level control rather than a
           step in the middle of the form. The header and the filing row share
@@ -1358,114 +1374,50 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         </button>}
       </div>
 
-      <section style={styles.setupGroup} aria-label="Filing details">
-        <div style={styles.setupGrid}>
-
-      {/* Filing standard: MFRS (default) or MPERS. Mirrors the Filing Level
-          styling below so the two toggles read as a pair. */}
-      <div style={styles.section}>
-        <span style={styles.sectionLabel}>Filing standard</span>
-        <div className="segmented-control-group" style={ui.segmentGroup}>
-          {(["mfrs", "mpers"] as const).map((standard) => {
-            const active = filingStandard === standard;
-            return (
-              <button
-                key={standard}
-                type="button"
-                className="segmented-control-button"
-                aria-pressed={active}
-                onClick={() => handleFilingStandardChange(standard)}
-                style={{ ...ui.segmentButton, ...(active ? ui.segmentButtonActive : {}) }}
-              >
-                {standard.toUpperCase()}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Filing level: Company or Group */}
-      <div style={styles.section}>
-        <span style={styles.sectionLabel}>Filing level</span>
-        <div className="segmented-control-group" style={ui.segmentGroup}>
-          {(["company", "group"] as const).map((level) => {
-            const active = filingLevel === level;
-            return (
-              <button
-                key={level}
-                type="button"
-                className="segmented-control-button"
-                aria-pressed={active}
-                onClick={() => setFilingLevel(level)}
-                style={{ ...ui.segmentButton, ...(active ? ui.segmentButtonActive : {}) }}
-              >
-                {level === "company" ? "Company" : "Group"}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Presentation denomination the filer declares for the source figures.
-          The agent treats this as authoritative (no guessing) and transcribes
-          values verbatim; the scout cross-checks it. Mirrors the toggles above. */}
-      <div style={styles.section}>
-        <span style={styles.sectionLabel}>Denomination</span>
-        <div className="segmented-control-group" style={ui.segmentGroup}>
-          {(["units", "thousands", "millions"] as const).map((d) => {
-            const active = denomination === d;
-            return (
-              <button
-                key={d}
-                type="button"
-                className="segmented-control-button"
-                aria-pressed={active}
-                onClick={() => handleDenominationChange(d)}
-                style={{ ...ui.segmentButton, ...(active ? ui.segmentButtonActive : {}) }}
-              >
-                {DENOMINATION_LABELS[d]}
-              </button>
-            );
-          })}
-        </div>
-        {/* Only an exception earns a sentence: the unit could not be found. */}
-        {infopack?.scale_unit === "unknown" && (
-          <span style={{ ...ui.bodyText, color: ds.orange700 }}>
-            Not found in the document. Select the unit shown in the statements.
-          </span>
-        )}
-      </div>
-
-      {/* Reporting periods: the same segmented choice as the other three, so
-          the filing row is four controls of one kind. */}
-      <div style={styles.section}>
-        <span id="filing-reporting-periods-label" style={styles.sectionLabel}>Reporting periods</span>
-        <div className="segmented-control-group" role="group" aria-labelledby="filing-reporting-periods-label" style={ui.segmentGroup}>
-          {([["comparative", "Current and prior"], ["first", "Current only"]] as const).map(([value, label]) => {
-            const active = (firstFinancialStatements ? "first" : "comparative") === value;
-            return (
-              <button
-                key={value}
-                type="button"
-                className="segmented-control-button"
-                aria-pressed={active}
-                title={value === "first" ? "First statements after incorporation" : undefined}
-                onClick={() => setFirstFinancialStatements(value === "first")}
-                style={{ ...ui.segmentButton, ...(active ? ui.segmentButtonActive : {}) }}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-        </div>
+      <section className="filing-setup-grid" aria-label="Filing details">
+        <SetupChoice
+          label="Filing standard"
+          options={[{ value: "mfrs", label: "MFRS" }, { value: "mpers", label: "MPERS" }] as const}
+          value={filingStandard}
+          onChange={handleFilingStandardChange}
+        />
+        <SetupChoice
+          label="Filing level"
+          options={[{ value: "company", label: "Company" }, { value: "group", label: "Group" }] as const}
+          value={filingLevel}
+          onChange={setFilingLevel}
+        />
+        {/* Presentation unit the filer declares for the source figures. The agent
+            treats this as authoritative (no guessing) and transcribes values
+            verbatim; the scout cross-checks it. */}
+        <SetupChoice
+          label="Amounts in"
+          options={(["units", "thousands", "millions"] as const).map((d) => ({ value: d, label: DENOMINATION_LABELS[d] }))}
+          value={denomination}
+          onChange={handleDenominationChange}
+        >
+          {/* Only an exception earns a sentence: the unit could not be found. */}
+          {infopack?.scale_unit === "unknown" && (
+            <span role="status" style={styles.exceptionLine}>
+              <StatusIcon symbol={STATUS_SYMBOLS.attention} />
+              Not found in the document.
+            </span>
+          )}
+        </SetupChoice>
+        <SetupChoice
+          label="Reporting periods"
+          options={[
+            { value: "comparative", label: "Current and prior" },
+            { value: "first", label: "Current only", title: "First statements after incorporation" },
+          ] as const}
+          value={firstFinancialStatements ? "first" : "comparative"}
+          onChange={(next) => setFirstFinancialStatements(next === "first")}
+        />
+        {/* Sits under Reporting periods because that choice controls it. */}
+        <PriorYearWorkbook sessionId={sessionId} token={priorYearWorkbook} layout={priorYearLayout} onLayoutChange={setPriorYearLayout} enabled={!firstFinancialStatements}
+          config={buildCurrentConfig()} onChange={setPriorYearWorkbook} onBlockedReason={setPriorYearBlockedReason} />
       </section>
       </div>
-
-      <PriorYearWorkbook sessionId={sessionId} token={priorYearWorkbook} layout={priorYearLayout} onLayoutChange={setPriorYearLayout} enabled={!firstFinancialStatements}
-        config={buildCurrentConfig()} onChange={setPriorYearWorkbook} onBusy={setPriorYearBusy} />
 
       {showAdvanced && (<>
       {(!preparation || preparation.status === "not_started") && <>
@@ -1594,9 +1546,10 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
       </>)}
 
-      {/* Statements: what to extract and in which format, on one open row
-          each. A blank format falls back to the automatic scan. */}
-      <section aria-label="Statements" style={styles.section}>
+      {/* What to extract reads as one decision: three lists side by side. */}
+      <div className={`filing-extract-grid${showModels ? " is-stacked" : ""}`}>
+      {/* A blank format falls back to the automatic scan. */}
+      <section aria-label="Statements" className="filing-setup-wide" style={styles.section}>
         <div style={styles.sectionHead}>
           <h2 style={styles.heading}>Statements</h2>
         </div>
@@ -1608,7 +1561,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           filingStandard={filingStandard}
         />
         {/* Per-statement models exist only before preparation starts. */}
-        {showAdvanced && !preparationStarted && (
+        {showModels && (
           <StatementRunConfig
             enabled={statementsEnabled}
             filingStandard={filingStandard}
@@ -1627,93 +1580,85 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         <div style={styles.sectionHead}>
           <h2 style={styles.heading}>Notes</h2>
         </div>
-        <div style={styles.sectionBody}>
-          <NotesRunConfig
-            enabled={notesEnabled}
-            filingStandard={filingStandard}
-            modelOverrides={notesModelOverrides}
-            availableModels={availableModels}
-            onToggleNote={handleToggleNote}
-            onModelChange={handleNotesModelChange}
-            showModels={showAdvanced && !preparationStarted}
-          />
-          {/* The notes the preparation found. Correcting a missing or spurious
-              note is part of the run scope, so it stays outside Advanced. */}
-          {infopack && Array.isArray(infopack.notes_inventory) && (() => {
-            const baseEntries = infopack.notes_inventory as NotesInventoryEntry[];
-            const entries = applyNotesInventoryOverrides(baseEntries, notesInventoryOverrides);
-            const notesRequested = NOTES_TEMPLATE_TYPES.some((n) => notesEnabled[n]);
-            if (entries.length === 0) {
-              return notesRequested ? (
-                <span role="status" style={styles.exceptionLine}>
-                  <StatusIcon symbol={STATUS_SYMBOLS.attention} />
-                  No notes found. Check that the PDF includes readable notes pages.
-                </span>
-              ) : null;
-            }
-            return (
-              <NotesInventoryEditor
-                entries={entries}
-                gaps={findInventoryGaps(entries)}
-                onChange={(next) =>
-                  setNotesInventoryOverrides(
-                    deriveNotesInventoryOverrides(baseEntries, next),
-                  )
-                }
-              />
-            );
-          })()}
-        </div>
+        <NotesRunConfig
+          enabled={notesEnabled}
+          filingStandard={filingStandard}
+          modelOverrides={notesModelOverrides}
+          availableModels={availableModels}
+          onToggleNote={handleToggleNote}
+          onModelChange={handleNotesModelChange}
+          showModels={showModels}
+        />
       </section>
 
       <section aria-label="Reports" style={styles.section}>
         <div style={styles.sectionHead}><h2 style={styles.heading}>Reports</h2></div>
-        <div style={styles.sectionBody}>
-          <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }} role="group" aria-label="Reports">
-            <tbody>
-              {REPORT_CHOICES.map(([key, label]) => {
-                const checked = reportsEnabled.includes(key);
-                return (
-                  <tr key={key} style={{ borderBottom: `1px solid ${ds.grey100}` }}>
-                    <td style={{ padding: `${ds.space.sm}px 0`, verticalAlign: "middle" }}>
-                      <label style={{ fontSize: 14, display: "flex", alignItems: "center", gap: ds.space.sm, cursor: "pointer",
-                        color: checked ? ds.grey900 : ds.grey700 }}>
-                        <input type="checkbox" style={ui.checkbox} checked={checked}
-                          onChange={e => setReportsEnabled(old => e.target.checked ? [...old, key] : old.filter(r => r !== key))} />
-                        <span>{label}</span>
-                      </label>
+        <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }} role="group" aria-label="Reports">
+          <tbody>
+            {REPORT_CHOICES.map(([key, label]) => {
+              const checked = reportsEnabled.includes(key);
+              return (
+                <tr key={key}>
+                  <td style={styles.reportCell}>
+                    <label style={{ fontSize: 14, display: "flex", alignItems: "center", gap: ds.space.sm, cursor: "pointer",
+                      color: checked ? ds.grey900 : ds.grey700 }}>
+                      <input type="checkbox" style={ui.checkbox} checked={checked}
+                        onChange={e => setReportsEnabled(old => e.target.checked ? [...old, key] : old.filter(r => r !== key))} />
+                      <span>{label}</span>
+                    </label>
+                  </td>
+                  {showModels && (
+                    <td style={{ ...styles.reportCell, paddingLeft: ds.space.lg }}>
+                      <select aria-label={`Model for ${label}`} value={reportsModels[key] ?? ""} disabled={!checked}
+                        onChange={e => setReportsModels(old => {
+                          const next = { ...old }; if (e.target.value) next[key] = e.target.value; else delete next[key]; return next;
+                        })} style={{ ...ui.select, width: "100%", minWidth: 0 }}>
+                        <option value="">Run default</option>
+                        {availableModels.map(model => <option key={model.id} value={model.id}>{model.display_name}</option>)}
+                      </select>
                     </td>
-                    {showAdvanced && !preparationStarted && (
-                      <td style={{ padding: `${ds.space.sm}px 0 ${ds.space.sm}px ${ds.space.lg}px`, verticalAlign: "middle" }}>
-                        <select aria-label={`Model for ${label}`} value={reportsModels[key] ?? ""} disabled={!checked}
-                          onChange={e => setReportsModels(old => {
-                            const next = { ...old }; if (e.target.value) next[key] = e.target.value; else delete next[key]; return next;
-                          })} style={{ ...ui.select, width: "100%", minWidth: 0 }}>
-                          <option value="">Run default</option>
-                          {availableModels.map(model => <option key={model.id} value={model.id}>{model.display_name}</option>)}
-                        </select>
-                      </td>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </section>
+      </div>
 
-      {/* Run button — enabled when at least one face or notes template is
-          selected. */}
-      <button
-        onClick={handleRun}
-        disabled={!canRun}
-        className={uiClass.btnPrimary}
-        style={styles.runButton}
-      >
-        {preparation?.status === "succeeded"
-          ? "Confirm setup and start extraction"
-          : "Start extraction"}
-      </button>
+      {/* The notes the preparation found. Correcting a missing or spurious
+          note is part of the run scope, so it stays outside Advanced. */}
+      {infopack && Array.isArray(infopack.notes_inventory) && (() => {
+        const baseEntries = infopack.notes_inventory as NotesInventoryEntry[];
+        const entries = applyNotesInventoryOverrides(baseEntries, notesInventoryOverrides);
+        const notesRequested = NOTES_TEMPLATE_TYPES.some((n) => notesEnabled[n]);
+        if (entries.length === 0 && !notesRequested) return null;
+        return (
+          <section aria-label="Notes in the document">
+            <NotesInventoryEditor
+              entries={entries}
+              gaps={findInventoryGaps(entries)}
+              onChange={(next) =>
+                setNotesInventoryOverrides(
+                  deriveNotesInventoryOverrides(baseEntries, next),
+                )
+              }
+            />
+          </section>
+        );
+      })()}
+
+      <div style={styles.actionBar}>
+        {blockedReason && <span role="status" style={styles.blockedReason}>{blockedReason}</span>}
+        <button
+          onClick={handleRun}
+          disabled={!canRun}
+          className={uiClass.btnPrimary}
+          style={ui.buttonPrimary}
+        >
+          Start extraction
+        </button>
+      </div>
     </div>
   );
 }

@@ -1695,7 +1695,7 @@ describe("Upload-owned preparation", () => {
 
     await waitFor(() => expect(screen.getByRole("button", { name: "RM mil" })).toHaveAttribute("aria-pressed", "true"));
     expect(screen.queryByText(/^Detected/)).toBeNull();
-    const confirm = screen.getByRole("button", { name: "Confirm setup and start extraction" });
+    const confirm = screen.getByRole("button", { name: "Start extraction" });
     expect(confirm).toBeEnabled();
     startExtraction();
     expect(onRun.mock.calls[0][0].denomination).toBe("millions");
@@ -1819,25 +1819,77 @@ test.each([false, true])("rolled-forward workbook is required before starting; c
   const onRun = vi.fn();
   try {
     render(<PreRunPanel sessionId="rolled-session" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={onRun} />);
-    const source = await screen.findByRole("combobox", { name: "Prior-year figures" });
-    fireEvent.change(source, { target: { value: "workbook" } });
+    const source = await screen.findByRole("group", { name: "Prior-year figures from" });
+    fireEvent.click(within(source).getByRole("button", { name: "mTool workbook" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Choose a workbook");
     expect(screen.getByRole("button", { name: /start extraction/i })).toBeDisabled();
-    fireEvent.change(screen.getByRole("combobox", { name: "Workbook figures are expressed in" }), { target: { value: "thousands" } });
+    const workbookUnit = screen.getByRole("group", { name: "Workbook amounts in" });
+    expect(within(workbookUnit).getByRole("button", { name: "RM '000" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.change(screen.getByLabelText("Rolled-forward workbook"), { target: { files: [new File(["fixture"], "rolled.xlsx")] } });
     await screen.findByText("rolled.xlsx");
+    fireEvent.click(within(source).getByRole("button", { name: "mTool workbook" }));
+    expect(screen.getByText("rolled.xlsx")).toBeInTheDocument();
     if (requiresConfirmation) {
-      const confirmation = await screen.findByRole("checkbox", { name: /I checked these year and entity columns/ });
+      const confirmation = await screen.findByRole("checkbox", { name: "These columns match the workbook" });
       expect(screen.getByRole("button", { name: /start extraction/i })).toBeDisabled();
+      expect(screen.getByRole("status")).toHaveTextContent("Confirm the workbook columns");
       fireEvent.click(confirmation);
     }
     await waitFor(() => expect(screen.getByRole("button", { name: /start extraction/i })).toBeEnabled());
-    expect(await screen.findByText(/12 prior-year inputs/)).toBeInTheDocument();
+    expect(await screen.findByText(/12 prior-year figures in 2 worksheets/)).toBeInTheDocument();
+    expect(within(workbookUnit).getByRole("button", { name: "RM '000" })).toBeDisabled();
     expect(screen.getByRole("note")).toHaveTextContent("4 current-year values found");
     startExtraction();
     expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ prior_year_workbook: token, first_financial_statements: false }));
     fireEvent.click(screen.getByRole("button", { name: "Replace workbook" }));
     expect(screen.getByRole("button", { name: /start extraction/i })).toBeDisabled();
-    fireEvent.change(source, { target: { value: "report" } });
+    fireEvent.click(within(source).getByRole("button", { name: "Statements" }));
     expect(screen.getByRole("button", { name: /start extraction/i })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Current only" }));
+    expect(screen.queryByRole("group", { name: "Prior-year figures from" })).toBeNull();
   } finally { fetcher.mockRestore(); }
+});
+
+test("a pending workbook stops blocking when the filing has no comparatives", async () => {
+  render(<PreRunPanel sessionId="first-filing" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={vi.fn()} />);
+  const source = await screen.findByRole("group", { name: "Prior-year figures from" });
+  fireEvent.click(within(source).getByRole("button", { name: "mTool workbook" }));
+  expect(screen.getByRole("button", { name: /start extraction/i })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Current only" }));
+  expect(screen.getByRole("button", { name: /start extraction/i })).toBeEnabled();
+});
+
+test("start names the blocker while reading, and a rejected workbook can be chosen again", async () => {
+  let reject!: (response: Response) => void;
+  const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise((resolve) => { reject = resolve; }));
+  try {
+    render(<PreRunPanel sessionId="rejected-file" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={vi.fn()} />);
+    const source = await screen.findByRole("group", { name: "Prior-year figures from" });
+    fireEvent.click(within(source).getByRole("button", { name: "mTool workbook" }));
+    fireEvent.change(screen.getByLabelText("Rolled-forward workbook"), { target: { files: [new File(["x"], "bad.xlsx")] } });
+    expect(await screen.findByText("Reading the workbook")).toBeInTheDocument();
+    reject(Response.json({ detail: "The workbook reporting dates do not match." }, { status: 400 }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("reporting dates do not match");
+    expect(screen.getByText(/^Choose a workbook, or take/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Choose workbook" })).toBeEnabled();
+  } finally { fetcher.mockRestore(); }
+});
+
+test("start names the blocker when nothing is selected", async () => {
+  render(<PreRunPanel sessionId="nothing-selected" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={vi.fn()}
+    initialConfig={{ statements: [], notes_to_run: [], reports_to_run: [] }} />);
+  expect(await screen.findByText("Select something to extract")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /start extraction/i })).toBeDisabled();
+});
+
+test("a note can be added by hand when none were found", async () => {
+  render(<PreRunPanel sessionId="no-notes" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={vi.fn()}
+    initialConfig={{ infopack: { statements: {}, notes_inventory: [] } }} />);
+  expect(await screen.findByText(/No notes found/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Add note" }));
+  fireEvent.change(screen.getByLabelText("Missing note number"), { target: { value: "1" } });
+  fireEvent.change(screen.getByLabelText("Missing note title"), { target: { value: "Revenue" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  expect(await screen.findByText("Revenue")).toBeInTheDocument();
+  expect(screen.queryByText(/No notes found/)).toBeNull();
 });
