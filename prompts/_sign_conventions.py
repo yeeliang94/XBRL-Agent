@@ -44,6 +44,7 @@ class _SheetSignMetadata:
     name: str
     labels_by_row: tuple[tuple[int, str], ...]
     occurrences: tuple[tuple[int, tuple[tuple[int, str], ...]], ...]
+    parent_rows: tuple[tuple[int, tuple[tuple[int, int], ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,7 @@ def _load_template_sign_metadata(
                     label_map[row] = label
 
             occurrences: dict[int, list[tuple[int, str]]] = defaultdict(list)
+            parent_rows: dict[int, list[tuple[int, int]]] = defaultdict(list)
             if "socf" in ws.title.casefold() or "sore" in ws.title.casefold():
                 for row, (formula,) in enumerate(
                     ws.iter_rows(min_col=2, max_col=2, values_only=True),
@@ -101,6 +103,8 @@ def _load_template_sign_metadata(
                         occurrence = (sign, parent_label)
                         if occurrence not in occurrences[leaf_row]:
                             occurrences[leaf_row].append(occurrence)
+                        if (sign, row) not in parent_rows[leaf_row]:
+                            parent_rows[leaf_row].append((sign, row))
 
             sheets.append(
                 _SheetSignMetadata(
@@ -108,6 +112,9 @@ def _load_template_sign_metadata(
                     labels_by_row=tuple(labels_by_row),
                     occurrences=tuple(
                         (row, tuple(uses)) for row, uses in sorted(occurrences.items())
+                    ),
+                    parent_rows=tuple(
+                        (row, tuple(uses)) for row, uses in sorted(parent_rows.items())
                     ),
                 )
             )
@@ -139,6 +146,26 @@ def _parse_total_formula(formula: str) -> list[tuple[int, str, int]]:
         sign = -1 if "-" in sign_part else 1
         out.append((sign, col, int(row)))
     return out
+
+
+def _overall_coefficients(
+    parent_rows: dict[int, tuple[tuple[int, int], ...]],
+    row: int,
+) -> set[int]:
+    """Multiply a row's signs up through every total above it."""
+    found: set[int] = set()
+
+    def walk(current: int, sign: int, seen: frozenset[int]) -> None:
+        parents = [p for p in parent_rows.get(current, ()) if p[1] not in seen]
+        if not parents:
+            if current != row:
+                found.add(sign)
+            return
+        for step, parent in parents:
+            walk(parent, sign * step, seen | {parent})
+
+    walk(row, 1, frozenset({row}))
+    return found
 
 
 def _label_at(ws, row: int) -> str:
@@ -309,6 +336,7 @@ def socf_sign_convention_block(template_path: str | Path) -> Optional[str]:
         return None
     occurrences = {row: list(uses) for row, uses in target.occurrences}
     row_labels = dict(target.labels_by_row)
+    parent_rows = dict(target.parent_rows)
 
     if not occurrences:
         return None
@@ -357,6 +385,17 @@ def socf_sign_convention_block(template_path: str | Path) -> Optional[str]:
 
         sign = next(iter(coefficients))
         sign_word = "ADDED" if sign > 0 else "SUBTRACTED"
+        overall = _overall_coefficients(parent_rows, leaf_row)
+        if len(overall) == 1 and overall != {sign}:
+            overall_sign = next(iter(overall))
+            overall_word = "ADDED" if overall_sign > 0 else "SUBTRACTED"
+            lines.append(
+                f"- Row {leaf_row} `{leaf_label}` is {sign_word} by its subtotal, "
+                f"but a total above flips that subtotal, so this row is "
+                f"{overall_word} OVERALL. Use coefficient {overall_sign:+d}."
+                + _direct_entry_hint(full_leaf_label, overall_sign)
+            )
+            continue
         lines.append(
             f"- Row {leaf_row} `{leaf_label}` is {sign_word} by its total."
             + _direct_entry_hint(full_leaf_label, sign)
@@ -373,7 +412,9 @@ def socf_sign_convention_block(template_path: str | Path) -> Optional[str]:
         "-1) enter V = -C — flip the sign, because the formula flips it back. "
         "This rule needs no judgement about the row's name and works for every "
         "row, statement and standard. The name-based hints below are just this "
-        "rule spelled out for the common cases."
+        "rule spelled out for the common cases. The coefficient is the row's "
+        "OVERALL one: where a listed row says it is flipped overall, use that "
+        "coefficient, not its immediate subtotal's."
     )
     lines.append("")
     lines.append(
@@ -607,6 +648,9 @@ def sign_warnings_for_resolved_writes(
     occurrence_maps = {
         sheet.name: dict(sheet.occurrences) for sheet in metadata.sheets
     }
+    parent_maps = {
+        sheet.name: dict(sheet.parent_rows) for sheet in metadata.sheets
+    }
     for write in resolved_writes:
         value = write.get("value")
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value == 0:
@@ -640,6 +684,9 @@ def sign_warnings_for_resolved_writes(
                 )
             elif len(coefficients) == 1:
                 coefficient = next(iter(coefficients))
+                overall = _overall_coefficients(parent_maps[sheet_name], row)
+                if len(overall) == 1:
+                    coefficient = next(iter(overall))
                 expected_positive, expected_reason = _expected_cash_input(
                     label,
                     coefficient,

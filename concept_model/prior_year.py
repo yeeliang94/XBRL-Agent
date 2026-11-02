@@ -407,6 +407,7 @@ def guidance(db_path, run_id, template_id=None) -> str:
         "When a prior-year field holds several report lines combined (its value equals their comparatives' sum), combine the same lines in that field this year. "
         "Use a different field only for a line with no comparative in the workbook, and state the reason in the evidence. "
         "Compare every available PDF comparative using check_prior_year (concept_uuid, value, evidence, entity_scope, dimensions). "
+        "Give check_prior_year the value in the sign this row stores, not the sign printed in the report: a printed (70) is +70 when the totals above the row subtract it. "
         "Report restatements/reclassifications through that tool; do not overwrite imported data. "
         "Do not treat blank prior-year inputs as observed zeros. Narrative notes must still reflect the complete current report, including comparative columns in narrative tables; the CY-only rule applies to structured numeric fields.\n"
         + json.dumps(payload, ensure_ascii=False)
@@ -428,6 +429,16 @@ def seed_scratch(
         db_path, run_id, output_path, template_id=template_id, filing_level=filing_level
     )
     return True
+
+
+def _sign_only_note(conn, concept_uuid, imported, report) -> str:
+    """Name a same-amount, opposite-sign difference and the row's overall sign."""
+    if not imported or report != -imported:
+        return ""
+    from concept_model.cascade import describe_overall_effect
+
+    effect = describe_overall_effect(conn, concept_uuid, imported)
+    return f"Same amount, opposite sign. {effect}".rstrip()
 
 
 def compare_value(
@@ -487,6 +498,7 @@ def compare_value(
             (run_id, concept_uuid, entity_scope, dims),
         ).fetchone()
         status = "resolved" if difference == 0 else "open"
+        sign_note = _sign_only_note(conn, concept_uuid, imported, value)
         if difference != 0 and previous and previous[0] == difference and previous[1] != "open":
             status = previous[1]
         conn.execute(
@@ -514,6 +526,13 @@ def compare_value(
                 "It will not be filed; review required.")
     if status != "open":
         return f"Comparative differs: workbook={imported}, report={value}. A reviewer already accepted this difference."
+    if sign_note:
+        return (
+            f"Comparative differs: workbook={imported}, report={value}. {sign_note} "
+            "Check whether the workbook figure has the effect the report shows. If it does, "
+            "call again with the value in the workbook's sign and explain why in evidence. "
+            "If it does not, leave this difference for review. Preserved workbook value."
+        )
     return f"Comparative differs: workbook={imported}, report={value}. Preserved workbook value; review required."
 
 
@@ -532,7 +551,12 @@ def register_comparison_tool(agent, db_path, run_id, template_id):
         entity_scope: str = "Company",
         dimensions: dict[str, str] | None = None,
     ) -> str:
-        """Compare a PDF comparative with an imported PY field without changing either value."""
+        """Compare a PDF comparative with an imported PY field without changing either value.
+
+        Pass value in the sign this row stores, as you would enter it in the
+        workbook, not as printed. A printed (70) is stored as +70 when the
+        totals above the row subtract it.
+        """
         try:
             return compare_value(
                 db_path,
@@ -589,13 +613,18 @@ def check_results(db_path, run_id):
                 accepted += 1
             elif checked[0] != 0:
                 detail = json.loads(checked[1])
+                sign_note = _sign_only_note(conn, uid, detail["imported"], detail["report"])
                 results.append(
                     CrossCheckResult(
                         name=f"Prior-year comparative: {label} [{scope}] {dims}",
                         status="failed",
                         expected=detail["imported"],
                         actual=detail["report"],
-                        message=f"Imported prior-year figure differs from the current report. {detail['evidence']}",
+                        message=(
+                            "Imported prior-year figure differs from the current report. "
+                            + (f"{sign_note} " if sign_note else "")
+                            + detail["evidence"]
+                        ),
                     )
                 )
         imported_keys = {(uid, scope, dims) for uid, scope, dims, _ in facts}

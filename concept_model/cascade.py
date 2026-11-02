@@ -377,3 +377,63 @@ def _recompute_scope(
             "— possible cycle in concept_edges; totals may be incomplete",
             run_id, period, entity_scope,
         )
+
+
+def overall_effect(conn: sqlite3.Connection, concept_uuid: str) -> dict | None:
+    """Follow a concept up through every total above it.
+
+    A row can be added to a subtotal that is itself subtracted, so its
+    immediate coefficient alone gives the wrong sign. Returns the distinct
+    overall coefficients and the labels of the totals that subtract along the
+    way, or None for a concept that feeds no total.
+    """
+    coefficients: set[int] = set()
+    subtracted_by: list[str] = []
+
+    def walk(uuid: str, sign: int, seen: frozenset[str]) -> None:
+        parents = conn.execute(
+            "SELECT e.parent_uuid, e.coefficient, n.canonical_label "
+            "FROM concept_edges e JOIN concept_nodes n "
+            "ON n.concept_uuid = e.parent_uuid WHERE e.child_uuid = ?",
+            (uuid,),
+        ).fetchall()
+        fresh = [parent for parent in parents if parent[0] not in seen]
+        if not fresh:
+            if uuid != concept_uuid:
+                coefficients.add(sign)
+            return
+        for parent_uuid, coefficient, label in fresh:
+            step = -1 if coefficient < 0 else 1
+            if step < 0 and label not in subtracted_by:
+                subtracted_by.append(label)
+            walk(parent_uuid, sign * step, seen | {parent_uuid})
+
+    walk(concept_uuid, 1, frozenset({concept_uuid}))
+    if not coefficients:
+        return None
+    return {"coefficients": sorted(coefficients), "subtracted_by": subtracted_by}
+
+
+def describe_overall_effect(
+    conn: sqlite3.Connection, concept_uuid: str, value: float | None = None,
+) -> str:
+    """One line stating how a stored value reaches the totals above it."""
+    effect = overall_effect(conn, concept_uuid)
+    if effect is None:
+        return ""
+    coefficients = effect["coefficients"]
+    if len(coefficients) > 1:
+        return (
+            "This row feeds totals with different overall signs; "
+            "check each total it feeds."
+        )
+    coefficient = coefficients[0]
+    word = "ADDED" if coefficient > 0 else "SUBTRACTED"
+    text = f"This row is {word} overall (coefficient {coefficient:+d})"
+    if effect["subtracted_by"]:
+        names = ", ".join(f"`{label[:55]}`" for label in effect["subtracted_by"])
+        text += f"; subtracted at {names}"
+    text += "."
+    if value is not None:
+        text += f" A stored {value:g} has an effect of {value * coefficient:+g} on the total."
+    return text

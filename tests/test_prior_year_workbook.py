@@ -1111,3 +1111,43 @@ def test_current_year_contents_never_change_what_each_template_imports(tmp_path,
         assert any(f["value"] == 1000 for f in read.facts)
         found = {(c["sheet"], c["cell"]): c["value"] for c in typed_current_year_cells(conn, rolled, shape)}
     assert found == {opening: 124765, zero: 0}
+
+
+def test_sign_only_comparative_difference_names_the_overall_sign(tmp_path):
+    """Run 211: workbook +70 against a submitted -70 on a row subtracted overall."""
+    from correction.reviewer_agent import _format_trace, trace_cascade_source
+
+    db = make_sofp_db(tmp_path)
+    socf = import_template_file(db, tmp_path, "07-SOCF-Indirect.xlsx")
+    run = add_run(db, {**sofp_config(), "prior_year_workbook": "a" * 64}, "running")
+    label = "(Gain) loss on disposal of property, plant and equipment"
+    with sqlite3.connect(db) as conn:
+        uid = conn.execute(
+            "SELECT concept_uuid FROM concept_nodes WHERE template_id=? AND canonical_label=?",
+            (socf, label),
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO run_concept_facts(run_id,concept_uuid,period,entity_scope,dimension_key,value,value_status,source) "
+            "VALUES (?,?,'PY','Company','',70,'observed',?)",
+            (run, uid, SOURCE),
+        )
+    wrong = compare_value(db, run, socf, uid, -70, "PDF page 11: gain (70)")
+    assert "Same amount, opposite sign" in wrong
+    assert "SUBTRACTED overall (coefficient -1)" in wrong
+    assert "effect of -70" in wrong
+    failed = [r for r in check_results(db, run) if r.status == "failed"]
+    assert len(failed) == 1 and "Same amount, opposite sign" in failed[0].message
+    assert "prior_year_comparatives_differ" in preflight_codes(db, run)
+    # A different amount is an ordinary difference, not a sign question.
+    assert "opposite sign" not in compare_value(db, run, socf, uid, -71, "PDF page 11: (71)")
+    # Repeating the check in the stored sign clears the blocker; the import is untouched.
+    assert compare_value(db, run, socf, uid, 70, "PDF page 11: gain (70), subtracted overall") == "Comparative agrees."
+    assert "prior_year_comparatives_differ" not in preflight_codes(db, run)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            "SELECT value FROM run_concept_facts WHERE run_id=? AND concept_uuid=?", (run, uid)
+        ).fetchone()[0] == 70
+    # The reviewer sees the same fact when it traces the row, which has no children.
+    trace = _format_trace(trace_cascade_source(db, run, concept_uuid=uid, period="PY"))
+    assert "SUBTRACTED overall (coefficient -1)" in trace
+

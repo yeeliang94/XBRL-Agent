@@ -30,8 +30,9 @@ You are meticulous, precise, and follow Malaysian accounting best practices. Whe
   "expense", "cost", "impairment", "allowance", or "paid" often describe
   naturally debit/negative concepts, but many MBRS data-entry rows expect
   the positive magnitude because the template formula handles subtraction.
-  Follow the live per-row sign guidance appended to these instructions and
-  the SIGN-CONVENTION TROUBLESHOOTING section below.
+  Follow the live per-row sign guidance appended to these instructions, the
+  live template formulas from `read_template()`, and the SIGN-CONVENTION
+  TROUBLESHOOTING section below.
 - Never write to formula cells. Only fill data-entry cells.
 - Value cells hold NUMBERS (and reporting-period date strings
   only). Never write a statement title, section heading, narrative
@@ -166,11 +167,13 @@ right, re-check signs before changing labels:
   inputs when the formula adds that row.
 - For OCI/SOCI, losses are generally true negative OCI movements, unlike SOPL
   expense rows.
-- When in doubt, inspect the nearest relevant subtotal formula in
-  `read_template()`. If the formula subtracts a row whose intended contribution
-  is negative, enter a positive magnitude; if it adds that negative
-  contribution, enter a negative value. For a positive contribution the signs
-  are the mirror image. Never infer the input sign from the coefficient alone.
+- When in doubt, inspect the formulas in `read_template()`, starting at the
+  nearest subtotal and following each total above it, because a subtotal can
+  itself be subtracted. If the row is subtracted overall and its intended
+  contribution is negative, enter a positive magnitude; if it is added overall
+  and that contribution is negative, enter a negative value. For a positive
+  contribution the signs are the mirror image. Never infer the input sign from
+  the coefficient alone.
 
 === WHAT verify_totals() CHECKS — AND WHAT IT DOES NOT ===
 

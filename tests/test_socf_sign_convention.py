@@ -448,3 +448,33 @@ def test_face_helper_gives_sore_equity_guidance_not_cash_flow_examples() -> None
     assert "Dividends paid" in block
     assert "mTool exports" in block
     assert "cash OUTFLOW" not in block
+
+
+@pytest.mark.parametrize("level", ["Company", "Group"])
+def test_nested_disposal_rows_report_their_overall_sign(level: str) -> None:
+    """MFRS adds the PPE disposal gain to a subtotal that is then subtracted.
+
+    Run 211 followed the immediate "ADDED" label and treated a printed (70) as
+    -70, when the template stores +70.
+    """
+    path = REPO / "XBRL-template-MFRS" / level / "07-SOCF-Indirect.xlsx"
+    lines = socf_sign_convention_block(path).splitlines()
+
+    def row_line(number: int) -> str:
+        return next(line for line in lines if line.startswith(f"- Row {number} "))
+
+    for nested in (38, 39):
+        assert "SUBTRACTED OVERALL" in row_line(nested)
+        assert "coefficient -1" in row_line(nested)
+    # A row whose immediate sign already is its overall sign keeps its wording.
+    assert row_line(41).endswith("is SUBTRACTED by its total.")
+    assert row_line(48).endswith("is ADDED by its total.")
+
+
+def test_no_row_changes_overall_sign_in_templates_without_nesting() -> None:
+    for path in (
+        REPO / "XBRL-template-MPERS" / "Company" / "07-SOCF-Indirect.xlsx",
+        REPO / "XBRL-template-MFRS" / "Company" / "08-SOCF-Direct.xlsx",
+    ):
+        assert "OVERALL. Use coefficient" not in socf_sign_convention_block(path)
+

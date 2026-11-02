@@ -335,8 +335,11 @@ def trace_cascade_source(
             (run_id, cu, period, entity_scope, dims),
         ).fetchone()
 
+        from concept_model.cascade import describe_overall_effect
+
         return {
             "found": True,
+            "overall_effect": describe_overall_effect(conn, cu),
             "concept": {
                 "concept_uuid": cu,
                 "kind": concept["kind"],
@@ -367,6 +370,8 @@ def _format_trace(trace: dict[str, Any]) -> str:
         coords = ", ".join(f"{a['sheet']}!{a['col']}{a['row']}" for a in c["aliases"])
         lines.append(f"  also renders at (cross-sheet rollup): {coords}")
     lines.append(f"  parent value = {trace['parent_value']}")
+    if trace.get("overall_effect"):
+        lines.append(f"  {trace['overall_effect']}")
     if not trace["children"]:
         lines.append("  (this is a leaf / data-entry cell — no children)")
     else:
