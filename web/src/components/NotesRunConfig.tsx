@@ -16,8 +16,8 @@ interface Props {
   filingStandard?: FilingStandard;
 }
 
-// Layout mirrors StatementRunConfig.tsx so the Notes section renders as a
-// table with the same checkbox + model-dropdown pattern as face statements.
+// Same checkbox + model-dropdown pattern as face statements, on the 48px rows
+// shared with the statement and report lists beside it.
 // Keeping the styles local (rather than sharing a module) stays consistent
 // with the rest of the inline-style codebase.
 const styles = {
@@ -26,11 +26,9 @@ const styles = {
     tableLayout: "fixed" as const,
     borderCollapse: "collapse" as const,
   } as React.CSSProperties,
-  row: {
-    borderBottom: `1px solid ${ds.grey100}`,
-  } as React.CSSProperties,
   cell: {
-    padding: `${ds.space.sm}px 0`,
+    height: 48,
+    padding: 0,
     verticalAlign: "middle" as const,
   } as React.CSSProperties,
   modelCell: {
@@ -80,7 +78,7 @@ export function NotesRunConfig({
         {NOTES_TEMPLATE_TYPES.map((nt) => {
           const isEnabled = enabled[nt];
           return (
-            <tr key={nt} style={styles.row}>
+            <tr key={nt}>
               <td style={styles.cell}>
                 <label style={isEnabled ? styles.label : styles.labelDisabled}>
                   <input

@@ -616,7 +616,7 @@ input[type="search"]:focus {
 }
 
 .notes-subtab:hover:not([aria-selected="true"]),
-.segmented-control-button:hover:not([aria-pressed="true"]):not([aria-selected="true"]) {
+.segmented-control-button:hover:not([aria-pressed="true"]):not([aria-selected="true"]):not(:disabled) {
   background: #F5F7F8 !important;
   color: #000000 !important;
 }
@@ -651,9 +651,6 @@ input[type="search"]:focus {
   .settings-section-rail { flex-direction: row !important; flex-wrap: wrap; }
   .settings-section-rail > [role="tablist"] { flex-direction: row !important; flex-wrap: wrap; }
   .settings-section-rail button { width: auto !important; }
-  .statement-format-row { display: grid !important; grid-template-columns: minmax(0, 1fr) 16px; }
-  .statement-format-label { grid-column: 1 / -1; width: auto !important; }
-  .notes-inventory-columns { grid-template-columns: minmax(0, 1fr) !important; }
   .notes-appearance-layout {
     grid-template-columns: minmax(0, 1fr) !important;
   }
@@ -1215,4 +1212,80 @@ details[open] > summary::after {
 }
 .issues-row:focus:not(:focus-visible) {
   outline: none;
+}
+
+/* Filing setup: one four-column grid shared by every section, so controls,
+   workbook, statement lists and the notes list keep the same edges. Sized from
+   the panel's own width because the sidebar can collapse. */
+.filing-setup {
+  container: filing-setup / inline-size;
+}
+
+.filing-setup-grid,
+.filing-extract-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px 32px;
+  align-items: start;
+}
+
+.filing-extract-grid {
+  row-gap: 32px;
+}
+
+.filing-setup-wide {
+  grid-column: span 2;
+}
+
+/* Per-item model pickers need the full width. */
+.filing-extract-grid.is-stacked {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.filing-extract-grid.is-stacked .filing-setup-wide {
+  grid-column: auto;
+}
+
+.notes-inventory-columns {
+  columns: 4;
+  column-gap: 32px;
+}
+
+.notes-inventory-columns > li {
+  break-inside: avoid;
+}
+
+@container filing-setup (max-width: 1060px) {
+  .filing-setup-grid,
+  .filing-extract-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .notes-inventory-columns {
+    columns: 2;
+  }
+}
+
+@container filing-setup (max-width: 560px) {
+  .filing-setup-grid,
+  .filing-extract-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .filing-setup-wide {
+    grid-column: auto;
+  }
+
+  .notes-inventory-columns {
+    columns: 1;
+  }
+
+  .statement-format-row {
+    flex-wrap: wrap;
+    padding: 8px 0;
+  }
+
+  .statement-format-row select {
+    width: 100% !important;
+  }
 }

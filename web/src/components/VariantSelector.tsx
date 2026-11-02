@@ -35,20 +35,19 @@ const styles = {
   container: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: ds.space.lg,
   } as React.CSSProperties,
   row: {
     display: "flex",
     alignItems: "center",
     gap: ds.space.sm,
     minWidth: 0,
+    minHeight: 48,
   } as React.CSSProperties,
   checkboxLabel: {
     display: "flex",
     alignItems: "center",
     gap: ds.space.sm,
-    width: 300,
-    flexShrink: 0,
+    minWidth: 0,
     cursor: "pointer",
   } as React.CSSProperties,
   label: {
@@ -61,8 +60,10 @@ const styles = {
   } as React.CSSProperties,
   select: {
     ...ui.select,
-    flex: 1,
+    width: 220,
     minWidth: 0,
+    flexShrink: 0,
+    marginLeft: "auto",
   } as React.CSSProperties,
   labelDisabled: {
     fontFamily: ds.fontBody,
@@ -74,7 +75,6 @@ const styles = {
   } as React.CSSProperties,
   confidenceSlot: {
     display: "inline-flex",
-    width: 16,
     flexShrink: 0,
   } as React.CSSProperties,
   confidenceDot: {
@@ -112,7 +112,7 @@ export function VariantSelector({
         return (
           <div key={stmt} className="statement-format-row" style={styles.row}>
             {onToggleStatement ? (
-              <label className="statement-format-label" style={styles.checkboxLabel}>
+              <label style={styles.checkboxLabel}>
                 <input
                   type="checkbox"
                   style={ui.checkbox}
@@ -125,13 +125,21 @@ export function VariantSelector({
               </label>
             ) : (
               <span
-                className="statement-format-label"
                 style={isEnabled ? styles.label : styles.labelDisabled}
                 title={statementLabel(stmt, filingStandard)}
               >
                 {statementLabel(stmt, filingStandard)}
               </span>
             )}
+            {/* Only an exception gets a mark: a detected format the scan
+                was unsure about. Everything else stays quiet. */}
+            <span
+              data-testid={`confidence-${stmt}`}
+              title={sel.confidence === "low" && sel.variant ? "Check this format against the PDF" : undefined}
+              style={styles.confidenceSlot}
+            >
+              {sel.confidence === "low" && sel.variant && <StatusIcon symbol={STATUS_SYMBOLS.attention} />}
+            </span>
             <select
               role="combobox"
               aria-label={`Format for ${stmt} — ${statementLabel(stmt, filingStandard)}`}
@@ -149,15 +157,6 @@ export function VariantSelector({
                 </option>
               ))}
             </select>
-            {/* Only an exception gets a mark: a detected format the scan
-                was unsure about. Everything else stays quiet. */}
-            <span
-              data-testid={`confidence-${stmt}`}
-              title={sel.confidence === "low" && sel.variant ? "Check this format against the PDF" : undefined}
-              style={styles.confidenceSlot}
-            >
-              {sel.confidence === "low" && sel.variant && <StatusIcon symbol={STATUS_SYMBOLS.attention} />}
-            </span>
           </div>
         );
       })}

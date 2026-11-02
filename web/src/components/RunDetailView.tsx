@@ -128,7 +128,7 @@ function ConfigBlock({
     value: (config.filing_level === "group" ? "Group" : "Company"),
   });
   entries.push({
-    label: "Denomination",
+    label: "Amounts in",
     value: denominationLabel(config.denomination as string | undefined),
   });
   // Notes — only surface when the run actually selected any. Empty lists
