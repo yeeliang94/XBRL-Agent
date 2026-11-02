@@ -504,6 +504,9 @@ def compare_value(
             json.loads(previous[2] or "{}") if previous and previous[1] == "open" else {}
         )
         dispute = open_detail.get("sign_dispute")
+        # Open records written before the marker existed carry the same dispute.
+        if not dispute and imported and open_detail.get("report") == -imported:
+            dispute = {"report": open_detail["report"], "evidence": open_detail["evidence"]}
         if not dispute and imported and value == -imported:
             dispute = {"report": value, "evidence": evidence}
         if dispute and difference == 0:
