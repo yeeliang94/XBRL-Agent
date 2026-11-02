@@ -9,9 +9,12 @@ single safe path segment; handlers map the failure onto HTTP 400.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
+from utils import paths
 from utils.paths import validate_session_id
 
 
@@ -63,3 +66,13 @@ def test_scout_endpoint_rejects_traversal_session_id(tmp_path, monkeypatch):
     # segment — the validator must refuse it with 400 before any path join.
     resp = client.post("/api/scout/sub\\dir")
     assert resp.status_code == 400
+
+
+def test_configured_output_root_outside_the_project_is_writable(monkeypatch):
+    # Azure keeps runs in /home/data, outside both the app folder and temp.
+    root = Path("/home/data")
+    monkeypatch.setattr(paths, "_TEMP_ROOTS", ())
+    monkeypatch.setenv("XBRL_OUTPUT_DIR", str(root))
+    assert paths.assert_writable_output_dir(root / "session") == (root / "session").resolve()
+    with pytest.raises(ValueError):
+        paths.assert_writable_output_dir("/home/other/session")

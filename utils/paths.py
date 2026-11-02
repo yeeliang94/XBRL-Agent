@@ -9,6 +9,7 @@ sensitive locations like /etc, $HOME/.ssh, etc.
 """
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 from typing import Union
@@ -79,6 +80,8 @@ def assert_writable_output_dir(
     Allowed roots:
       - PROJECT_ROOT — production case (output/<session_id>).
       - OS temp dir — tests + ad-hoc tooling that uses tempfile.
+      - XBRL_OUTPUT_DIR — the operator's configured output root, which on
+        Azure App Service sits outside the project (/home/data).
 
     Symlinks resolve before the comparison so a symlink under output/
     that points elsewhere is still rejected.
@@ -97,10 +100,13 @@ def assert_writable_output_dir(
     for temp_root in _TEMP_ROOTS:
         if _under(temp_root):
             return resolved
+    configured_root = os.environ.get("XBRL_OUTPUT_DIR")
+    if configured_root and _under(Path(configured_root).expanduser().resolve()):
+        return resolved
 
     raise ValueError(
         f"{label}={output_dir!r} resolves to {resolved} which is "
-        f"outside PROJECT_ROOT ({PROJECT_ROOT}) and all temp roots "
-        f"({list(_TEMP_ROOTS)}). Refusing to write — this is almost "
+        f"outside PROJECT_ROOT ({PROJECT_ROOT}), XBRL_OUTPUT_DIR and all temp "
+        f"roots ({list(_TEMP_ROOTS)}). Refusing to write — this is almost "
         f"certainly a bug."
     )
