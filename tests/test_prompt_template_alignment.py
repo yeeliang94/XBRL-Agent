@@ -106,6 +106,26 @@ def test_socie_column_maps_match_the_template_headers(prompt_file, template):
             f"{prompt_file} says column {letter} is '{label.strip()}', template header is '{header}'")
 
 
+def test_mfrs_socie_reserve_ranges_match_the_template_headers():
+    """Each named reserve must sit in the column its position in the range implies."""
+    text = (REPO / "prompts" / "socie.md").read_text(encoding="utf-8")
+    ranges = re.findall(r"^- ([A-Z])-([A-Z]): [^(\n]+\(([^)]+)\)", text, re.M)
+    assert len(ranges) == 2
+    ws = openpyxl.load_workbook(REPO / "XBRL-template-MFRS/Company/09-SOCIE.xlsx", read_only=True).active
+    headers = {c.column_letter: str(c.value) for c in next(ws.iter_rows(min_row=2, max_row=2)) if c.value}
+
+    def normal(value: str) -> str:
+        return " ".join(value.replace("FX", "foreign currency").replace("-", " ").lower().split())
+
+    for first, last, names in ranges:
+        letters = [chr(code) for code in range(ord(first), ord(last) + 1)]
+        reserves = names.split(",")
+        assert len(reserves) == len(letters)
+        for letter, reserve in zip(letters, reserves):
+            assert normal(reserve) in normal(headers[letter]), (
+                f"socie.md puts '{reserve.strip()}' in column {letter}, template header is '{headers[letter]}'")
+
+
 def test_mfrs_socie_period_row_ranges_match_the_template():
     text = (REPO / "prompts" / "socie.md").read_text(encoding="utf-8")
     ws = openpyxl.load_workbook(REPO / "XBRL-template-MFRS/Company/09-SOCIE.xlsx", read_only=True).active
