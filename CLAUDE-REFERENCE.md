@@ -2324,6 +2324,27 @@ The operator selects Reporting periods in filing setup, or uses CLI
 `tests/test_result_preview_canonical.py`, `tests/test_concepts_routes.py`, and
 `PreRunPanel` frontend tests.
 
+**Rolled-forward inputs before extraction.** `prior_year_workbook` identifies an
+immutable session upload. Import its PY numeric inputs into canonical facts,
+including selected numeric notes, before launching agents. Typed source subtotals
+remain authoritative aggregate-only facts, including typed linear statement
+subtotals; actual formula results remain derived. They receive the same preservation
+checks as ordinary inputs; disagreements with available components remain
+visible for review. Keep two periods;
+do not reuse `first_financial_statements`. Preserve workbook provenance, reject
+PY writes and category reassignment, and retain imported facts and comparative
+assessments and imported subtotal disagreements during retry cleanup. Calculated
+canonical totals compare against their derived amounts, never an invented zero.
+Agents follow the imported field choices
+unless a line is absent or has changed in nature (reason in evidence), and
+compare PDF comparatives with `check_prior_year`; differences and
+unassessed coverage remain visible. mTool preparation emits CY numeric writes
+only, validates replacement comparatives and verifies imported cell preservation
+before writing the receipt. Redo copies the selected source workbook. See
+`docs/ROLLED-FORWARD-WORKBOOKS.md`; pinned by
+`tests/test_prior_year_workbook.py`, `tests/test_run_restart.py`, and
+`PreRunPanel` / `NotesReviewTab` frontend tests.
+
 A user attaches the mTool workbook a person filled for the same document to a
 completed run and compares it with the run's current values
 (docs/human-mtool-file-comparison-plan.md). It replaced the gold-benchmark

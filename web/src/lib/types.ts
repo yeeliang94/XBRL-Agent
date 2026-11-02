@@ -764,6 +764,8 @@ export interface RunConfigPayload {
   scanned_pdf?: boolean;
   /** First statements after incorporation: current period only. */
   first_financial_statements?: boolean;
+  prior_year_workbook?: string | null;
+  prior_year_layout?: string | null;
   /** Human note-list corrections, reapplied after every fresh scan. */
   notes_inventory_overrides?: {
     added: Array<{

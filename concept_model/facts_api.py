@@ -239,7 +239,15 @@ def validate_scalar_fact(
     returned concept and formula flag let apply_fact reuse the lookup without
     repeating policy.
     """
+    if body.source == "prior_year_workbook":
+        raise HTTPException(status_code=400, detail="Workbook provenance is reserved for the prior-year importer.")
     if run_id is not None:
+        from concept_model.prior_year import is_preserved
+        if body.period == "PY" and is_preserved(conn, run_id):
+            raise HTTPException(status_code=400, detail=(
+                "Prior-year figures are preserved from the uploaded workbook. "
+                "Write current-year figures only; report comparative differences for review."
+            ))
         from concept_model.periods import run_periods
         if body.period not in run_periods(conn, run_id):
             raise HTTPException(status_code=400, detail=(
@@ -463,13 +471,21 @@ def clear_facts_for_template(db_path, run_id: int, template_id: str) -> int:
     try:
         cur = conn.execute(
             "DELETE FROM run_concept_facts WHERE run_id = ? "
+            "AND COALESCE(source, '') != 'prior_year_workbook' "
             "AND concept_uuid IN "
             "(SELECT concept_uuid FROM concept_nodes WHERE template_id = ?)",
             (run_id, template_id),
         )
         conn.execute(
             "DELETE FROM run_concept_conflicts WHERE run_id = ? "
-            "AND concept_uuid IN "
+            "AND kind != 'prior_year_comparative' "
+            "AND NOT EXISTS (SELECT 1 FROM run_concept_facts f "
+            "WHERE f.run_id = run_concept_conflicts.run_id "
+            "AND f.concept_uuid = run_concept_conflicts.concept_uuid "
+            "AND f.period = run_concept_conflicts.period "
+            "AND f.entity_scope = run_concept_conflicts.entity_scope "
+            "AND f.dimension_key = run_concept_conflicts.dimension_key "
+            "AND f.source = 'prior_year_workbook') AND concept_uuid IN "
             "(SELECT concept_uuid FROM concept_nodes WHERE template_id = ?)",
             (run_id, template_id),
         )
@@ -778,6 +794,12 @@ def resolve_fact_category(db_path, run_id: int, concept_uuid: str, body: Categor
             raise HTTPException(400, "Choose a numeric category note in this run's template family")
         if level != "group" and body.entity_scope != "Company":
             raise HTTPException(400, "Company filings cannot classify Group facts")
+        from concept_model.prior_year import is_preserved
+        if body.period == "PY" and is_preserved(conn, run_id):
+            raise HTTPException(status_code=400, detail=(
+                "Prior-year figures are preserved from the uploaded workbook. "
+                "Write current-year figures only; report comparative differences for review."
+            ))
         from concept_model.periods import run_periods
         if body.period not in run_periods(conn, run_id):
             raise HTTPException(400, "This period is not applicable to this filing")

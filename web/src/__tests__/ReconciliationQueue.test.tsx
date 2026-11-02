@@ -59,6 +59,16 @@ describe("ReconciliationQueue", () => {
     expect(screen.getByText(/residual 3000\.00/)).toBeTruthy();
   });
 
+  test("describes a prior-year difference in words, not stored JSON", async () => {
+    mockFetch(() => ({ conflicts: [{ ...conflict, period: "PY", kind: "prior_year_comparative", residual: 5,
+      detail: JSON.stringify({ imported: 12000, report: 12005, evidence: "PDF page 8" }) }] }));
+    render(<ReconciliationQueue runId={42} />);
+    await waitFor(() => screen.getByTestId("conflict-7"));
+    expect(screen.getByText(/Prior-year difference · Company/)).toBeTruthy();
+    expect(screen.getByText("Workbook 12,000 · Report 12,005 · PDF page 8")).toBeTruthy();
+    expect(screen.queryByText(/prior_year_comparative|"imported"/)).toBeNull();
+  });
+
   test("failed Resolve (500) keeps the row visible", async () => {
     // Peer-review #10: a 500 must NOT optimistically remove the row.
     let resolveCalled = false;

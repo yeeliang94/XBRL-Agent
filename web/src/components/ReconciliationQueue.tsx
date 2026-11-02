@@ -28,6 +28,21 @@ export interface ConflictRow {
   render_row?: number | null;
 }
 
+// Prior-year differences store JSON detail; show it as a sentence.
+function describeConflict(c: ConflictRow): { kind: string; detail: string | null } {
+  if (c.kind !== "prior_year_comparative") return { kind: c.kind, detail: c.detail };
+  try {
+    const d = JSON.parse(c.detail ?? "{}");
+    const amount = (v: unknown) => (typeof v === "number" ? v.toLocaleString() : "—");
+    return {
+      kind: `Prior-year difference · ${c.entity_scope}`,
+      detail: `Workbook ${amount(d.imported)} · Report ${amount(d.report)}${d.evidence ? ` · ${d.evidence}` : ""}`,
+    };
+  } catch {
+    return { kind: `Prior-year difference · ${c.entity_scope}`, detail: c.detail };
+  }
+}
+
 export function ReconciliationQueue({
   runId,
   reloadKey,
@@ -151,7 +166,7 @@ export function ReconciliationQueue({
         </div>
       ) : (
         <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-          {conflicts.map((c) => (
+          {conflicts.map((c) => { const shown = describeConflict(c); return (
             <li
               key={c.id}
               data-testid={`conflict-${c.id}`}
@@ -178,13 +193,13 @@ export function ReconciliationQueue({
                 {c.canonical_label || c.concept_uuid}
               </div>
               <div style={{ fontSize: 12, color: ds.grey700 }}>
-                {c.kind}
+                {shown.kind}
                 {c.residual !== null && (
                   <> · residual {c.residual.toFixed(2)}</>
                 )}
               </div>
-              {c.detail && (
-                <div style={{ fontSize: 12, marginTop: 2 }}>{c.detail}</div>
+              {shown.detail && (
+                <div style={{ fontSize: 12, marginTop: 2 }}>{shown.detail}</div>
               )}
               <div style={{ marginTop: ds.space.sm, display: "flex", gap: ds.space.sm }}>
                 <button
@@ -222,7 +237,7 @@ export function ReconciliationQueue({
                 </button>
               </div>
             </li>
-          ))}
+          ); })}
         </ul>
       )}
     </>

@@ -72,7 +72,8 @@ def leaf_facts(db: Path) -> list[tuple[str, str, float]]:
     return facts
 
 
-def filled_file(db: Path, run_id: int, facts, tmp_path: Path) -> Path:
+def filled_file(db: Path, run_id: int, facts, tmp_path: Path,
+                template_name: str = "01-SOFP-CuNonCu.xlsx") -> Path:
     with sqlite3.connect(db) as conn:
         conn.executemany(
             "INSERT INTO run_concept_facts(run_id, concept_uuid, period, "
@@ -80,7 +81,7 @@ def filled_file(db: Path, run_id: int, facts, tmp_path: Path) -> Path:
             "VALUES (?, ?, ?, 'Company', ?, 'observed', '2026-09-25')",
             [(run_id, u, p, v) for u, p, v in facts])
     doc = build_fill_doc(db, run_id, filing_standard="mfrs", filing_level="company")
-    template = TEMPLATES / "01-SOFP-CuNonCu.xlsx"
+    template = TEMPLATES / template_name
     ready, _ = resolve_filing_doc(str(template), doc)
     out = tmp_path / "human.xlsx"
     assert fill_workbook(str(template), ready, str(out), strict=True)["status"] == "ok"

@@ -229,3 +229,33 @@ def test_recheck_run_without_facts_404(client: TestClient, tmp_path: Path):
     finally:
         conn.close()
     assert client.get(f"/api/runs/{rid}/recheck").status_code == 404
+
+
+def test_recheck_retains_imported_prior_year_differences_and_refreshes_coverage(client):
+    import server as srv
+    from concept_model.prior_year import compare_value,SOURCE
+    with sqlite3.connect(srv.AUDIT_DB_PATH) as conn:
+        uid,tid=conn.execute("SELECT concept_uuid,template_id FROM concept_nodes WHERE kind='LEAF' LIMIT 1").fetchone()
+        conn.execute("UPDATE runs SET run_config_json=json_set(run_config_json,'$.prior_year_workbook',?) WHERE id=?",('a'*64,client.run_id))
+        conn.execute("INSERT OR REPLACE INTO run_concept_facts(run_id,concept_uuid,period,entity_scope,value,value_status,source,updated_at) VALUES(?,?,'PY','Company',10,'observed',?,'now')",(client.run_id,uid,SOURCE))
+    compare_value(srv.AUDIT_DB_PATH,client.run_id,tid,uid,12,'PDF page 8: restated comparative')
+    response=client.get(f'/api/runs/{client.run_id}/recheck')
+    assert response.status_code==200,response.text
+    results=response.json()['results']
+    assert any(r['name'].startswith('Prior-year comparative:') and r['status']=='failed' for r in results)
+    assert sum(r['name']=='Prior-year comparative coverage' for r in results)==1
+    assert srv._refresh_persisted_cross_checks(client.run_id)
+    compare_value(srv.AUDIT_DB_PATH,client.run_id,tid,uid,10,'PDF page 8: agrees')
+    response=client.get(f'/api/runs/{client.run_id}/recheck')
+    results=response.json()['results']
+    assert not any(r['name'].startswith('Prior-year comparative:') for r in results)
+    assert sum(r['name']=='Prior-year comparative coverage' for r in results)==1
+
+    # A failed assessment stays a visible warning instead of failing the whole recheck.
+    import concept_model.prior_year as prior_year
+    from unittest.mock import patch
+    with patch.object(prior_year, "check_results", side_effect=RuntimeError("boom")):
+        response = client.get(f'/api/runs/{client.run_id}/recheck')
+    assert response.status_code == 200, response.text
+    assert any(r['name'] == 'Prior-year comparative assessment' and r['status'] == 'warning'
+               for r in response.json()['results'])

@@ -30,6 +30,7 @@ export function isBlankHtml(html: string | null | undefined): boolean {
  *  content. Empty list when the sanitiser was a no-op; undefined on
  *  GET responses which do not carry a write-time warning snapshot. */
 export interface NotesCell {
+  preserve_prior_year?: boolean;
   row: number;
   label: string;
   // `kind` distinguishes the two row shapes the projection returns

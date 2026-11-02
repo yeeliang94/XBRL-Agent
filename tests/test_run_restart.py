@@ -327,3 +327,23 @@ def test_parent_can_be_deleted_without_deleting_restarted_child(tmp_path, monkey
         ).fetchone()[0] == 0
     finally:
         conn.close()
+
+
+def test_redo_copies_the_selected_rolled_forward_workbook(tmp_path,monkeypatch):
+    client,parent,source_dir,db=_parent(tmp_path,monkeypatch)
+    raw=b'content-addressed workbook fixture'
+    token=hashlib.sha256(raw).hexdigest()
+    folder=source_dir/'prior_year';folder.mkdir()
+    (folder/f'{token}.xlsx').write_bytes(raw)
+    (folder/f'{token}.json').write_text(json.dumps({'filename':'rolled.xlsx','unit':'units'}))
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE runs SET run_config_json=json_set(run_config_json,'$.prior_year_workbook',?,'$.prior_year_summary',json(?)) WHERE id=?",
+            (token,json.dumps({'inputs':1}),parent))
+    result=restart.clone_run_as_draft(db,source_dir.parent,parent,model_name='model',configuration_key='config-key')
+    copied=source_dir.parent/result.session_id/'prior_year'/f'{token}.xlsx'
+    assert copied.read_bytes()==raw
+    assert copied.with_suffix('.json').read_bytes()==(folder/f'{token}.json').read_bytes()
+    with repo.db_session(db) as conn:
+        config=repo.fetch_run(conn,result.run_id).config
+    assert config['prior_year_workbook']==token
+    assert 'prior_year_summary' not in config
