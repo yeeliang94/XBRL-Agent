@@ -727,6 +727,20 @@ def patch_mtool_template(
                         f"Figure {write.get('label') or write.get('concept_uuid')!r} resolved "
                         f"to sheet {write['sheet']!r} outside the selected sheets. "
                         "Recheck the sheet selection and filing destination."))
+        older_current_year = []
+        if doc["meta"].get("preserve_prior_year"):
+            from concept_model.prior_year import stale_current_year_cells
+            with closing(server._open_audit_conn()) as conn:
+                older_current_year = [
+                    cell for cell in stale_current_year_cells(conn, run_id, src, cmap)
+                    if selection is None or cell["canonical_sheet"] in selection["selected_sheets"]
+                ]
+            # A typed subtotal has no formula to reconcile, so this run's figure
+            # replaces it like any other typed value.
+            typed = {(cell["sheet"], cell["cell"]) for cell in older_current_year}
+            checks = ready.get("checks", [])
+            ready["writes"] = [*ready["writes"], *(c for c in checks if (c["sheet"], c.get("cell")) in typed)]
+            ready["checks"] = [c for c in checks if (c["sheet"], c.get("cell")) not in typed]
         errors = validate_input(ready) if ready["writes"] else []
         if errors:
             raise HTTPException(status_code=422,
@@ -962,6 +976,16 @@ def patch_mtool_template(
                     summary["prior_year_preservation"] = verify_preservation(conn, run_id, src, final)
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
+            # Values this run has no figure for stay in the draft and are named.
+            # A non-zero one did not come from this run, so it needs review.
+            replaced = {(w["sheet"], w["cell"]) for w in report["written"]}
+            kept = [
+                {k: cell[k] for k in ("sheet", "cell", "label", "value")}
+                for cell in older_current_year if (cell["sheet"], cell["cell"]) not in replaced
+            ]
+            summary["prior_year_preservation"]["current_year_values_kept"] = kept
+            if any(cell["value"] != 0 for cell in kept) and summary["status"] == "ok":
+                summary["status"] = "degraded"
 
         fingerprint = _parse_template_or_422(
             "fingerprint", fingerprint_workbook, data)

@@ -13,6 +13,7 @@ type Metadata = {
   summary: {
     inputs: number;
     blank_slots: number;
+    current_year_values?: number;
     unresolved_slots: number;
     sheets: string[];
     not_in_file: unknown[];
@@ -129,7 +130,7 @@ export function PriorYearWorkbook({
       {enabled && token !== null && (
         <>
           <p style={ui.supportingText}>
-            Current-year fields must be blank. Check the company and units.
+            Check the company and units.
           </p>
           <label htmlFor="prior-year-unit" style={ui.fieldLabel}>
             Workbook figures are expressed in
@@ -159,6 +160,15 @@ export function PriorYearWorkbook({
                 {metadata.summary.inputs} prior-year inputs found across{" "}
                 {metadata.summary.sheets.length} worksheets.
               </p>
+              {!!metadata.summary.current_year_values && (
+                <p role="note" style={ui.supportingText}>
+                  {metadata.summary.current_year_values === 1
+                    ? "1 current-year value found. "
+                    : `${metadata.summary.current_year_values} current-year values found. `}
+                  This run&apos;s figures replace them in the mTool draft. Any
+                  it has no figure for stay and are listed for review.
+                </p>
+              )}
               {!!(
                 metadata.summary.unresolved_slots ||
                 metadata.summary.not_in_file.length ||

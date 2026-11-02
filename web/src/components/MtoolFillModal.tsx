@@ -138,7 +138,7 @@ interface NotesPreview {
 type NoteTarget = { key?: string; sheet?: string; cell?: string };
 
 interface ReportSummary {
-  prior_year_preservation?: { status: string; preserved_inputs: number };
+  prior_year_preservation?: { status: string; preserved_inputs: number; current_year_values_kept?: { sheet: string; cell: string; label?: string | null; value: number }[] };
   sheet_selection?: { selected_sheets: string[]; excluded_sheets: string[]; excluded_figures: number; excluded_notes: number | null };
   status: string;
   numeric_status?: string;
@@ -1546,6 +1546,12 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
               </p>
             )}
             {report.prior_year_preservation?.status === "ok" && <p style={ui.supportingText}>Verified: {report.prior_year_preservation.preserved_inputs} prior-year inputs preserved. Only current-year numeric fields were filled.</p>}
+            {Boolean(report.prior_year_preservation?.current_year_values_kept?.length) && (
+              <RowDetail
+                title="Older current-year values kept because this run has no figure for them"
+                rows={report.prior_year_preservation!.current_year_values_kept!.map((c) => `${friendlyMtoolSheetName(c.sheet)}: ${c.label ?? c.cell} (${c.cell}) = ${c.value}`)}
+              />
+            )}
             <div style={styles.summaryGrid}>
               <div><div style={styles.summaryValue}>{report.counts.written}</div><div style={{ ...styles.statLine, color: ds.grey700 }}>figures filled</div></div>
               {report.notes && <div><div style={styles.summaryValue}>{report.notes.counts.written}</div><div style={{ ...styles.statLine, color: ds.grey700 }}>notes filled</div></div>}

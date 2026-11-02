@@ -84,6 +84,24 @@ describe("MtoolFillModal", () => {
     expect(patches).toBe(1);
   });
 
+  test("names older current-year values the run kept in a rolled-forward draft", async () => {
+    mockFetch((url, init) => {
+      if (url.endsWith("/detect-columns")) return Response.json({ detected: {}, confidence: "high", requires_confirmation: false });
+      if (url.endsWith("/notes-preview")) return Response.json({ notes_in_run: 0, will_fill_existing: [], will_create: [], unresolved: [], errors: [] });
+      if (init?.method === "POST") return patchResponse({ status: "degraded", counts: { written: 7 }, unresolved: [], mismatches: [], skipped_formula: [],
+        prior_year_preservation: { status: "ok", preserved_inputs: 3, current_year_values_kept: [{ sheet: "SOCF-Indirect", cell: "E151", label: "Cash at beginning of period", value: 124765 }] } });
+      if (url.endsWith("/preflight")) return Response.json({ ok: true, blockers: [], warnings: [] });
+      return Response.json(FILL_DOC);
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText("mTool template file"), { target: { files: [new File(["xlsx"], "rolled.xlsx")] } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Fill" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Fill" }));
+    await screen.findByRole("button", { name: /download draft for review/i });
+    expect(screen.getByText(/Older current-year values kept/)).toBeInTheDocument();
+    expect(screen.getByText(/Cash at beginning of period \(E151\) = 124765/)).toBeInTheDocument();
+  });
+
   test("selects sheets for detection, notes preview and fill, and clears stale results", async () => {
     const posts: { url: string; form: FormData }[] = [];
     mockFetch((url, init) => {

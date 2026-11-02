@@ -1814,7 +1814,7 @@ test.each(["AUDITORS_REPORT", "STATEMENT_BY_DIRECTORS"] as const)("%s can run in
 test.each([false, true])("rolled-forward workbook is required before starting; column confirmation required: %s", async (requiresConfirmation) => {
   const token = "a".repeat(64);
   const metadata = { id: token, filename: "rolled.xlsx", unit: "thousands",
-    summary: { inputs: 12, blank_slots: 3, unresolved_slots: 0, sheets: ["SOFP", "Notes-Issuedcapital"], not_in_file: [], period_issues: [], requires_confirmation: requiresConfirmation, layout_digest: "b".repeat(64), layout: { SOFP: { columns: { current_year: "B", prior_year: "C" } } } } };
+    summary: { inputs: 12, blank_slots: 3, current_year_values: 4, unresolved_slots: 0, sheets: ["SOFP", "Notes-Issuedcapital"], not_in_file: [], period_issues: [], requires_confirmation: requiresConfirmation, layout_digest: "b".repeat(64), layout: { SOFP: { columns: { current_year: "B", prior_year: "C" } } } } };
   const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(metadata));
   const onRun = vi.fn();
   try {
@@ -1832,6 +1832,7 @@ test.each([false, true])("rolled-forward workbook is required before starting; c
     }
     await waitFor(() => expect(screen.getByRole("button", { name: /start extraction/i })).toBeEnabled());
     expect(await screen.findByText(/12 prior-year inputs/)).toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent("4 current-year values found");
     startExtraction();
     expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ prior_year_workbook: token, first_financial_statements: false }));
     fireEvent.click(screen.getByRole("button", { name: "Replace workbook" }));

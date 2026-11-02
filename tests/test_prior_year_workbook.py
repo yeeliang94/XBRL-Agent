@@ -281,28 +281,46 @@ def test_upload_import_current_year_patch_and_saved_source(tmp_path, monkeypatch
     assert doc["meta"]["preserve_prior_year"]
     assert doc["writes"] and all(w["period"] == "CY" for w in doc["writes"])
 
-    # Matching PY inputs must not admit stale CY values outside canonical facts.
+    # This run's figure replaces an older CY value; one without a figure is kept and named.
     from eval.human_file import read_human_file
     from openpyxl import load_workbook
 
     with sqlite3.connect(db) as conn:
         read = read_human_file(conn, run, workbook, "units", include_notes=False)
-    untouched_cy = next(
-        f for f in read.facts
-        if f["period"] == "CY" and f["concept_uuid"] == facts[1][0]
-    )
+    cy_cell = {
+        f["concept_uuid"]: (f["source_sheet"], f["source_cell"])
+        for f in read.facts if f["period"] == "CY"
+    }
+    written_cell, stale_cell = cy_cell[facts[0][0]], cy_cell[facts[1][0]]
+    zero_cell = cy_cell[facts[2][0]]
     replacement = tmp_path / "stale-current-year.xlsx"
     wb = load_workbook(workbook)
-    for stale_value in (0, 999999):
-        wb[untouched_cy["source_sheet"]][untouched_cy["source_cell"]] = stale_value
-        wb.save(replacement)
-        refused = client.post(
-            f"/api/runs/{run}/mtool-fill/patch",
-            files={"template": ("replacement.xlsx", replacement.read_bytes())},
-            data={"fill_notes": "false"},
-        )
-        assert refused.status_code == 422, refused.text
-        assert "already contains current-year numeric inputs" in refused.text
+    wb[written_cell[0]][written_cell[1]] = 111
+    wb[stale_cell[0]][stale_cell[1]] = 999999
+    wb[zero_cell[0]][zero_cell[1]] = 0
+    wb.save(replacement)
+    wb.close()
+    replaced = client.post(
+        f"/api/runs/{run}/mtool-fill/patch",
+        files={"template": ("replacement.xlsx", replacement.read_bytes())},
+        data={"fill_notes": "false"},
+    )
+    assert replaced.status_code == 200, replaced.text
+    preservation = replaced.json()["prior_year_preservation"]
+    assert preservation["preserved_inputs"] == len(facts)
+    assert {(c["sheet"], c["cell"], c["value"]) for c in preservation["current_year_values_kept"]} == {
+        (*stale_cell, 999999), (*zero_cell, 0)
+    }
+    assert replaced.json()["status"] == "degraded"
+    draft = tmp_path / "replaced.xlsx"
+    draft.write_bytes(client.get(
+        replaced.json()["download_url"],
+        params={"acknowledge_degraded": "Reviewed test fixture"},
+    ).content)
+    wb = load_workbook(draft)
+    assert wb[written_cell[0]][written_cell[1]].value == 777
+    assert wb[stale_cell[0]][stale_cell[1]].value == 999999
+    assert wb[zero_cell[0]][zero_cell[1]].value == 0
     wb.close()
 
     patched = client.post(
@@ -702,7 +720,7 @@ def test_import_validation_failure_leaves_a_terminal_audit_run(tmp_path, monkeyp
         )
 
 
-def test_import_refuses_existing_current_year_inputs_and_wrong_comparative_dates(
+def test_import_ignores_current_year_contents_and_refuses_wrong_comparative_dates(
     tmp_path,
 ):
     from openpyxl import load_workbook
@@ -712,13 +730,20 @@ def test_import_refuses_existing_current_year_inputs_and_wrong_comparative_dates
         inputs, _ = inspect_workbook(conn, config, workbook, "units")
     fact = inputs[0]
     wb = load_workbook(workbook)
-    wb[fact["source_sheet"]]["B" + fact["source_cell"][1:]] = 123
-    current = tmp_path / "current.xlsx"
-    wb.save(current)
+    row = fact["source_cell"][1:]
+    # Opening balance, explicit zero, linked formula and unreadable text.
+    for value, expected in ((123, 1), (0, 1), ("=1+1", 0), ("n/a", 0), ("=#REF!", 0)):
+        wb[fact["source_sheet"]]["B" + row] = value
+        current = tmp_path / "current.xlsx"
+        wb.save(current)
+        with sqlite3.connect(db) as conn:
+            imported, summary = inspect_workbook(conn, config, current, "units")
+        assert {(f["concept_uuid"], f["period"], f["value"]) for f in imported} == {
+            (f["concept_uuid"], "PY", f["value"]) for f in inputs
+        }
+        assert summary["current_year_values"] == expected
     with sqlite3.connect(db) as conn:
-        with pytest.raises(ValueError, match="already contains current-year"):
-            inspect_workbook(conn, config, current, "units")
-        wb[fact["source_sheet"]]["B" + fact["source_cell"][1:]] = None
+        wb[fact["source_sheet"]]["B" + row] = None
         for sheet, row, primary in conn.execute(
             "SELECT n.render_sheet,n.render_row,sa.primary_concept FROM concept_nodes n JOIN concept_semantic_addresses sa USING(concept_uuid) WHERE n.template_id=?",
             (SOFP,),
@@ -966,8 +991,14 @@ def test_typed_linear_subtotals_are_inputs_not_formula_results(tmp_path, period,
     wb.save(workbook)
     wb.close()
     if period == "CY":
-        with sqlite3.connect(db) as conn, pytest.raises(ValueError, match="already contains current-year"):
-            inspect_workbook(conn, config, workbook, "units")
+        with sqlite3.connect(db) as conn:
+            if with_components:
+                _, summary = inspect_workbook(conn, config, workbook, "units")
+                assert summary["current_year_values"] == 1
+            else:
+                # Current-year values cannot stand in for missing comparatives.
+                with pytest.raises(ValueError, match="No figures"):
+                    inspect_workbook(conn, config, workbook, "units")
         return
 
     token = hashlib.sha256(workbook.read_bytes()).hexdigest()
@@ -990,3 +1021,93 @@ def test_typed_linear_subtotals_are_inputs_not_formula_results(tmp_path, period,
         validate_export_source(conn, run, workbook)
         assert verify_preservation(conn, run, workbook, workbook)["status"] == "ok"
     assert compare_value(db, run, SOFP, uid, typed, "PDF page 8: typed total") == "Comparative agrees."
+
+
+def test_typed_current_year_subtotal_takes_the_runs_figure(tmp_path, monkeypatch):
+    import server
+    from concept_model.cascade import recompute_after_turn
+    from openpyxl import load_workbook
+
+    db, run, session_dir, config, workbook, facts = setup_file(tmp_path)
+    (session_dir / "uploaded.pdf").write_bytes(b"%PDF-test")
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(server, "AUDIT_DB_PATH", db)
+    import_workbook(db, run, session_dir, config)
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        apply_fact(conn, run, FactWrite(concept_uuid=facts[0][0], value=777))
+        conn.execute("UPDATE runs SET status='completed',session_id='session' WHERE id=?", (run,))
+    recompute_after_turn(db, run)
+    with sqlite3.connect(db) as conn:
+        total, sheet, row, col = conn.execute(
+            "SELECT f.value,t.target_sheet,t.target_row,t.target_col FROM run_concept_facts f "
+            "JOIN concept_nodes n USING(concept_uuid) JOIN concept_targets t USING(concept_uuid,period,entity_scope) "
+            "WHERE f.run_id=? AND f.period='CY' AND f.source='cascade' AND n.kind='COMPUTED' AND f.value!=0 LIMIT 1",
+            (run,),
+        ).fetchone()
+    wb = load_workbook(workbook)
+    wb[sheet][f"{col}{row}"] = total + 5000
+    typed = tmp_path / "typed-current-total.xlsx"
+    wb.save(typed)
+    wb.close()
+    client = TestClient(server.app)
+    result = client.post(
+        f"/api/runs/{run}/mtool-fill/patch",
+        files={"template": ("typed.xlsx", typed.read_bytes())},
+        data={"fill_notes": "false"},
+    )
+    assert result.status_code == 200, result.text
+    assert not result.json()["mismatches"]
+    assert result.json()["prior_year_preservation"]["current_year_values_kept"] == []
+    draft = tmp_path / "typed-result.xlsx"
+    draft.write_bytes(client.get(
+        result.json()["download_url"], params={"acknowledge_degraded": "Reviewed test fixture"},
+    ).content)
+    wb = load_workbook(draft)
+    assert wb[sheet][f"{col}{row}"].value == total
+    wb.close()
+
+
+@pytest.mark.parametrize("standard", ["MFRS", "MPERS"])
+@pytest.mark.parametrize("level", ["Company", "Group"])
+@pytest.mark.parametrize("template", ["SOCF-Indirect", "SOCIE", "SOCI-NetOfTax", "Notes-IssuedCapital"])
+def test_current_year_contents_never_change_what_each_template_imports(tmp_path, standard, level, template):
+    from concept_model.importer import import_company_targets, import_template
+    from concept_model.parser import parse_template
+    from db.schema import init_db
+    from eval.human_file import read_human_file, typed_current_year_cells
+    from openpyxl import load_workbook
+
+    path = next(Path(f"XBRL-template-{standard}/{level}").glob(f"*-{template}.xlsx"))
+    db = tmp_path / "audit.db"
+    init_db(db)
+    tree = parse_template(str(path))
+    payload = tmp_path / "tree.json"
+    payload.write_text(json.dumps(tree.to_json()), encoding="utf-8")
+    import_template(db, payload)
+    import_company_targets(db, tree.template_id)
+    shape = {"standard": standard.lower(), "level": level.lower(), "statements": {tree.template_id: path.stem},
+             "notes_templates": set(), "denomination": "units", "first_financial_statements": False}
+    wb = load_workbook(path)
+    with sqlite3.connect(db) as conn:
+        targets = conn.execute(
+            "SELECT t.target_sheet,t.target_col,t.target_row,t.period FROM concept_targets t "
+            "JOIN concept_nodes n USING(concept_uuid) WHERE n.template_id=? ORDER BY t.target_row",
+            (tree.template_id,),
+        ).fetchall()
+        empty = [(s, f"{c}{r}", p) for s, c, r, p in targets if wb[s][f"{c}{r}"].value is None]
+        opening, zero = [(s, a) for s, a, p in empty if p == "CY"][:2]
+        comparative = next((s, a) for s, a, p in empty if p == "PY")
+        wb[opening[0]][opening[1]] = 124765
+        wb[zero[0]][zero[1]] = 0
+        wb[comparative[0]][comparative[1]] = 1000
+        rolled = tmp_path / "rolled.xlsx"
+        wb.save(rolled)
+        wb.close()
+        conn.row_factory = sqlite3.Row
+        read = read_human_file(conn, 0, rolled, "units", shape=shape, periods=("PY",),
+                               include_notes=False, include_typed_totals=True)
+        assert {f["period"] for f in read.facts} == {"PY"}
+        assert any(f["value"] == 1000 for f in read.facts)
+        found = {(c["sheet"], c["cell"]): c["value"] for c in typed_current_year_cells(conn, rolled, shape)}
+    assert found == {opening: 124765, zero: 0}
