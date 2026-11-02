@@ -18,6 +18,7 @@ import server
 from api.mtool import _MAX_TEMPLATE_BYTES, _assert_zip_within_budget, _read_capped
 from concept_model.prior_year import inspect_workbook, workbook_path
 from db import repository as repo
+from scout.infopack import Infopack
 from utils.atomic_io import replace_with_retry, write_json_atomic
 
 router = APIRouter()
@@ -52,6 +53,16 @@ def upload_prior_year(
         raise HTTPException(
             status_code=422, detail="The filing setup could not be read."
         ) from exc
+    # Use the same Scout layouts the run will use, so upload and import agree.
+    infopack = None
+    if request.infopack:
+        try:
+            infopack = Infopack.from_json(json.dumps(request.infopack))
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="The saved document analysis is invalid. Run Auto-detect again, then retry.",
+            ) from exc
     raw = _read_capped(file, _MAX_TEMPLATE_BYTES)
     if not raw:
         raise HTTPException(status_code=422, detail="The workbook is empty.")
@@ -64,7 +75,7 @@ def upload_prior_year(
         _assert_zip_within_budget(str(path))
         try:
             with closing(server._open_audit_conn()) as conn:
-                _, summary = inspect_workbook(conn, request.model_dump(), path, unit)
+                _, summary = inspect_workbook(conn, request.model_dump(), path, unit, infopack)
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except (ET.ParseError, BadZipFile) as exc:

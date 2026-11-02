@@ -26,6 +26,7 @@ from tests._human_file_fixture import (
     SOFP,
     add_run,
     filled_file,
+    import_template_file,
     leaf_facts,
     make_sofp_db,
     sofp_config,
@@ -337,6 +338,52 @@ def test_upload_import_current_year_patch_and_saved_source(tmp_path, monkeypatch
     )
     assert refused.status_code == 422
     assert "prior-year" in refused.text
+
+
+def test_upload_checks_the_workbook_against_scouts_suggested_layout(tmp_path, monkeypatch):
+    import server
+    from scout.infopack import Infopack, StatementPageRef
+    from statement_types import StatementType
+
+    db = make_sofp_db(tmp_path)
+    liquidity = import_template_file(db, tmp_path, "02-SOFP-OrderOfLiquidity.xlsx")
+    source_run = add_run(db, sofp_config("OrderOfLiquidity"))
+    with sqlite3.connect(db) as conn:
+        leaves = [r[0] for r in conn.execute(
+            "SELECT concept_uuid FROM concept_nodes WHERE template_id=? AND kind='LEAF' "
+            "ORDER BY render_row LIMIT 2", (liquidity,))]
+    workbook = filled_file(
+        db, source_run, [(u, "PY", 900.0) for u in leaves], tmp_path,
+        "02-SOFP-OrderOfLiquidity.xlsx",
+    )
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    (session_dir / "uploaded.pdf").write_bytes(b"%PDF-test")
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(server, "AUDIT_DB_PATH", db)
+    client = TestClient(server.app)
+    scout = json.loads(Infopack(
+        toc_page=1,
+        page_offset=0,
+        statements={StatementType.SOFP: StatementPageRef(
+            variant_suggestion="OrderOfLiquidity", face_page=3, note_pages=[], confidence="HIGH",
+        )},
+    ).to_json())
+
+    def upload(config):
+        return client.post(
+            "/api/prior-year/session",
+            files={"file": ("rolled.xlsx", workbook.read_bytes())},
+            data={"unit": "units", "config": json.dumps(config)},
+        )
+
+    automatic = upload({**sofp_config(), "variants": {}, "infopack": scout})
+    assert automatic.status_code == 200, automatic.text
+    assert automatic.json()["summary"]["inputs"] == len(leaves)
+    # A layout the operator chose still outranks the suggestion.
+    assert upload({**sofp_config("CuNonCu"), "infopack": scout}).status_code == 422
+    invalid = upload({**sofp_config(), "variants": {}, "infopack": {"statements": {"nope": {}}}})
+    assert invalid.status_code == 422 and "document analysis" in invalid.text
 
 
 @pytest.mark.parametrize("standard", ["mfrs", "mpers"])
