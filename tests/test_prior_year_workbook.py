@@ -1143,6 +1143,8 @@ def test_sign_only_comparative_difference_names_the_overall_sign(tmp_path):
     assert "opposite sign" not in compare_value(db, run, socf, uid, -71, "PDF page 11: (71)")
     # Back to the sign-only case: resubmitting the workbook's figure records the
     # reasoning but cannot clear it, so a real sign error stays in front of a person.
+    # A different figure in between does not erase the dispute.
+    assert "stays open until a person decides" in compare_value(db, run, socf, uid, 70, "Reread")
     compare_value(db, run, socf, uid, -70, "PDF page 11: gain (70)")
     kept = compare_value(db, run, socf, uid, 70, "Subtracted overall, so +70 deducts the gain")
     assert "stays open until a person decides" in kept

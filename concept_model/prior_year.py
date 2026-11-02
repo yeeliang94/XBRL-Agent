@@ -499,20 +499,32 @@ def compare_value(
         ).fetchone()
         # Only a person closes a sign-only difference. Otherwise resubmitting the
         # workbook's own figure would clear a real sign error in last year's filing.
-        if (
-            previous and previous[1] == "open" and imported
-            and value == imported and previous[0] == -2 * imported
-        ):
-            detail = json.loads(previous[2])
-            detail["reasoning"] = evidence.strip()
+        # The first dispute stays attached through any later comparison.
+        open_detail = (
+            json.loads(previous[2] or "{}") if previous and previous[1] == "open" else {}
+        )
+        dispute = open_detail.get("sign_dispute")
+        if not dispute and imported and value == -imported:
+            dispute = {"report": value, "evidence": evidence}
+        if dispute and difference == 0:
             conn.execute(
-                "UPDATE run_concept_conflicts SET detail=? WHERE run_id=? AND concept_uuid=? AND period='PY' "
+                "UPDATE run_concept_conflicts SET residual=?,detail=? WHERE run_id=? AND concept_uuid=? AND period='PY' "
                 "AND entity_scope=? AND dimension_key=? AND kind='prior_year_comparative'",
-                (json.dumps(detail), run_id, concept_uuid, entity_scope, dims),
+                (
+                    dispute["report"] - imported,
+                    json.dumps({
+                        "imported": imported,
+                        "report": dispute["report"],
+                        "evidence": dispute["evidence"],
+                        "sign_dispute": dispute,
+                        "reasoning": evidence.strip(),
+                    }),
+                    run_id, concept_uuid, entity_scope, dims,
+                ),
             )
             return (
                 f"Reasoning recorded. Both figures stay on record (workbook={imported}, "
-                f"report={-imported}), and this difference stays open until a person decides it."
+                f"report={dispute['report']}), and this difference stays open until a person decides it."
             )
         status = "resolved" if difference == 0 else "open"
         sign_note = _sign_only_note(conn, concept_uuid, imported, value)
@@ -532,7 +544,10 @@ def compare_value(
                 entity_scope,
                 dims,
                 difference,
-                json.dumps({"imported": imported, "report": value, "evidence": evidence}),
+                json.dumps({
+                    "imported": imported, "report": value, "evidence": evidence,
+                    **({"sign_dispute": dispute} if dispute else {}),
+                }),
                 status,
             ),
         )
