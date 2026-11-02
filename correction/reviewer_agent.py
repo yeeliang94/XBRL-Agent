@@ -335,7 +335,7 @@ def trace_cascade_source(
             (run_id, cu, period, entity_scope, dims),
         ).fetchone()
 
-        from concept_model.cascade import describe_overall_effect
+        from concept_model.sign_effect import describe_overall_effect
 
         return {
             "found": True,

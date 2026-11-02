@@ -435,7 +435,7 @@ def _sign_only_note(conn, concept_uuid, imported, report) -> str:
     """Name a same-amount, opposite-sign difference and the row's overall sign."""
     if not imported or report != -imported:
         return ""
-    from concept_model.cascade import describe_overall_effect
+    from concept_model.sign_effect import describe_overall_effect
 
     effect = describe_overall_effect(conn, concept_uuid, imported)
     return f"Same amount, opposite sign. {effect}".rstrip()
@@ -493,10 +493,27 @@ def compare_value(
         difference = value - (imported or 0)
         # A reviewer's decision on this exact difference survives a repeat check.
         previous = conn.execute(
-            "SELECT residual,status FROM run_concept_conflicts WHERE run_id=? AND concept_uuid=? AND period='PY' "
+            "SELECT residual,status,detail FROM run_concept_conflicts WHERE run_id=? AND concept_uuid=? AND period='PY' "
             "AND entity_scope=? AND dimension_key=? AND kind='prior_year_comparative'",
             (run_id, concept_uuid, entity_scope, dims),
         ).fetchone()
+        # Only a person closes a sign-only difference. Otherwise resubmitting the
+        # workbook's own figure would clear a real sign error in last year's filing.
+        if (
+            previous and previous[1] == "open" and imported
+            and value == imported and previous[0] == -2 * imported
+        ):
+            detail = json.loads(previous[2])
+            detail["reasoning"] = evidence.strip()
+            conn.execute(
+                "UPDATE run_concept_conflicts SET detail=? WHERE run_id=? AND concept_uuid=? AND period='PY' "
+                "AND entity_scope=? AND dimension_key=? AND kind='prior_year_comparative'",
+                (json.dumps(detail), run_id, concept_uuid, entity_scope, dims),
+            )
+            return (
+                f"Reasoning recorded. Both figures stay on record (workbook={imported}, "
+                f"report={-imported}), and this difference stays open until a person decides it."
+            )
         status = "resolved" if difference == 0 else "open"
         sign_note = _sign_only_note(conn, concept_uuid, imported, value)
         if difference != 0 and previous and previous[0] == difference and previous[1] != "open":
@@ -530,8 +547,9 @@ def compare_value(
         return (
             f"Comparative differs: workbook={imported}, report={value}. {sign_note} "
             "Check whether the workbook figure has the effect the report shows. If it does, "
-            "call again with the value in the workbook's sign and explain why in evidence. "
-            "If it does not, leave this difference for review. Preserved workbook value."
+            "call again with the value in the workbook's sign and explain why in evidence; "
+            "that records your reasoning for the person who decides. Only a person can close "
+            "this difference. Preserved workbook value."
         )
     return f"Comparative differs: workbook={imported}, report={value}. Preserved workbook value; review required."
 
@@ -624,6 +642,7 @@ def check_results(db_path, run_id):
                             "Imported prior-year figure differs from the current report. "
                             + (f"{sign_note} " if sign_note else "")
                             + detail["evidence"]
+                            + (f" Reasoning: {detail['reasoning']}" if detail.get("reasoning") else "")
                         ),
                     )
                 )
@@ -644,7 +663,9 @@ def check_results(db_path, run_id):
                     actual=detail["report"],
                     message=(f"The report shows a prior-year figure the workbook leaves blank; it will not be filed. {detail['evidence']}"
                              if detail["imported"] is None else
-                             f"Calculated prior-year total differs from the current report. {detail['evidence']}"),
+                             f"Calculated prior-year total differs from the current report. "
+                             f"{_sign_only_note(conn, uid, detail['imported'], detail['report'])} {detail['evidence']}"
+                             + (f" Reasoning: {detail['reasoning']}" if detail.get("reasoning") else "")),
                 )
             )
         results.append(

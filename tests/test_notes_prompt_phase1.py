@@ -409,7 +409,7 @@ def test_base_prompt_has_sign_convention_troubleshooting():
     assert "sign-convention troubleshooting" in flat
     assert "do not infer the sign from wording alone" in flat
     assert "foreign exchange loss" in flat
-    assert "if the formula subtracts a row" in flat
+    assert "if the row is subtracted overall" in flat
 
 
 def test_sopl_prompt_keeps_loss_expenses_positive():

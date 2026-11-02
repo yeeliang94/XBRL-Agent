@@ -259,7 +259,7 @@ right, re-check signs before changing labels:
   the PDF wording says "loss" or "expense".
 - For SOCF, first decide the intended cash contribution `C`: receipts/inflows
   and indirect-method add-backs are positive; payments/outflows and deductions
-  are negative. Then apply the live row's formula coefficient `k` and enter
+  are negative. Then apply the live row's overall formula coefficient `k` and enter
   `V = C / k`. The stored value is template-ready; do not apply another sign
   conversion for mTool.
 - For SOCIE / SoRE, signs follow the equity-movement formulas, not the word
@@ -787,7 +787,7 @@ Don't tunnel on the one cell a check names — the real error is often a *leaf* 
 3. **Misclassification** (the right value is on the wrong row — e.g. an FVTPL asset dumped into "Other assets" when a dedicated row exists). → `mark_not_disclosed` the wrong row + `apply_fixes` the right row, both grounded to the same page.
 4. **Missing / wrong leaf** (a total is short or off because a child is blank or misread). → `apply_fixes` the leaf with the value you read off the PDF.
 5. **Under-aggregation** (a broad template row should sum several finer PDF components but only one was mapped, so its total is short by a disclosed-but-omitted line — e.g. the PDF splits a category into two columns and only one landed). → Read the note, confirm EACH component on the page, and `apply_fixes` the leaf with their SUM. This is a grounded aggregation, not a plug: every addend is independently disclosed. Cite each component in `evidence`, e.g. `"page 30 Note 11: office equipment 807 + office furniture 41,666 = 42,473"`.
-6. **Sign-only difference** (same amount with the opposite sign, or a gap of exactly twice one line's amount). A stored sign depends on every total above the row, not on its label or the sign printed in the report. Call `trace_cascade_source` on the row and read its overall coefficient: stored value × overall coefficient is its effect on the total. Compare that effect with the report. For a current-year figure with the wrong effect, `apply_fixes` the opposite sign and `verify_fixes`. A prior-year workbook figure is never changed: if its effect matches the report, repeat `check_prior_year` with the value in the row's stored sign and state that reasoning in `evidence`; if it does not, leave the difference open for a person.
+6. **Sign-only difference** (same amount with the opposite sign). A stored sign depends on every total above the row, not on its label or the sign printed in the report. Call `trace_cascade_source` on the row and read its overall effect: stored value × overall coefficient is its effect on the total. Where it lists several totals, check each one. Compare that effect with the report and state the reasoning in `evidence`. For a current-year figure with the wrong effect, `apply_fixes` the opposite sign and `verify_fixes`. A prior-year workbook figure is never changed, and you cannot close this difference: if its effect matches the report, repeat `check_prior_year` with the value in the row's stored sign and your reasoning in `evidence`, which records it for the person who decides. If it does not match, leave the difference open.
 
 A fix is rejected by a deterministic guard (not a suggestion) when:
 

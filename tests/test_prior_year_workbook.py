@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from concept_model.facts_api import FactWrite, apply_fact, clear_facts_for_template
+from concept_model.sign_effect import describe_overall_effect, overall_effects
 from concept_model.prior_year import (
     SOURCE,
     check_results,
@@ -1140,14 +1141,54 @@ def test_sign_only_comparative_difference_names_the_overall_sign(tmp_path):
     assert "prior_year_comparatives_differ" in preflight_codes(db, run)
     # A different amount is an ordinary difference, not a sign question.
     assert "opposite sign" not in compare_value(db, run, socf, uid, -71, "PDF page 11: (71)")
-    # Repeating the check in the stored sign clears the blocker; the import is untouched.
-    assert compare_value(db, run, socf, uid, 70, "PDF page 11: gain (70), subtracted overall") == "Comparative agrees."
-    assert "prior_year_comparatives_differ" not in preflight_codes(db, run)
+    # Back to the sign-only case: resubmitting the workbook's figure records the
+    # reasoning but cannot clear it, so a real sign error stays in front of a person.
+    compare_value(db, run, socf, uid, -70, "PDF page 11: gain (70)")
+    kept = compare_value(db, run, socf, uid, 70, "Subtracted overall, so +70 deducts the gain")
+    assert "stays open until a person decides" in kept
+    assert "prior_year_comparatives_differ" in preflight_codes(db, run)
+    failed = [r for r in check_results(db, run) if r.status == "failed"]
+    assert failed[0].actual == -70 and "PDF page 11: gain (70)" in failed[0].message
+    assert "Subtracted overall, so +70 deducts the gain" in failed[0].message
     with sqlite3.connect(db) as conn:
         assert conn.execute(
             "SELECT value FROM run_concept_facts WHERE run_id=? AND concept_uuid=?", (run, uid)
         ).fetchone()[0] == 70
+        conn.execute(
+            "UPDATE run_concept_conflicts SET status='dismissed' WHERE run_id=? AND kind='prior_year_comparative'",
+            (run,),
+        )
+    assert "prior_year_comparatives_differ" not in preflight_codes(db, run)
     # The reviewer sees the same fact when it traces the row, which has no children.
     trace = _format_trace(trace_cascade_source(db, run, concept_uuid=uid, period="PY"))
     assert "SUBTRACTED overall (coefficient -1)" in trace
+    # The overall sign agrees with the template formula walk the guidance uses.
+    from prompts._sign_conventions import _overall_coefficients, _template_sign_metadata
+    from tests._human_file_fixture import TEMPLATES
 
+    sheet = _template_sign_metadata(TEMPLATES / "07-SOCF-Indirect.xlsx").sheets[0]
+    parent_rows = dict(sheet.parent_rows)
+    with sqlite3.connect(db) as conn:
+        for row, concept in conn.execute(
+            "SELECT render_row,concept_uuid FROM concept_nodes WHERE template_id=? AND kind='LEAF'", (socf,),
+        ).fetchall():
+            tops, _ = overall_effects(conn, concept)
+            assert {sign for sign, _label in tops} == _overall_coefficients(parent_rows, row), row
+
+
+def test_overall_effect_names_every_total_and_keeps_large_figures_exact(tmp_path):
+    db = make_sofp_db(tmp_path)
+    socie = import_template_file(db, tmp_path, "09-SOCIE.xlsx")
+    socf = import_template_file(db, tmp_path, "07-SOCF-Indirect.xlsx")
+    with sqlite3.connect(db) as conn:
+        dividends = conn.execute(
+            "SELECT concept_uuid FROM concept_nodes WHERE template_id=? AND canonical_label='Dividends paid'",
+            (socie,),
+        ).fetchall()
+        texts = [describe_overall_effect(conn, uid) for uid, in dividends]
+        assert any("ADDED into `" in text and "SUBTRACTED from `" in text for text in texts)
+        gain = conn.execute(
+            "SELECT concept_uuid FROM concept_nodes WHERE template_id=? AND canonical_label LIKE '(Gain) loss on disposal of property%'",
+            (socf,),
+        ).fetchone()[0]
+        assert "A stored 1,234,567 has an effect of -1,234,567" in describe_overall_effect(conn, gain, 1234567)

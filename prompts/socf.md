@@ -39,7 +39,7 @@ receipts and payments. `read_template()` lists the live rows.
 
 - **Signs:** decide each line's cash contribution `C` (inflow or add-back
   positive, outflow or deduction negative), then enter `V = C / k` using the
-  live row coefficient `k`. Do not take the stored sign from the label's
+  live row's overall coefficient `k`. Do not take the stored sign from the label's
   direction or from SOPL conventions. The shared SIGN-CONVENTION
   TROUBLESHOOTING section applies.
 

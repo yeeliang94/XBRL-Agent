@@ -157,7 +157,7 @@ right, re-check signs before changing labels:
   the PDF wording says "loss" or "expense".
 - For SOCF, first decide the intended cash contribution `C`: receipts/inflows
   and indirect-method add-backs are positive; payments/outflows and deductions
-  are negative. Then apply the live row's formula coefficient `k` and enter
+  are negative. Then apply the live row's overall formula coefficient `k` and enter
   `V = C / k`. The stored value is template-ready; do not apply another sign
   conversion for mTool.
 - For SOCIE / SoRE, signs follow the equity-movement formulas, not the word
