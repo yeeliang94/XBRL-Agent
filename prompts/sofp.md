@@ -98,26 +98,21 @@ not silently fold it into "Cash and cash equivalents" just because it sits
 in the same note. A later SOCF-to-SOFP cash cross-check fails by exactly
 the pledged amount when this is folded in wrongly.
 
-=== MAPPING GUIDANCE (apply judgement — not a rulebook) ===
+=== SOFP CLASSIFICATION NOTES ===
 
-Map each line on the SUBSTANCE of what the note describes, not on surface
-wording. The points below are common patterns to reason from, not a closed
-list of commands. When two similar rows could both fit, call
-`lookup_definitions([...])` to read their official SSM definitions and choose
-on substance. Never fabricate template rows.
+Apply the shared CLASSIFICATION PRINCIPLES.
 
-- When a note's breakdown is finer than the sub-sheet, roll it up into the
-  coarsest matching field that still reflects the item's nature.
-- Accrual-flavoured liabilities (accrued bonus, accrued interest, accrued
-  expenses) normally belong in "Accruals" — that row is their proper home —
-  rather than the residual "Other current non-trade payables". Sum several
-  accrual lines into "Accruals" unless the note clearly treats one as
-  something distinct.
-- "Deferred income" / "income received in advance" normally maps to the
-  "Deferred income" row rather than "Contract liabilities" — unless the AFS
-  itself invokes MFRS 15 contract-liability treatment.
-- "Deposits" in receivable notes normally maps to the dedicated "Deposits"
-  row rather than "Other current non-trade receivables".
+Cash filing convention: default an unsplit cash balance, including "Cash on
+hand and at banks" or "Cash and bank balances", to `Balances with Licensed Banks` when that
+row exists in the active template. This is the filing convention for an
+unsplit cash amount; do not send it to `Other cash and cash equivalents`
+merely because the label includes cash on hand. When the source explicitly
+separates cash on hand and cash at bank, use their respective rows instead.
+A separately disclosed cash-on-hand amount belongs in `Cash in hand`.
+Do not invent a split or write an undisclosed cash-on-hand zero. Apply this
+independently for each period and entity scope. Keep separately disclosed
+deposits and other cash-equivalent components in their own suitable rows;
+this default does not move the entire cash-and-cash-equivalents total to banks.
 
 === NO-RESIDUAL-PLUG RULE (sub-sheet) ===
 
@@ -127,9 +122,6 @@ assets`, `Other investment property`, `Other investments in subsidiaries`,
 `Other investments in associates`, and `Other investments in joint
 ventures` — exist for entities whose disclosure is genuinely coarse or for a disclosed
 asset class with no suitable dedicated category, NOT as a balancing mechanism.
-A disclosed leasehold-improvements class may use Other property, plant and
-equipment when the live template has no suitable dedicated class. Cite its
-net carrying amount separately for each period; do not invent a remainder.
 
 NEVER plug a residual into these rows to make the sub-sheet `*Total …`
 match a face-sheet PPE / intangibles total. If the AFS note itself uses
@@ -154,86 +146,4 @@ is zero in the other, and NEVER let a non-zero class with a suitable dedicated
 row flow into the residual `Other …` bucket for that year. Because
 the sub-sheet total ties regardless of how the classes are split, a
 misallocation here is INVISIBLE to `verify_totals` — only your careful
-per-year reading prevents it. (Failure to avoid: a PPE note shows `Motor
-vehicles` PY net carrying = 85,078 and CY = 0; the dedicated `Motor
-vehicles` row must carry PY 85,078 and CY 0 — do NOT put 0 in both years
-and add 85,078 to `Office equipment, fixture and fittings`, which ties the
-total but misclassifies the class.)
-
-=== AFS NOTE → SSM ROW MAPPING (known confusing cases) ===
-
-These cover terms commonly used in Malaysian AFS notes. Treat them as worked
-examples of the underlying reasoning, NOT as an exhaustive rulebook: each one
-illustrates a principle (e.g. "trade vs other" turns on the nature of the item,
-not the counterparty). Apply that principle with judgement to whatever the note
-in front of you actually says, and when a case here doesn't quite fit — or two
-rows still look plausible — call `lookup_definitions([...])` to read the
-official SSM definitions and decide on substance. Both MFRS and MPERS templates
-use the same SSM labels, so this applies to both standards (rows referenced are
-illustrative — use the live template to find the actual row numbers in your
-variant).
-
-Inventories:
-- "Consumer products at cost / at NRV" → `Finished goods`. NOT
-  `Other inventories`. Consumer-product entities (Amway, Cosway, etc.)
-  routinely label their inventory this way; treat it as finished goods.
-- "Goods in transit" → `Finished goods` if the underlying nature is
-  finished, otherwise `Raw materials`. Do not put into `Other
-  inventories` unless the AFS itself uses "Other".
-
-Receivables:
-- "Trade receivables due from subsidiary / holding company / associate /
-  joint venture" → the matching `Trade receivables due from …` row,
-  NOT `Other receivables due from …`. The "trade vs other" axis is
-  driven by what the receivable IS (sale of goods/services = trade),
-  not by who the counterparty is.
-- "Amount owing by/from related parties" without further classification
-  defaults to `Other receivables due from other related parties` only
-  when the AFS gives no nature breakdown.
-
-Provisions:
-- `Warranty provision`, `Refunds provision`, `Restructuring provision`,
-  `Legal proceedings provision`, `Onerous contracts provision`, and
-  `Provision for decommissioning, restoration and rehabilitation costs`
-  each have dedicated rows under both Non-current and Current provisions.
-  Use them. Do NOT lump these into `Other current non-trade payables`
-  or `Other non-current non-trade payables`. (MPERS template lacks a
-  separate `Refunds provision` row — fold any refunds-related provision
-  into the closest matching MPERS row only when no dedicated row exists.)
-
-Payables:
-- "Accrued bonus", "Accrued interest", "Accrued expenses" → `Accruals`,
-  not `Other current non-trade payables`. The Accruals row is the
-  proper home for any accrual-flavoured liability.
-- "Deferred income" / "Income received in advance" → `Deferred income`
-  (under the matching Current/Non-current non-trade payables block),
-  NOT `Contract liabilities` on the face sheet — unless the AFS itself
-  invokes MFRS 15 contract-liability treatment.
-
-PPE detail:
-- "Plant and machinery" → `Plant and equipment` (or `Machinery` if a
-  dedicated row exists). Prefer the dedicated component row over `Other
-  property, plant and equipment` as a landing row.
-- "Capital work-in-progress" / "Assets under construction" →
-  `Construction in progress / Asset work-in progress`.
-- "Leasehold improvements" / "Renovations and improvements" → use the
-  suitable dedicated class if one exists. Otherwise use `Other property,
-  plant and equipment` for the separately disclosed class. Do not classify
-  improvements as office equipment merely because they are an office fit-out.
-  If two classes look plausible, use `lookup_definitions` before choosing.
-
-Cash:
-- Default an unsplit cash balance, including "Cash on hand and at banks"
-  or "Cash and bank balances", to `Balances with Licensed Banks` when that
-  row exists in the active template. This is the filing convention for an
-  unsplit cash amount; do not send it to `Other cash and cash equivalents`
-  merely because the label includes cash on hand. When the source explicitly
-  separates cash on hand and cash at bank, use their respective rows instead.
-  A separately disclosed cash-on-hand amount belongs in `Cash in hand`.
-  Do not invent a split or write an undisclosed cash-on-hand zero. Apply this
-  independently for each period and entity scope. Keep separately disclosed
-  deposits and other cash-equivalent components in their own suitable rows;
-  this default does not move the entire cash-and-cash-equivalents total to banks.
-- "Fixed deposits with licensed banks" → `Deposits placed with licensed
-  banks` (under Cash equivalents); prefer it over
-  `Other banking arrangements`.
+per-year reading prevents it.

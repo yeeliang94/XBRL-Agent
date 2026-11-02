@@ -49,8 +49,9 @@ They are not writable. Do not infer writability from a remembered row number.
 - **Closing retained earnings must match SOFP "Retained earnings".**
   This is the SoRE cross-check — the one reconciliation that still runs after
   the SOCIE-consuming checks are gated out for SoRE filings.
-- **Leave cells blank where there is no activity.** Do not enter zeros —
-  especially for the accounting-policy impact when no restatement applies.
+- **Leave a cell blank when the source shows no amount for that line.** Write
+  0 only under the shared printed-zero rule. An accounting-policy impact row
+  with no restatement stays blank.
 - **No equity-component columns.** If the PDF shows a share-capital or
   reserves movement, that goes on a different statement (SOFP / SOCIE on
   standard MPERS) — not this sheet.

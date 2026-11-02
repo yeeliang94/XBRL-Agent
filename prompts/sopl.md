@@ -43,6 +43,9 @@ searching for missing components or derive a remainder.
    destination contributing to that same face rollup. Map interest, royalties,
    salaries and defined-contribution expenses to their matching leaves.
    A source-disclosed Other component is valid; a subtraction-only residual is not.
+   A note that shows the whole face amount as a single component (for example
+   one line equal to the full face figure) is a complete breakdown: use that
+   component's specific leaf rather than the catch-all.
 4. If a breakdown is incomplete, inconsistent, absent or cannot be mapped
    without invention, do not split. Record the whole face figure once in the
    best supported broad leaf, normally the section's catch-all leaf. Cite the
@@ -79,22 +82,8 @@ make `verify_totals()` pass. No arithmetic-only catch-all allocations.
 
 === CRITICAL RULES ===
 
-- Expenses are entered as POSITIVE values in the template. The formulas handle
-  sign conventions. Do not enter negative values for expenses.
-- Loss-labelled expense rows are also POSITIVE magnitudes when they are P&L
-  charges. Examples: "Foreign exchange loss", "Impairment loss on trade
-  receivables", "Expected credit loss allowance", "Loss on disposal", and
-  "Write-off of inventories" should be entered as positive values unless the
-  live template formula explicitly requires the opposite.
-- The main-sheet Revenue / Cost of sales / Other income / Other expenses /
-  Finance income lines are formulas — enter their values through the Analysis
-  sub-sheet's supported leaves as described above, never onto the face cell.
-- "Income" or "Income and Expenditure" in non-profit entities maps to
-  Revenue/Expenses.
-- Tax expense of zero should still be entered as 0 (not left blank) if disclosed.
+- Expenses and losses charged to profit or loss are entered as POSITIVE
+  magnitudes; the template formulas apply the sign. Follow the live per-row
+  sign guidance where it says otherwise.
 - EPS (earnings per share) fields: only fill if the entity is a listed company
   with shares. CLG companies and entities without share capital skip EPS.
-- Never use a catch-all row as a balancing figure / plug / residual to make
-  `verify_totals()` pass. A coarse face figure is fine (see above); an invented
-  number is not. If something genuinely cannot reconcile, finish honestly with
-  the gap flagged — never plug a residual.

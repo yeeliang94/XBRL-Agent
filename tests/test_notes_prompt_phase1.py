@@ -417,9 +417,8 @@ def test_sopl_prompt_keeps_loss_expenses_positive():
     handle subtraction."""
     body = (_PROMPT_DIR / "sopl.md").read_text(encoding="utf-8")
     flat = _flatten(body)
-    assert "loss-labelled expense rows are also positive magnitudes" in flat
-    assert "foreign exchange loss" in flat
-    assert "impairment loss on trade receivables" in flat
+    assert "expenses and losses charged to profit or loss are entered as positive magnitudes" in flat
+    assert "follow the live per-row sign guidance" in flat
 
 
 def test_socie_mpers_group_section_keeps_scope_in_blocks():

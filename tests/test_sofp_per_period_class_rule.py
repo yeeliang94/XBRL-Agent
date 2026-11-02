@@ -42,9 +42,14 @@ def test_prompt_keeps_existing_no_residual_plug_rule():
     assert "Other property, plant and equipment" in p
 
 def test_unmatched_disclosed_improvements_are_not_residual_plugs():
+    """A disclosed class with no dedicated row may use the catch-all; a plug may not.
+
+    Stated as a principle, not a per-label rule (the leasehold-improvements
+    rule it replaces was reversed once and conflicted with prior filings).
+    """
     prompt = _sofp_prompt()
-    assert '"Leasehold improvements"' in prompt
-    assert "Otherwise use `Other property," in prompt
-    assert "separately disclosed class" in prompt
-    assert "office equipment merely because" in prompt
+    assert "for a disclosed\nasset class with no suitable dedicated category" in prompt
+    assert "A dedicated row is suitable only\n   when its definition covers the item itself" in prompt
+    assert "A disclosed class that no dedicated row covers goes to the catch-all" in prompt
     assert "NEVER plug a residual" in prompt
+    assert '"Leasehold improvements"' not in prompt

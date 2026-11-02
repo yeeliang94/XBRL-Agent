@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 import openpyxl
+import pytest
 
 from prompts import render_prompt
 from statement_types import StatementType
@@ -78,3 +79,56 @@ def test_sore_prompt_matches_live_writable_and_formula_rows():
     # templates changed. The prompt now uses labels and live writability.
     assert not re.search(r"\brow(?:s)?\s+(12|13|14|16|17|19|20|21)\b", prompt, re.I)
     assert "closing retained-earnings\n   row is a DATA_ENTRY row" in prompt
+
+
+def _words(text: str) -> set[str]:
+    # Singular forms: the SSM header itself reads "Equity, others components".
+    return {w.rstrip("s") for w in re.findall(r"[a-z-]+", text.lower())} - {"total", "of", "formula"}
+
+
+@pytest.mark.parametrize("prompt_file,template", [
+    ("socie.md", "XBRL-template-MFRS/Company/09-SOCIE.xlsx"),
+    ("socie_mpers.md", "XBRL-template-MPERS/Company/09-SOCIE.xlsx"),
+])
+def test_socie_column_maps_match_the_template_headers(prompt_file, template):
+    """Hardcoded SOCIE column maps are kept for the agent; they must not drift."""
+    text = (REPO / "prompts" / prompt_file).read_text(encoding="utf-8")
+    entries = [(letter, label) for letter, label in
+               re.findall(r"^- ([A-Z])(?: \(\d+\))?: ([^\n(—]+)", text, re.M)
+               if "evidence" not in label.lower()]  # unlabelled working column
+    assert len(entries) >= 10
+    ws = openpyxl.load_workbook(REPO / template, read_only=True).active
+    headers = {c.column_letter: str(c.value) for c in next(ws.iter_rows(min_row=2, max_row=2)) if c.value}
+    for letter, label in entries:
+        expected = _words(label)
+        header = headers.get(letter, "")
+        assert expected <= _words(header) if expected else header.lower().strip() == label.lower().strip(), (
+            f"{prompt_file} says column {letter} is '{label.strip()}', template header is '{header}'")
+
+
+def test_mfrs_socie_reserve_ranges_match_the_template_headers():
+    """Each named reserve must sit in the column its position in the range implies."""
+    text = (REPO / "prompts" / "socie.md").read_text(encoding="utf-8")
+    ranges = re.findall(r"^- ([A-Z])-([A-Z]): [^(\n]+\(([^)]+)\)", text, re.M)
+    assert len(ranges) == 2
+    ws = openpyxl.load_workbook(REPO / "XBRL-template-MFRS/Company/09-SOCIE.xlsx", read_only=True).active
+    headers = {c.column_letter: str(c.value) for c in next(ws.iter_rows(min_row=2, max_row=2)) if c.value}
+
+    def normal(value: str) -> str:
+        return " ".join(value.replace("FX", "foreign currency").replace("-", " ").lower().split())
+
+    for first, last, names in ranges:
+        letters = [chr(code) for code in range(ord(first), ord(last) + 1)]
+        reserves = names.split(",")
+        assert len(reserves) == len(letters)
+        for letter, reserve in zip(letters, reserves):
+            assert normal(reserve) in normal(headers[letter]), (
+                f"socie.md puts '{reserve.strip()}' in column {letter}, template header is '{headers[letter]}'")
+
+
+def test_mfrs_socie_period_row_ranges_match_the_template():
+    text = (REPO / "prompts" / "socie.md").read_text(encoding="utf-8")
+    ws = openpyxl.load_workbook(REPO / "XBRL-template-MFRS/Company/09-SOCIE.xlsx", read_only=True).active
+    for start, end in re.findall(r"Rows (\d+)-(\d+): (?:Current|Prior) period", text):
+        assert "beginning of period" in str(ws.cell(int(start), 1).value)
+        assert "end of period" in str(ws.cell(int(end), 1).value)

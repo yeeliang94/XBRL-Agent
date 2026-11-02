@@ -5,18 +5,10 @@
 Single sheet with four sections: Operating Activities, Investing Activities, Financing
 Activities, and Details of Cash (opening/closing balances).
 
-For **Indirect** method (137 rows, 109 data-entry):
-- Operating starts with Profit before tax, then adds back non-cash items (depreciation,
-  amortisation, impairment, disposals), adjusts for working capital changes, and arrives
-  at net cash from operations.
-- Sub-sections: profit adjustments, impairment adjustments, disposal adjustments,
-  write-off adjustments, working capital changes.
-- Most input-heavy template (109 data-entry rows).
-
-For **Direct** method (82 rows, 71 data-entry):
-- Operating shows actual cash receipts and payments (receipts from customers, payments
-  to suppliers, payments to employees, etc.).
-- Simpler structure but less common in Malaysia.
+For the **Indirect** method, Operating starts with Profit before tax, adds back
+non-cash items, adjusts for working-capital changes and arrives at net cash
+from operations. For the **Direct** method, Operating shows actual cash
+receipts and payments. `read_template()` lists the live rows.
 
 === STRATEGY ===
 
@@ -45,43 +37,19 @@ For **Direct** method (82 rows, 71 data-entry):
   truth and OVERRIDES the generic rules in this section for that row. The
   generic rules below are the fallback for rows the block does not list.
 
-- **Sign conventions are critical for SOCF:**
-  - First decide the line's intended cash contribution `C`: inflow/add-back =
-    positive; outflow/deduction = negative.
-  - Then use the live per-row coefficient `k` and enter `V = C / k`. A row
-    ADDED with +1 keeps the cash-direction sign. A row SUBTRACTED with -1
-    takes the opposite input sign.
-  - Indirect working-capital labels are standard-specific. A decrease in
-    receivables or increase in payables has a positive cash contribution, but
-    its TEMPLATE INPUT may be positive or negative depending on the live
-    coefficient. Do not use the label direction as the stored sign.
-  - Direct-method operating payments are normally ADDED and therefore
-    negative. Many investing/financing payment rows are SUBTRACTED and
-    therefore take positive magnitudes. Obey the live per-row block.
-  - Do not import SOPL sign rules into SOCF. A "loss" adjustment may be a
-    positive add-back, while a "payment" or "purchase" is normally negative
-    as a cash contribution but may require a positive TEMPLATE INPUT when its
-    subtotal subtracts it.
+- **Signs:** decide each line's cash contribution `C` (inflow or add-back
+  positive, outflow or deduction negative), then enter `V = C / k` using the
+  live row coefficient `k`. Do not take the stored sign from the label's
+  direction or from SOPL conventions. The shared SIGN-CONVENTION
+  TROUBLESHOOTING section applies.
 
-- **Closing cash ("Cash and cash equivalents at end of period") — check the
-  template before writing; behaviour differs by template:**
-  1. The **statement closing-balance line** sits immediately after
-     "Cash and cash equivalents at beginning of period". In most SOCF
-     templates this is a **blank data-entry row you MUST type directly**
-     (it equals beginning + net increase (decrease) after FX) — do not leave
-     it blank, it is the headline closing figure. In some templates it is
-     instead a **live formula** (read_template shows a `=...` in that cell);
-     when so, **leave it untouched** — never overwrite a template formula
-     (it computes itself once opening cash and the prior lines are filled).
-  2. Some templates **repeat the identical label under "Details of cash
-     flows"** as a reconciliation total computed from the *Cash and bank
-     balances* / *Bank overdraft* breakdown beneath it. **Never write to that
-     formula row** — fill the breakdown rows, and Excel computes the total.
-  So: fill the closing line ONLY when it is a blank cell, fill the Details
-  breakdown rows, and never type over a `=...` formula. If a "mandatory row
-  unfilled" or "cash at end" imbalance warning fires while the Details total
-  already shows the right number, it is almost always a blank statement
-  closing-balance line (item 1) that still needs typing.
+- **Closing cash:** fill every blank data-entry line the statement prints,
+  including the closing-balance line after "at beginning of period" when it is
+  a data-entry cell. Never type over a formula. Where the same label repeats as
+  a formula reconciliation total (for example under "Details of cash flows"),
+  fill its component rows instead. A "cash at end" or mandatory-row warning
+  while the details total is already right usually means the blank statement
+  closing line still needs its value.
 
 - Closing cash will be cross-checked against SOFP cash and bank balances LATER.
   You only see the SOCF here, so you cannot perform that check yourself — enter
@@ -137,32 +105,14 @@ For **Direct** method (82 rows, 71 data-entry):
   row or force a wrong one (this is the common case on the leaner templates,
   where the granular rows simply do not exist).
 
-- Lease payments under MFRS 16: principal → Financing activities, interest → Operating
-  or Financing (entity's choice). Check the entity's classification policy.
-  Split a payment only when the source explicitly identifies a combined amount
-  and supports its components. Never subtract separately disclosed interest
-  from a payment already labelled principal. Check the cash-flow face and the
-  liability movement reconciliation before a split. List the source components
-  and arithmetic for every split or aggregate. Account for each cash component
-  once within a period/entity's cash activities. Repetition in a note, another
-  statement or an indirect noncash addback is not duplicate cash allocation.
-  Preserve source-supported low-value lease presentation bridges and explain
-  both legs in the payment fact's evidence: name the source payment and page,
-  the live template subtotal where it is adjusted, and where it is deducted
-  later. State the source and template amounts for any affected subtotal;
-  verify the final operating and closing cash totals. Do not claim a bridge
-  unless the live formulas prove both legs. Equal section totals do not
-  establish correct classification.
-
-- For "Purchase of property, plant and equipment", first set `C` negative as
-  a cash outflow, then divide by that live row's coefficient. For an ordinary
-  "Proceeds from disposal" receipt, set `C` positive and apply the same rule.
-  The specialized discontinued-operation proceeds row (labelled either
-  "Proceeds from disposal of net cash and cash equivalents disposed off" or
-  "Disposal of discontinued operation, proceeds from disposal, net of cash
-  and cash equivalents disposed of") is one SSM taxonomy exception: its
-  linkbase subtracts the amount, so follow its authoritative per-row instruction.
-  Do not hardcode template-input signs across standards or variants.
+- **Combined payments:** split a payment (for example lease principal and
+  interest) only when the source identifies the components. Classify each part
+  where the entity's stated policy and the source statement put it. Never
+  subtract separately disclosed interest from a payment already labelled
+  principal. Account for each cash component once within a period/entity's
+  cash activities; a repeat in a note or an indirect add-back is not a second
+  cash flow. List the components and
+  arithmetic in `evidence`.
 
 - Some entities combine operating + investing, or have no financing activities — this
   is normal. Leave unused sections blank.
