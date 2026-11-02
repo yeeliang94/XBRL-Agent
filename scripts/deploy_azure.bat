@@ -122,7 +122,7 @@ if exist "%PKG%" del /q "%PKG%"
 :: robocopy exit codes 0-7 are success; >=8 is a real error.
 robocopy . "%STAGE%" /E /NFL /NDL /NJH /NJS /NP ^
     /XD output node_modules .git venv .pytest_cache web\node_modules backup-originals __pycache__ .vscode ^
-        data logs ab_work .codex-remote-attachments "%CD%\docs" ^
+        .claude .idea XBRL-Agent data logs ab_work .codex-remote-attachments "%CD%\docs" ^
     /XF .env .env.* *.pyc *.log *.db *.db-wal *.db-shm
 if %ERRORLEVEL% GEQ 8 ( echo ERROR: staging copy failed. & exit /b 1 )
 :: Python's zipfile writes forward-slash entry names. Windows PowerShell 5.1
