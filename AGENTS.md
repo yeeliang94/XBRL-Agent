@@ -155,6 +155,13 @@ whose code lives in one directory are in that directory's `AGENTS.md`
 - Keep secrets out of source, logs, fixtures, and responses. A production
   dependency requires a request-backed reason and user approval.
 
+## Windows Enterprise Environment
+
+The owner tests real runs there. It can pull from GitHub but cannot push. Name
+any run that only works there as unverified in the report. When you need
+something from it, write one self-contained instruction block the owner can
+paste to the agent there, including exactly what output to send back.
+
 ## Code Review Rules
 
 Prioritize behavior and regressions over formatting. Flag violations of the
