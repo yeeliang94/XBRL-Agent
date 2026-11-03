@@ -58,3 +58,6 @@ ab_work/
 /docs/updates/
 /docs/GUIDE-mtool-broken-file-windows-retest.md
 /docs/MTOOL-WINDOWS-TX27-TEST-PLAN.md
+
+# Veracode upload zips
+veracode/
