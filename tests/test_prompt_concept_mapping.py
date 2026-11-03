@@ -36,6 +36,10 @@ def test_classification_principles_reach_every_face_statement(statement, variant
     assert "prefer the most specific suitable row" in rendered
     assert "follow the source's own classification" in rendered
     assert "lookup_definitions" in rendered
+    # Runs 213 and 209: a missing fact or a state is not a missing row.
+    assert "treat `other …` as a conclusion" in rendered
+    assert "search before claiming absence" in rendered
+    assert "says where an item" in rendered
     # The per-label cheat-sheet is gone; principles, not a rulebook.
     assert "afs note → ssm row mapping" not in rendered
     assert "consumer products" not in rendered

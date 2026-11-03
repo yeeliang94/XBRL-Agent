@@ -14,7 +14,7 @@ def test_sopl_rendered_reconciliation_contract(standard, variant, level):
     assert "complete disclosed components reconcile exactly" in flat
     assert "each period and entity scope independently" in flat
     assert "Never retain the full face amount alongside its components" in flat
-    assert "report the unresolved breakdown/classification" in flat
+    assert "state the unresolved breakdown/classification" in flat
     assert "NEVER invent a balancing, residual or unanalysed amount" in flat
     assert "dedicated face-first workflow" in flat
     assert "ACCOUNTANT EXTRACTION PROCEDURE" not in prompt
