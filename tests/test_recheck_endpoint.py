@@ -244,14 +244,18 @@ def test_recheck_retains_imported_prior_year_differences_and_refreshes_coverage(
     assert response.status_code==200,response.text
     results=response.json()['results']
     assert any(r['name'].startswith('Prior-year comparative:') and r['status']=='failed' for r in results)
-    # The review table splits this name into its figure, scope and dimensions.
-    assert any(re.fullmatch(r'Prior-year comparative: .+ \[Company\] ?', r['name']) for r in results)
+    # Every surface shows this finished name as-is.
+    assert any(re.fullmatch(r'Prior-year comparative: [^*].* \(Company\)', r['name']) for r in results)
     assert sum(r['name']=='Prior-year comparative coverage' for r in results)==1
     # SOCIE cells share a row label, so the name must carry the column.
     with sqlite3.connect(srv.AUDIT_DB_PATH) as conn:
         conn.execute("UPDATE concept_nodes SET matrix_col_label='Issued capital' WHERE concept_uuid=?",(uid,))
     results=client.get(f'/api/runs/{client.run_id}/recheck').json()['results']
-    assert any(re.fullmatch(r'Prior-year comparative: .+, Issued capital \[Company\] ?', r['name']) for r in results)
+    assert any(re.fullmatch(r'Prior-year comparative: .+, Issued capital \(Company\)', r['name']) for r in results)
+    from concept_model.prior_year import _comparison_name
+    assert _comparison_name('*Number of shares', 'Company', '{"Axis":"ifrs-full_OrdinarySharesMember"}') == (
+        'Prior-year comparative: Number of shares (Company), Ordinary shares'
+    )
     assert srv._refresh_persisted_cross_checks(client.run_id)
     compare_value(srv.AUDIT_DB_PATH,client.run_id,tid,uid,10,'PDF page 8: agrees')
     response=client.get(f'/api/runs/{client.run_id}/recheck')

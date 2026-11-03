@@ -142,10 +142,10 @@ class _AttributionFootingBase:
             "comparands": [
                 Comparand(label=self._income_label + suffix, sheet=sheet,
                           value=income, role="lhs", statement=stmt_val, row=inc_row,
-                          period=period),
+                          period=period, tolerance=eff_tol),
                 Comparand(label=self._attribution_label + suffix, sheet=sheet,
                           value=attribution, role="rhs", statement=stmt_val,
-                          row=attr_row, period=period),
+                          row=attr_row, period=period, tolerance=eff_tol),
             ],
             "expected": income, "actual": attribution, "diff": diff,
             "sheet": sheet, "row": attr_row,

@@ -101,6 +101,8 @@ class Comparand:
     statement: str = ""         # the StatementType value the sheet belongs to
     row: Optional[int] = None
     period: str = "CY"
+    # Set when this period's comparison scaled the check's base tolerance.
+    tolerance: Optional[float] = None
 
 
 @dataclass

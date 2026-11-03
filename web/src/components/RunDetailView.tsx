@@ -1578,7 +1578,7 @@ export function RunDetailView({
               className={uiClass.btnSecondary}
               style={ui.buttonSecondary}
             >
-              {recheck.running ? "Checking…" : "Rerun checks"}
+              Rerun checks
             </button>
           </div>
           <ValidatorTab

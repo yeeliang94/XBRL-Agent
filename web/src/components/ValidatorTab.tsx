@@ -37,7 +37,7 @@ const STATUS_DISPLAY: Record<
   failed: { label: "Failed", symbol: STATUS_SYMBOLS.failure },
   // Advisory only (Phase 6.1 notes-consistency).
   warning: { label: "Warning", symbol: STATUS_SYMBOLS.attention },
-  pending: { label: "Pending", symbol: STATUS_SYMBOLS.inProgress },
+  pending: { label: "Waiting", symbol: STATUS_SYMBOLS.inProgress },
   blocked: { label: "Blocked", symbol: STATUS_SYMBOLS.attention },
   not_applicable: { label: "Not applicable", symbol: STATUS_SYMBOLS.inactive },
 };
@@ -78,36 +78,15 @@ function isOff(difference: number | null | undefined, tolerance: number | null |
   return difference != null && difference > (tolerance ?? 0);
 }
 
-/** One failed comparison of an imported prior-year figure. The server names
- *  these `Prior-year comparative: {label} [{scope}] {dimensions}` and stores
- *  the workbook value as `expected` and the report value as `actual`. */
+const PRIOR_YEAR_PREFIX = "Prior-year comparative: ";
+
+/** One failed comparison of an imported prior-year figure. The server finishes
+ *  the figure's name after this prefix and stores the workbook value as
+ *  `expected` and the report value as `actual`. */
 function priorYearFigure(check: CrossCheckResult): string | null {
-  if (check.status !== "failed") return null;
-  const match = /^Prior-year comparative: (.*) \[([^\]]+)\]\s*(.*)$/.exec(check.name);
-  if (!match) return null;
-  const [, label, scope, dimensions] = match;
-  const category = dimensionLabel(dimensions);
-  return `${label.replace(/^\*/, "")} (${scope})${category ? `, ${category}` : ""}`;
-}
-
-/** Reads `{"…Axis":"ifrs-full_OrdinarySharesMember"}` as "Ordinary shares". */
-function dimensionLabel(dimensions: string): string {
-  if (!dimensions) return "";
-  try {
-    return Object.values(JSON.parse(dimensions) as Record<string, string>)
-      .map((member) => {
-        const words = member.replace(/^.*_/, "").replace(/Member$/, "").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
-        return words.charAt(0).toUpperCase() + words.slice(1);
-      })
-      .join(", ");
-  } catch {
-    return dimensions;
-  }
-}
-
-/** The server opens this message with the sentence the table heading says. */
-function priorYearEvidence(message: string): string {
-  return message.replace(/^Imported prior-year figure differs from the current report\.\s*/, "");
+  return check.status === "failed" && check.name.startsWith(PRIOR_YEAR_PREFIX)
+    ? check.name.slice(PRIOR_YEAR_PREFIX.length)
+    : null;
 }
 
 function hasNoFigures(check: CrossCheckResult): boolean {
@@ -223,12 +202,24 @@ function TechnicalDetails({ message }: { message: string }) {
   );
 }
 
+const SAVED_COMPARISON = "Saved comparison";
+
 /** Compared figures by year. Two figures can be subtracted year by year; any
  *  other shape (attribution splits, Company and Group rows) keeps the summary
- *  difference the check saved. */
-function YearFigures({ check, label }: { check: CrossCheckResult; label: string }) {
-  const rows = figureRows(check.comparands ?? []);
-  const periods = ["CY", "PY", ...new Set((check.comparands ?? []).map((figure) => figure.period).filter((period) => period !== "CY" && period !== "PY"))];
+ *  difference the check saved. Older results saved one pair with no year. */
+function Figures({ check, label }: { check: CrossCheckResult; label: string }) {
+  const saved = !check.comparands?.length;
+  const [first, second] = crossCheckParties(check.name);
+  const comparands: CrossCheckComparand[] = saved
+    ? [
+        { label: first, sheet: "", statement: "", role: "lhs", period: SAVED_COMPARISON, value: check.expected ?? null },
+        { label: second, sheet: "", statement: "", role: "rhs", period: SAVED_COMPARISON, value: check.actual ?? null },
+      ]
+    : check.comparands!;
+  const rows = figureRows(comparands);
+  const periods = saved
+    ? [SAVED_COMPARISON]
+    : ["CY", "PY", ...new Set(comparands.map((figure) => figure.period).filter((period) => period !== "CY" && period !== "PY"))];
   const paired = rows.length === 2;
   return (
     <>
@@ -249,8 +240,13 @@ function YearFigures({ check, label }: { check: CrossCheckResult; label: string 
               <tr>
                 <th scope="row" style={styles.differenceLabel}>Difference</th>
                 {periods.map((period) => {
-                  const difference = gap(rows[0].values.get(period)?.value, rows[1].values.get(period)?.value);
-                  return <td key={period} style={{ ...styles.difference, ...(check.status !== "passed" && isOff(difference, check.tolerance) ? styles.off : {}) }}>{fmtCheckAmount(difference)}</td>;
+                  const [left, right] = rows.map((row) => row.values.get(period));
+                  const needsReview = check.status !== "passed";
+                  // A one-sided year fails its check, so the blank is the finding.
+                  const blankSide = needsReview && (left?.value == null) !== (right?.value == null);
+                  const difference = saved ? check.diff ?? gap(left?.value, right?.value) : gap(left?.value, right?.value);
+                  const off = blankSide || (needsReview && isOff(difference, left?.tolerance ?? check.tolerance));
+                  return <td key={period} style={{ ...styles.difference, ...(off ? styles.off : {}) }}>{blankSide ? "Blank on one side" : fmtCheckAmount(difference)}</td>;
                 })}
               </tr>
             )}
@@ -258,40 +254,10 @@ function YearFigures({ check, label }: { check: CrossCheckResult; label: string 
         </table>
       </div>
       {!paired && check.diff != null && <p style={styles.note}>Summary difference {fmtCheckAmount(check.diff)}</p>}
-      {rows.some((row) => periods.some((period) => row.values.get(period)?.value == null)) && <p style={styles.note}>— No saved figure for this year</p>}
+      {!saved && rows.some((row) => periods.some((period) => row.values.get(period)?.value == null)) && <p style={styles.note}>— No saved figure for this year</p>}
+      {saved && crossCheckSavesYearDetail(check.name) && <p style={styles.note}>Year detail was not saved for this older result. Rerun checks to see both years.</p>}
     </>
   );
-}
-
-/** Older results saved one pair of figures with no year attached. */
-function SavedFigures({ check, label }: { check: CrossCheckResult; label: string }) {
-  const [first, second] = crossCheckParties(check.name);
-  const difference = check.diff ?? gap(check.expected, check.actual);
-  return (
-    <>
-      <div role="region" aria-label={`${label} compared figures`} tabIndex={0} style={styles.tableRegion}>
-        <table aria-label={label} style={styles.table}>
-          <thead><tr>
-            <th scope="col" style={styles.th}>Compared figure</th>
-            <th scope="col" style={{ ...styles.th, ...styles.numberHead }}>Saved comparison</th>
-          </tr></thead>
-          <tbody>
-            <tr><th scope="row" style={styles.figureLabel}>{first}</th><td style={styles.number}>{fmtCheckAmount(check.expected)}</td></tr>
-            <tr><th scope="row" style={styles.figureLabel}>{second}</th><td style={styles.number}>{fmtCheckAmount(check.actual)}</td></tr>
-            <tr>
-              <th scope="row" style={styles.differenceLabel}>Difference</th>
-              <td style={{ ...styles.difference, ...(check.status !== "passed" && isOff(difference, check.tolerance) ? styles.off : {}) }}>{fmtCheckAmount(difference)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      {crossCheckSavesYearDetail(check.name) && <p style={styles.note}>Year detail was not saved for this older result. Rerun checks to see both years.</p>}
-    </>
-  );
-}
-
-function Figures({ check, label }: { check: CrossCheckResult; label: string }) {
-  return check.comparands?.length ? <YearFigures check={check} label={label} /> : <SavedFigures check={check} label={label} />;
 }
 
 /** A failed or blocked check, open by default because it needs a decision. */
@@ -343,7 +309,7 @@ function PriorYearChecks({ checks, opened, onToggle }: { checks: CrossCheckResul
             {checks.map((check, index) => {
               // Older saved results can repeat a name, so the row owns its key.
               const key = `evidence:${index}`;
-              const evidence = priorYearEvidence(check.message);
+              const evidence = check.message;
               const open = opened.has(key);
               const difference = gap(check.expected, check.actual);
               const oppositeSign = check.expected != null && check.expected !== 0 && check.expected === -(check.actual ?? 0);
@@ -381,20 +347,17 @@ function PriorYearChecks({ checks, opened, onToggle }: { checks: CrossCheckResul
 /** One line until opened: routine passes should not compete with problems. */
 function PassedCheck({ check, open, onToggle }: { check: CrossCheckResult; open: boolean; onToggle: () => void }) {
   const label = crossCheckLabel(check.name);
-  const noFigures = hasNoFigures(check);
-  if (noFigures && !check.message) return <QuietCheck check={check} />;
+  if (hasNoFigures(check)) return <QuietCheck check={check} />;
   return (
     <section aria-label={label} data-testid={`cross-check-row-${check.name}`} style={styles.quietCheck}>
       <div style={styles.checkHeader}>
         <h4 style={styles.checkTitle}><span title={check.name}>{label}</span></h4>
         <CheckStatus status={check.status} />
         <button type="button" className="app-btn-quiet" style={styles.rowAction} aria-expanded={open} onClick={onToggle}>
-          {noFigures ? (open ? "Hide details" : "Show details") : (open ? "Hide figures" : "Show figures")}
+          {open ? "Hide figures" : "Show figures"}
         </button>
       </div>
-      {open && (noFigures
-        ? <p style={styles.note}>{check.message}</p>
-        : <div style={styles.openFigures}><Figures check={check} label={label} /><TechnicalDetails message={check.message} /></div>)}
+      {open && <div style={styles.openFigures}><Figures check={check} label={label} /><TechnicalDetails message={check.message} /></div>}
     </section>
   );
 }

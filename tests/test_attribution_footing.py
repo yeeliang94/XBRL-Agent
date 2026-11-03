@@ -288,6 +288,15 @@ def test_xlsx_explicit_zero_attribution_is_validated(tmp_path):
     assert result.status == "failed", result.message
 
 
+def test_each_year_records_the_tolerance_that_decided_it():
+    # 5 off on 10 million passes here, so the review screen must not flag it.
+    evaluated = SOPLAttributionFootingCheck()._eval_scope(
+        10_000_000, 10_000_005, 1, 2, "SOPL", 1.0, "Company CY", "CY", is_company=False,
+    )
+    assert evaluated["verdict"] == "passed"
+    assert [c.tolerance for c in evaluated["comparands"]] == pytest.approx([10.000005, 10.000005])
+
+
 def test_xlsx_blank_attribution_is_not_applicable(tmp_path):
     """The flip side: genuinely BLANK attribution leaves stay not_applicable
     (no false-fail on a company filing that doesn't split the attribution)."""

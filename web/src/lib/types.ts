@@ -462,6 +462,7 @@ export interface CrossCheckComparand {
   statement: string;
   row?: number | null;
   period: string;
+  tolerance?: number | null;
 }
 
 /** Cross-check result as emitted in run_complete SSE event.

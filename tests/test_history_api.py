@@ -232,7 +232,7 @@ def test_get_run_detail_returns_full_payload(api_env):
     )
     figures = [
         {"label": "Total assets", "sheet": "SOFP", "value": value,
-         "role": "lhs", "statement": "SOFP", "row": 30, "period": period}
+         "role": "lhs", "statement": "SOFP", "row": 30, "period": period, "tolerance": None}
         for period, value in [("CY", 100), ("PY", 80)]
     ]
     with repo.db_session(db_path) as conn:

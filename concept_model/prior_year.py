@@ -628,6 +628,14 @@ _REVIEW_LABEL_SQL = (
 )
 
 
+def _comparison_name(label, scope, dims) -> str:
+    """The reviewer-facing name of one failed comparison, read as-is by every surface."""
+    from cross_checks.notes_numeric_footing import _member_label
+
+    category = ", ".join(_member_label(member) for member in json.loads(dims).values()) if dims else ""
+    return f"Prior-year comparative: {label.lstrip('*')} ({scope})" + (f", {category}" if category else "")
+
+
 def check_results(db_path, run_id):
     from cross_checks.framework import CrossCheckResult
 
@@ -660,13 +668,12 @@ def check_results(db_path, run_id):
                 sign_note = _sign_only_note(conn, uid, detail["imported"], detail["report"])
                 results.append(
                     CrossCheckResult(
-                        name=f"Prior-year comparative: {label} [{scope}] {dims}",
+                        name=_comparison_name(label, scope, dims),
                         status="failed",
                         expected=detail["imported"],
                         actual=detail["report"],
                         message=(
-                            "Imported prior-year figure differs from the current report. "
-                            + (f"{sign_note} " if sign_note else "")
+                            (f"{sign_note} " if sign_note else "")
                             + detail["evidence"]
                             + (f" Reasoning: {detail['reasoning']}" if detail.get("reasoning") else "")
                         ),
@@ -683,7 +690,7 @@ def check_results(db_path, run_id):
             detail = json.loads(raw)
             results.append(
                 CrossCheckResult(
-                    name=f"Prior-year comparative: {labels.get(uid, uid)} [{scope}] {dims}",
+                    name=_comparison_name(labels.get(uid, uid), scope, dims),
                     status="failed",
                     expected=detail["imported"],
                     actual=detail["report"],

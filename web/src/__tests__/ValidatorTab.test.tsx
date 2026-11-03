@@ -108,11 +108,12 @@ describe("ValidatorTab", () => {
     expect(failedRow.textContent).toContain("20");
   });
 
-  test("pending row still shows Pending status text", () => {
+  test("pending row says Waiting, the same word as its group", () => {
     render(<ValidatorTab crossChecks={makeCrossChecks()} />);
 
     const pendingRow = screen.getByTitle("soci_to_socie_tci").closest("section")!;
-    expect(pendingRow.textContent).toContain("Pending");
+    expect(pendingRow.textContent).toContain("Waiting");
+    expect(pendingRow.textContent).not.toContain("Pending");
     expect(pendingRow.textContent).not.toContain("agree.");
   });
 
@@ -255,7 +256,7 @@ describe("ValidatorTab", () => {
 
   test("prior-year failures share a table naming the workbook and the report", () => {
     const prior = (label: string, expected: number | null, actual: number | null, message: string): CrossCheckResult => ({
-      name: `Prior-year comparative: ${label} [Company] `, status: "failed", expected, actual, diff: null, tolerance: null, message,
+      name: `Prior-year comparative: ${label} (Company)`, status: "failed", expected, actual, diff: null, tolerance: null, message,
     });
     render(<ValidatorTab crossChecks={[
       makeCrossChecks()[0],
@@ -292,6 +293,37 @@ describe("ValidatorTab", () => {
     expect(previous.style.color).not.toBe(current.style.color);
   });
 
+  test("a year within its own scaled tolerance is not flagged beside a failing year", () => {
+    render(<ValidatorTab crossChecks={[{
+      name: "sopl_attribution_footing", status: "failed", expected: 80, actual: 60, diff: 20, tolerance: 1, message: "",
+      comparands: [
+        { label: "Profit (loss)", sheet: "SOPL", statement: "SOPL", role: "lhs", period: "CY", value: 10000000, tolerance: 10 },
+        { label: "Total profit (loss)", sheet: "SOPL", statement: "SOPL", role: "rhs", period: "CY", value: 10000005, tolerance: 10 },
+        { label: "Profit (loss)", sheet: "SOPL", statement: "SOPL", role: "lhs", period: "PY", value: 80, tolerance: 1 },
+        { label: "Total profit (loss)", sheet: "SOPL", statement: "SOPL", role: "rhs", period: "PY", value: 60, tolerance: 1 },
+      ],
+    }]} />);
+    const [current, previous] = within(screen.getByRole("rowheader", { name: "Difference" }).closest("tr")!).getAllByRole("cell");
+    expect(current).toHaveTextContent("5");
+    expect(previous).toHaveTextContent("20");
+    expect(previous.style.color).not.toBe(current.style.color);
+  });
+
+  test("a year with one blank side says so and is flagged", () => {
+    render(<ValidatorTab crossChecks={[{
+      name: "sofp_balance", status: "failed", expected: 80, actual: null, diff: null, tolerance: 1, message: "",
+      comparands: [
+        { label: "Total assets", sheet: "SOFP", statement: "SOFP", role: "lhs", period: "CY", value: 100 },
+        { label: "Total equity and liabilities", sheet: "SOFP", statement: "SOFP", role: "rhs", period: "CY", value: 100 },
+        { label: "Total assets", sheet: "SOFP", statement: "SOFP", role: "lhs", period: "PY", value: 80 },
+        { label: "Total equity and liabilities", sheet: "SOFP", statement: "SOFP", role: "rhs", period: "PY", value: null },
+      ],
+    }]} />);
+    const [current, previous] = within(screen.getByRole("rowheader", { name: "Difference" }).closest("tr")!).getAllByRole("cell");
+    expect(previous).toHaveTextContent("Blank on one side");
+    expect(previous.style.color).not.toBe(current.style.color);
+  });
+
   test("a failed check with no figures says so without claiming a discrepancy", () => {
     render(<ValidatorTab crossChecks={[{
       name: "sofp_balance", status: "failed", expected: null, actual: null, diff: null, tolerance: 1,
@@ -304,34 +336,32 @@ describe("ValidatorTab", () => {
     expect(within(row).queryByRole("table")).toBeNull();
   });
 
-  test("a passed check with no figures offers its details, not an empty table", () => {
+  test("a passed check with no figures keeps its message in technical details, not an empty table", () => {
     render(<ValidatorTab crossChecks={[{
       name: "Prior-year comparative coverage", status: "passed", expected: null, actual: null, diff: null, tolerance: null,
       message: "All imported figures assessed.",
     }]} />);
-    fireEvent.click(screen.getByRole("button", { name: "Show details" }));
+    expect(screen.getByText("Technical details")).toBeInTheDocument();
     expect(screen.getByText("All imported figures assessed.")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("table")).toBeNull();
   });
 
-  test("prior-year rows read as plain labels and stay separate", () => {
+  test("prior-year rows read as the server names them and stay separate", () => {
     const prior = (rest: string, message: string): CrossCheckResult => ({
       name: `Prior-year comparative: ${rest}`, status: "failed", expected: 10, actual: 12, diff: null, tolerance: null, message,
     });
     render(<ValidatorTab crossChecks={[
-      prior("*Equity at beginning of period, Issued capital [Company] ", "Imported prior-year figure differs from the current report. Page 8."),
-      prior('Number of shares [Company] {"ifrs-full_ClassesOfShareCapitalAxis":"ifrs-full_OrdinarySharesMember"}', "Imported prior-year figure differs from the current report. Page 9."),
+      prior("Number of shares (Company), Ordinary shares", "Page 9."),
       // Saved before columns joined the name: two rows, one name.
-      prior("Reserves [Company] ", "Imported prior-year figure differs from the current report. Page 10."),
-      prior("Reserves [Company] ", "Imported prior-year figure differs from the current report. Page 11."),
+      prior("Reserves (Company)", "Page 10."),
+      prior("Reserves (Company)", "Page 11."),
     ]} />);
-    expect(screen.getByRole("rowheader", { name: /^Equity at beginning of period, Issued capital \(Company\)/ })).toBeInTheDocument();
     expect(screen.getByRole("rowheader", { name: /^Number of shares \(Company\), Ordinary shares/ })).toBeInTheDocument();
     const rows = screen.getAllByRole("rowheader", { name: /^Reserves/ });
     fireEvent.click(within(rows[0]).getByRole("button", { name: "Show evidence" }));
     expect(screen.getByText("Page 10.")).toBeInTheDocument();
     expect(screen.queryByText("Page 11.")).toBeNull();
-    expect(screen.queryByText(/Imported prior-year figure differs/)).toBeNull();
   });
 
   test("figures that are all missing count as no figures", () => {
