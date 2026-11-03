@@ -712,7 +712,7 @@ describe("RunDetailView", () => {
     clickRunTab(/cross-checks/i);
     // Check name renders in plain language (D1); raw id is the title tooltip.
     expect(screen.getByTitle("sofp_balance")).toBeTruthy();
-    expect(screen.getByText("Passed")).toBeTruthy();
+    expect(within(screen.getByTestId("cross-check-row-sofp_balance")).getByText("Passed")).toBeTruthy();
   });
 
   test("surfaces a blocked cross-check as work needing attention", () => {
@@ -1817,7 +1817,7 @@ describe("RunDetailView", () => {
       clickRunTab(/^cross-checks$/i);
       fireEvent.click(screen.getByTestId("recheck-btn"));
       expect(await screen.findByTestId("recheck-summary")).toHaveTextContent(
-        "1 passed · 0 failed · 0 blocked · 1 warnings",
+        "1 warning · 1 passed",
       );
       expect(globalThis.fetch).toHaveBeenCalledWith(
         "/api/runs/42/recheck",

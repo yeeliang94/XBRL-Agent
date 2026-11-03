@@ -44,6 +44,7 @@ describe("ValidatorTab", () => {
     expect(screen.getByRole("columnheader", { name: "Saved comparison" })).toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "Current year" })).toBeNull();
     expect(screen.getByText(/Year detail was not saved/)).toBeInTheDocument();
+    expect(screen.getByRole("rowheader", { name: "Difference" })).toBeInTheDocument();
   });
 
   test("renders all 4 status states", () => {
@@ -171,7 +172,7 @@ describe("ValidatorTab", () => {
     ];
     const { container } = render(<ValidatorTab crossChecks={checks} />);
 
-    expect(screen.getByText(/Additional check details/i)).toBeTruthy();
+    expect(screen.getByText(/^Warnings/)).toBeTruthy();
     expect(screen.getByText(/income tax policy/)).toBeTruthy();
     expect(screen.getByText(/No overlap/)).toBeTruthy();
 
@@ -206,7 +207,7 @@ describe("ValidatorTab", () => {
     ];
     const { container } = render(<ValidatorTab crossChecks={checks} />);
 
-    expect(screen.getByText(/Additional check details/i)).toBeTruthy();
+    expect(screen.getByText(/^Warnings/)).toBeTruthy();
     // Numeric table not rendered.
     expect(container.querySelector("table")).toBeNull();
   });
@@ -227,7 +228,7 @@ describe("ValidatorTab", () => {
     const { container } = render(<ValidatorTab crossChecks={checks} />);
 
     expect(screen.queryByText("2 advisory warnings")).toBeNull();
-    expect(screen.getByText("Additional check details").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText(/^Warnings/).closest("details")).not.toHaveAttribute("open");
     expect(screen.queryByText(/can reflect printed folio numbers/i)).toBeNull();
     expect(screen.getByText(/Notes consistency:/i)).toBeInTheDocument();
     expect(screen.getByText(/Notes and face tie-out: Revenue/i)).toBeInTheDocument();
@@ -235,5 +236,140 @@ describe("ValidatorTab", () => {
     // The summary owns the warning state; individual items do not repeat a
     // badge/label that turns a five-item advisory list into visual noise.
     expect(screen.queryAllByText(/^Warning$/i)).toHaveLength(0);
+  });
+
+  test("problems come first and passes fold away while something needs review", () => {
+    const { container } = render(<ValidatorTab crossChecks={makeCrossChecks()} />);
+    const text = container.textContent ?? "";
+    expect(text.indexOf("Needs review")).toBeLessThan(text.indexOf("Waiting"));
+    expect(text.indexOf("Waiting")).toBeLessThan(text.indexOf("Passed"));
+    expect(screen.getByTestId("cross-check-row-sofp_balance").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByTestId("cross-check-row-socf_to_sofp_cash").closest("details")).not.toHaveAttribute("open");
+  });
+
+  test("passes stay listed when nothing needs review", () => {
+    render(<ValidatorTab crossChecks={[makeCrossChecks()[0]]} />);
+    expect(screen.getByRole("heading", { name: /^Passed/ })).toBeInTheDocument();
+    expect(screen.getByTestId("cross-check-row-sofp_balance").closest("details")).toBeNull();
+  });
+
+  test("prior-year failures share a table naming the workbook and the report", () => {
+    const prior = (label: string, expected: number | null, actual: number | null, message: string): CrossCheckResult => ({
+      name: `Prior-year comparative: ${label} [Company] `, status: "failed", expected, actual, diff: null, tolerance: null, message,
+    });
+    render(<ValidatorTab crossChecks={[
+      makeCrossChecks()[0],
+      prior("(Gain) loss on disposal", 70, -70, "Note 22 shows a gain."),
+      prior("Finance costs", null, 2410, "The report shows a figure the workbook leaves blank."),
+    ]} />);
+    expect(screen.getByRole("heading", { name: "2 prior-year figures differ from the current report" })).toBeInTheDocument();
+    const table = screen.getByRole("table", { name: "Prior-year differences" });
+    expect(within(table).getAllByRole("columnheader").map((cell) => cell.textContent)).toEqual(["Figure", "Workbook", "Current report", "Difference"]);
+    const first = within(table).getByRole("rowheader", { name: /disposal \(Company\)/ }).closest("tr")!;
+    expect(within(first).getAllByRole("cell").map((cell) => cell.textContent)).toEqual(["70", "-70", "140Opposite sign"]);
+    const blank = within(table).getByRole("rowheader", { name: /Finance costs \(Company\)/ }).closest("tr")!;
+    expect(blank).toHaveTextContent("Blank on one side");
+    expect(screen.queryByText(/First figure|Rerun checks/)).toBeNull();
+    expect(screen.queryByText("Note 22 shows a gain.")).toBeNull();
+    fireEvent.click(within(first).getByRole("button", { name: "Show evidence" }));
+    expect(screen.getByText("Note 22 shows a gain.")).toBeInTheDocument();
+  });
+
+  test("a difference shows under the year that differs, and rounding is not flagged", () => {
+    render(<ValidatorTab crossChecks={[{
+      name: "sopl_to_socie_profit", status: "failed", expected: 80, actual: 70, diff: 10, tolerance: 1, message: "",
+      comparands: [
+        { label: "Profit (loss)", sheet: "SOPL", statement: "SOPL", role: "lhs", period: "CY", value: 100 },
+        { label: "Profit (loss)", sheet: "SOCIE", statement: "SOCIE", role: "rhs", period: "CY", value: 101 },
+        { label: "Profit (loss)", sheet: "SOPL", statement: "SOPL", role: "lhs", period: "PY", value: 80 },
+        { label: "Profit (loss)", sheet: "SOCIE", statement: "SOCIE", role: "rhs", period: "PY", value: 70 },
+      ],
+    }]} />);
+    const row = screen.getByRole("rowheader", { name: "Difference" }).closest("tr")!;
+    const [current, previous] = within(row).getAllByRole("cell");
+    expect(current).toHaveTextContent("1");
+    expect(previous).toHaveTextContent("10");
+    expect(previous.style.color).not.toBe(current.style.color);
+  });
+
+  test("a failed check with no figures says so without claiming a discrepancy", () => {
+    render(<ValidatorTab crossChecks={[{
+      name: "sofp_balance", status: "failed", expected: null, actual: null, diff: null, tolerance: 1,
+      message: "Workbook missing for SOFP",
+    }]} />);
+    const row = screen.getByTestId("cross-check-row-sofp_balance");
+    expect(row).toHaveTextContent("There are no figures to compare");
+    expect(row).toHaveTextContent("Could not run: Balance sheet balances");
+    expect(row).not.toHaveTextContent("discrepancy");
+    expect(within(row).queryByRole("table")).toBeNull();
+  });
+
+  test("a passed check with no figures offers its details, not an empty table", () => {
+    render(<ValidatorTab crossChecks={[{
+      name: "Prior-year comparative coverage", status: "passed", expected: null, actual: null, diff: null, tolerance: null,
+      message: "All imported figures assessed.",
+    }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show details" }));
+    expect(screen.getByText("All imported figures assessed.")).toBeInTheDocument();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  test("prior-year rows read as plain labels and stay separate", () => {
+    const prior = (rest: string, message: string): CrossCheckResult => ({
+      name: `Prior-year comparative: ${rest}`, status: "failed", expected: 10, actual: 12, diff: null, tolerance: null, message,
+    });
+    render(<ValidatorTab crossChecks={[
+      prior("*Equity at beginning of period, Issued capital [Company] ", "Imported prior-year figure differs from the current report. Page 8."),
+      prior('Number of shares [Company] {"ifrs-full_ClassesOfShareCapitalAxis":"ifrs-full_OrdinarySharesMember"}', "Imported prior-year figure differs from the current report. Page 9."),
+      // Saved before columns joined the name: two rows, one name.
+      prior("Reserves [Company] ", "Imported prior-year figure differs from the current report. Page 10."),
+      prior("Reserves [Company] ", "Imported prior-year figure differs from the current report. Page 11."),
+    ]} />);
+    expect(screen.getByRole("rowheader", { name: /^Equity at beginning of period, Issued capital \(Company\)/ })).toBeInTheDocument();
+    expect(screen.getByRole("rowheader", { name: /^Number of shares \(Company\), Ordinary shares/ })).toBeInTheDocument();
+    const rows = screen.getAllByRole("rowheader", { name: /^Reserves/ });
+    fireEvent.click(within(rows[0]).getByRole("button", { name: "Show evidence" }));
+    expect(screen.getByText("Page 10.")).toBeInTheDocument();
+    expect(screen.queryByText("Page 11.")).toBeNull();
+    expect(screen.queryByText(/Imported prior-year figure differs/)).toBeNull();
+  });
+
+  test("figures that are all missing count as no figures", () => {
+    render(<ValidatorTab crossChecks={[{
+      name: "sofp_balance", status: "failed", expected: null, actual: null, diff: null, tolerance: 1, message: "Current year missing",
+      comparands: [
+        { label: "Total assets", sheet: "SOFP", statement: "SOFP", role: "lhs", period: "CY", value: null },
+        { label: "Total equity and liabilities", sheet: "SOFP", statement: "SOFP", role: "rhs", period: "CY", value: null },
+      ],
+    }]} />);
+    expect(screen.getByText(/There are no figures to compare/)).toBeInTheDocument();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  test("the rerun note appears only for checks that save year detail", () => {
+    render(<ValidatorTab crossChecks={[{
+      name: "Notes↔face tie-out: Revenue", status: "failed", expected: 10, actual: 12, diff: 2, tolerance: 1, message: "",
+    }]} />);
+    expect(screen.getByRole("rowheader", { name: "Difference" })).toBeInTheDocument();
+    expect(screen.queryByText(/older result/)).toBeNull();
+  });
+
+  test("a difference on a passed check is never flagged", () => {
+    render(<ValidatorTab crossChecks={[{
+      name: "sopl_attribution_footing", status: "passed", expected: 10000000, actual: 10000005, diff: 5, tolerance: 1, message: "",
+      comparands: [
+        { label: "Profit", sheet: "SOPL", statement: "SOPL", role: "lhs", period: "CY", value: 10000000 },
+        { label: "Attribution total", sheet: "SOPL", statement: "SOPL", role: "rhs", period: "CY", value: 10000005 },
+      ],
+    }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show figures" }));
+    const row = screen.getByRole("rowheader", { name: "Difference" }).closest("tr")!;
+    expect(within(row).getAllByRole("cell")[0].style.color).toBe("");
+  });
+
+  test("a waiting check keeps its reason one click away", () => {
+    render(<ValidatorTab crossChecks={[makeCrossChecks()[2]]} />);
+    expect(screen.getByText("Technical details").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("SOCI was not run in this extraction")).toBeInTheDocument();
   });
 });

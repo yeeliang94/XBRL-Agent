@@ -620,6 +620,14 @@ def incomplete_assessment():
     )
 
 
+# SOCIE matrix cells share one row label across columns, so a reviewer needs the
+# column to tell two failed comparisons apart.
+_REVIEW_LABEL_SQL = (
+    "CASE WHEN n.matrix_col_label IS NOT NULL "
+    "THEN n.canonical_label || ', ' || n.matrix_col_label ELSE n.canonical_label END"
+)
+
+
 def check_results(db_path, run_id):
     from cross_checks.framework import CrossCheckResult
 
@@ -627,7 +635,7 @@ def check_results(db_path, run_id):
         if not is_preserved(conn, run_id):
             return []
         facts = conn.execute(
-            "SELECT f.concept_uuid,f.entity_scope,f.dimension_key,n.canonical_label FROM run_concept_facts f "
+            f"SELECT f.concept_uuid,f.entity_scope,f.dimension_key,{_REVIEW_LABEL_SQL} FROM run_concept_facts f "
             "JOIN concept_nodes n USING(concept_uuid) WHERE f.run_id=? AND f.source=?",
             (run_id, SOURCE),
         ).fetchall()
@@ -665,7 +673,7 @@ def check_results(db_path, run_id):
                     )
                 )
         imported_keys = {(uid, scope, dims) for uid, scope, dims, _ in facts}
-        labels = dict(conn.execute("SELECT concept_uuid,canonical_label FROM concept_nodes"))
+        labels = dict(conn.execute(f"SELECT n.concept_uuid,{_REVIEW_LABEL_SQL} FROM concept_nodes n"))
         for (uid, scope, dims), (residual, raw, status) in comparisons.items():
             if (uid, scope, dims) in imported_keys or residual == 0:
                 continue

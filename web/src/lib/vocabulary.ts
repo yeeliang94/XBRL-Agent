@@ -179,6 +179,12 @@ const CROSS_CHECK_PARTIES: Record<string, [string, string]> = {
   soci_attribution_footing: ["Reported comprehensive income", "Attribution total"],
 };
 
+/** Statement checks now save figures by year, so one without them is an older
+ *  result that a rerun refreshes. Other checks only ever save a single pair. */
+export function crossCheckSavesYearDetail(name: string): boolean {
+  return name in CROSS_CHECK_PARTIES;
+}
+
 export function crossCheckParties(name: string): [string, string] {
   return CROSS_CHECK_PARTIES[name] ?? ["First figure", "Comparison figure"];
 }

@@ -1050,16 +1050,8 @@ export function RunDetailView({
       const payload = (await response.json()) as {
         results?: RunDetailJson["cross_checks"];
       };
-      const results = payload.results ?? [];
-      const passed = results.filter((row) => row.status === "passed").length;
-      const failed = results.filter((row) => row.status === "failed").length;
-      const blocked = results.filter((row) => row.status === "blocked").length;
-      const warnings = results.filter((row) => String(row.status) === "warning").length;
-      setCrossChecks(results);
-      setRecheck({
-        running: false,
-        summary: `${passed} passed · ${failed} failed · ${blocked} blocked · ${warnings} warnings`,
-      });
+      setCrossChecks(payload.results ?? []);
+      setRecheck({ running: false, summary: "" });
     } catch (error) {
       if ((error as { name?: string })?.name === "AbortError") return;
       setRecheck({ running: false, summary: "Checks could not be rerun." });
@@ -1576,7 +1568,7 @@ export function RunDetailView({
         <section style={styles.section} role="tabpanel">
           <div style={styles.recheckBar}>
             <span data-testid="recheck-summary" role="status" aria-live="polite" style={styles.recheckSummary}>
-              {recheck.summary || crossCheckOutcome(crossChecks)}
+              {recheck.running ? "Checking…" : recheck.summary || crossCheckOutcome(crossChecks)}
             </span>
             <button
               type="button"
@@ -1589,12 +1581,10 @@ export function RunDetailView({
               {recheck.running ? "Checking…" : "Rerun checks"}
             </button>
           </div>
-          <div style={styles.crossCheckScroller}>
-            <ValidatorTab
-              crossChecks={crossChecksForValidator(crossChecks)}
-              onSelectTarget={handleSelectTarget}
-            />
-          </div>
+          <ValidatorTab
+            crossChecks={crossChecksForValidator(crossChecks)}
+            onSelectTarget={handleSelectTarget}
+          />
           {/* Source-PDF verification for the selected check's target cell.
               Rendered only once a target is selected. */}
           {selectedTarget && (
@@ -1690,10 +1680,15 @@ function LiveRunSummary({ agents, onViewActivity }: { agents: RunAgentJson[]; on
 
 /** One plain-language line for the cross-check outcome, e.g. "1 failed · 4 passed". */
 function crossCheckOutcome(checks: RunDetailJson["cross_checks"]): string {
+  const count = (status: string) => checks.filter((row) => row.status === status).length;
+  const warnings = count("warning");
   const counts: [string, number][] = [
-    ["failed", checks.filter((row) => row.status === "failed").length],
-    ["passed", checks.filter((row) => row.status === "passed").length],
-    ["blocked", checks.filter((row) => row.status === "blocked").length],
+    ["failed", count("failed")],
+    ["blocked", count("blocked")],
+    [warnings === 1 ? "warning" : "warnings", warnings],
+    ["waiting", count("pending")],
+    ["passed", count("passed")],
+    ["not applicable", count("not_applicable")],
   ];
   return counts.filter(([, n]) => n > 0).map(([label, n]) => `${n} ${label}`).join(" · ");
 }
@@ -1733,10 +1728,6 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     gap: ds.space.lg,
-  } as React.CSSProperties,
-  crossCheckScroller: {
-    overflowX: "auto" as const,
-    maxWidth: "100%",
   } as React.CSSProperties,
   // Outcome on the left, the one action on the right, above the checks.
   recheckBar: {

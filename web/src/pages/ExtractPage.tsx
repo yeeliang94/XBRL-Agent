@@ -917,6 +917,7 @@ export function ActiveTabPanel({
           diff: r.diff,
           tolerance: r.tolerance,
           message: r.message,
+          comparands: r.comparands,
         }))
       : state.crossChecks;
     const showLiveSubtitle = state.crossChecks.length === 0 && liveProgress.phase !== null;
