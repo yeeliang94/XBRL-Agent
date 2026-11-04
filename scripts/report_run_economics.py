@@ -42,6 +42,7 @@ from typing import Optional
 REPO = Path(__file__).resolve().parent.parent
 DB = REPO / "output" / "xbrl_agent.db"
 sys.path.insert(0, str(REPO))
+from utils.paths import operator_path  # noqa: E402
 
 from pricing import cache_adjustment_from_stored_cost  # noqa: E402
 
@@ -131,7 +132,7 @@ def _static_prefix_share(trace_path: Path) -> Optional[float]:
     read_template return count as static; every request part before that
     response counts as billed. Returns None when the trace has no requests."""
     try:
-        data = json.loads(trace_path.read_text(encoding="utf-8"))
+        data = json.loads(operator_path(trace_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     messages = data.get("messages") if isinstance(data, dict) else data
@@ -314,7 +315,7 @@ def main(argv: list[str]) -> int:
     if not db_path.exists():
         print(f"Audit DB not found at {db_path}.")
         return 1
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"file:{operator_path(db_path)}?mode=ro", uri=True)
     try:
         if "--compare" in args:
             ids = [int(x) for x in args if x.isdigit()]

@@ -2009,3 +2009,19 @@ def test_final_payload_verification_rejects_duplicate_prose(footnote_template, t
                              {"fn_14": fragment})
     assert _verify_footnotes(output, "+FootnoteTexts", report["footnotes_written"],
                              {"fn_14": fragment + fragment}) == []
+
+
+def test_offline_fill_runs_as_a_lone_script_from_another_folder(tmp_path):
+    """No repo import may creep in: it has to run with the repo off the path."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    tool = Path(__file__).resolve().parent.parent / "mtool" / "offline_fill.py"
+    lone = tmp_path / "offline_fill.py"
+    lone.write_bytes(tool.read_bytes())
+    result = subprocess.run(
+        [sys.executable, str(lone), "--help"],
+        cwd=tmp_path, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr

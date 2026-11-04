@@ -7,6 +7,8 @@ old hashes and we can transparently re-hash on login.
 """
 from __future__ import annotations
 
+import secrets
+
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
 
@@ -21,7 +23,7 @@ MIN_PASSWORD_LEN = 8
 # A throwaway hash verified on the user-miss path so a request for an unknown
 # email costs the same ~argon2 time as a request for a real one — otherwise
 # response timing would reveal which emails have accounts (enumeration).
-_DUMMY_HASH = _ph.hash("constant-time-dummy-password")
+_DUMMY_HASH = _ph.hash(secrets.token_urlsafe(32))
 
 
 def hash_password(password: str) -> str:

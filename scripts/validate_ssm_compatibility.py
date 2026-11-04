@@ -24,6 +24,11 @@ Output:
 Investigation-only — does not modify the input file.
 """
 from __future__ import annotations
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from utils.paths import operator_path  # noqa: E402
 
 import argparse
 import sys
@@ -38,7 +43,7 @@ def introspect(xlsx_path: Path) -> Dict[str, Any]:
     if not xlsx_path.exists():
         raise FileNotFoundError(f"Not found: {xlsx_path}")
 
-    wb = load_workbook(xlsx_path, data_only=True)
+    wb = load_workbook(operator_path(xlsx_path), data_only=True)
 
     visible_sheets: List[str] = []
     hidden_sheets: List[str] = []

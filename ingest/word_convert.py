@@ -25,6 +25,7 @@ missing-converter case surfaces as a :class:`WordConversionError` at call time,
 never an ImportError at import time.
 """
 from __future__ import annotations
+from utils.paths import safe_path
 
 import logging
 import os
@@ -120,7 +121,7 @@ def _validate_docx_structure(src: Path) -> None:
     ``_OOXML_REQUIRED_MEMBERS``; anything else raises here.
     """
     try:
-        with zipfile.ZipFile(src) as zf:
+        with zipfile.ZipFile(safe_path(src)) as zf:
             names = set(zf.namelist())
     except (zipfile.BadZipFile, OSError) as exc:
         raise WordConversionError(
@@ -190,7 +191,7 @@ def _convert_with_soffice(src: Path, dest: Path, soffice: str) -> None:
     except OSError as exc:
         raise WordConversionError(f"Could not launch LibreOffice ({soffice}): {exc}") from exc
     finally:
-        shutil.rmtree(profile_dir, ignore_errors=True)
+        shutil.rmtree(safe_path(profile_dir), ignore_errors=True)
 
     if proc.returncode != 0:
         raise WordConversionError(
@@ -311,6 +312,11 @@ def convert_docx_to_pdf(src: str | os.PathLike, dest: str | os.PathLike) -> Path
     src_p = Path(src)
     dest_p = Path(dest)
 
+    # Both paths become command-line arguments; one starting with "-" would be
+    # read by the converter as an option.
+    if str(src_p).startswith("-") or str(dest_p).startswith("-"):
+        raise WordConversionError(f"Unsafe conversion path: {src_p} -> {dest_p}")
+
     if not src_p.exists():
         raise WordConversionError(f"Source .docx not found: {src_p}")
     if src_p.stat().st_size == 0:
@@ -325,7 +331,7 @@ def convert_docx_to_pdf(src: str | os.PathLike, dest: str | os.PathLike) -> Path
     # entry point.
     _validate_docx_structure(src_p)
 
-    dest_p.parent.mkdir(parents=True, exist_ok=True)
+    safe_path(dest_p.parent).mkdir(parents=True, exist_ok=True)
 
     _run_conversion(src_p, dest_p)
 

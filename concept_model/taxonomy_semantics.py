@@ -14,6 +14,7 @@ semantic address and remains usable by the extraction pipeline, but mTool
 readiness will report the missing filing identity.
 """
 from __future__ import annotations
+from utils.paths import safe_path
 
 from dataclasses import dataclass
 from functools import lru_cache
@@ -227,7 +228,7 @@ def _linear_addresses(path: Path, standard: str) -> dict[tuple[str, int, str | N
     roles = _ROLES_BY_FILE.get(path.name)
     if not roles:
         return {}
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
+    wb = openpyxl.load_workbook(safe_path(path), read_only=True, data_only=False)
     try:
         if len(wb.worksheets) != len(roles):
             return {}
@@ -270,7 +271,7 @@ def _linear_addresses(path: Path, standard: str) -> dict[tuple[str, int, str | N
 
 
 def _matrix_addresses(path: Path, standard: str, level: str) -> dict[tuple[str, int, str | None], dict[str, Any]]:
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
+    wb = openpyxl.load_workbook(safe_path(path), read_only=True, data_only=False)
     try:
         ws = wb["SOCIE"] if "SOCIE" in wb.sheetnames else wb[wb.sheetnames[0]]
         taxonomy_rows = list(_role_rows(standard, "610000"))

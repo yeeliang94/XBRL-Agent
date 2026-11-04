@@ -21,6 +21,7 @@ write also passes a deterministic no-fabrication guard
 (:func:`classify_notes_fix_guard`).
 """
 from __future__ import annotations
+from utils.paths import safe_path
 
 import json
 import logging
@@ -1609,7 +1610,7 @@ def create_notes_reviewer_agent(
     # review, 2026-08-01). Resolve the {{CROSS_SHEET:*}} tokens with the same
     # helper the extraction prompts use, so there is one mapping, not two.
     base_prompt = _apply_cross_sheet_tokens(
-        _PROMPT_PATH.read_text(encoding="utf-8").strip(), deps.filing_standard,
+        safe_path(_PROMPT_PATH).read_text(encoding="utf-8").strip(), deps.filing_standard,
     )
     if deps.source_generation_id is not None:
         if deps.integrity_mode.value == "enforce":

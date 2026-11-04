@@ -31,6 +31,7 @@ from typing import Any, Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from utils.paths import operator_path  # noqa: E402
 
 from utils.sanitize import sanitize  # noqa: E402 — after sys.path insert
 
@@ -191,7 +192,7 @@ def build_json(flags: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(operator_path(str(db_path))))
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -239,8 +240,8 @@ def main(argv: list[str]) -> int:
 
     md_path = _resolve(args.markdown)
     json_path = _resolve(args.json_path)
-    md_path.write_text(render_markdown(flags), encoding="utf-8")
-    json_path.write_text(
+    operator_path(md_path).write_text(render_markdown(flags), encoding="utf-8")
+    operator_path(json_path).write_text(
         json.dumps(build_json(flags), indent=2, ensure_ascii=False),
         encoding="utf-8",
     )

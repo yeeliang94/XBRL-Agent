@@ -7,6 +7,11 @@ that plan for the full specification, and `tests/test_mpers_generator.py` for
 the behaviour contract.
 """
 from __future__ import annotations
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from utils.paths import operator_path  # noqa: E402
 
 import re
 import xml.etree.ElementTree as ET
@@ -146,7 +151,7 @@ def _load_role_titles() -> dict[str, str]:
     definitionLink, one for presentationLink, etc.) but they all share the same
     `[NNNNNN] <title>` definition text, so dedup via dict merge is safe.
     """
-    text = _ROLE_XSD.read_text(encoding="utf-8")
+    text = operator_path(_ROLE_XSD).read_text(encoding="utf-8")
     return {m.group("num"): m.group("title").strip() for m in _ROLE_TITLE_PATTERN.finditer(text)}
 
 
@@ -628,7 +633,7 @@ def emit_template(
     else:
         raise ValueError(f"level={level!r} not supported")
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    operator_path(out_path.parent).mkdir(parents=True, exist_ok=True)
     wb.save(out_path)
 
 
@@ -1064,7 +1069,7 @@ def build_template(filename: str, level: str, out_dir: Path) -> Path:
             )
 
     out_path = out_dir / filename
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    operator_path(out_path.parent).mkdir(parents=True, exist_ok=True)
     wb.save(out_path)
     return out_path
 
@@ -1081,10 +1086,10 @@ def snapshot_backup_originals(level: str = "company") -> Path:
 
     src_dir = _REPO_ROOT / "XBRL-template-MPERS" / ("Company" if level == "company" else "Group")
     dst_dir = _REPO_ROOT / "XBRL-template-MPERS" / "backup-originals" / ("Company" if level == "company" else "Group")
-    dst_dir.mkdir(parents=True, exist_ok=True)
+    operator_path(dst_dir).mkdir(parents=True, exist_ok=True)
     for src in src_dir.glob("*.xlsx"):
         if not (dst_dir / src.name).exists():
-            shutil.copy2(src, dst_dir / src.name)
+            shutil.copy2(operator_path(src), operator_path(dst_dir / src.name))
     return dst_dir
 
 
@@ -1101,7 +1106,7 @@ def _evaluate_sofp_balance(filled_path: Path) -> bool:
     """
     import openpyxl
 
-    wb = openpyxl.load_workbook(filled_path)
+    wb = openpyxl.load_workbook(operator_path(filled_path))
     ws = wb["SOFP-CuNonCu"]
 
     # label -> row index
@@ -1220,12 +1225,12 @@ def _cli() -> int:
     if args.snapshot_dir:
         import shutil
         before_dir = args.snapshot_dir / 'before' / args.level.capitalize()
-        before_dir.mkdir(parents=True, exist_ok=True)
+        operator_path(before_dir).mkdir(parents=True, exist_ok=True)
         for source in ([out_dir / args.filename] if args.filename else out_dir.glob('*.xlsx')):
             target = before_dir / source.name
             if target.exists():
                 raise FileExistsError(f'Before snapshot already exists: {target}')
-            shutil.copy2(source, target)
+            shutil.copy2(operator_path(source), operator_path(target))
     emitted = ([build_template(args.filename, args.level, out_dir)] if args.filename else
                generate_all(level=args.level, statements=args.statements))
     print(f"emitted {len(emitted)} file(s) under {emitted[0].parent if emitted else '(none)'}")
@@ -1235,9 +1240,9 @@ def _cli() -> int:
     if args.snapshot:
         if args.snapshot_dir:
             dst = args.snapshot_dir / 'after' / args.level.capitalize()
-            dst.mkdir(parents=True, exist_ok=True)
+            operator_path(dst).mkdir(parents=True, exist_ok=True)
             for source in emitted:
-                shutil.copy2(source, dst / source.name)
+                shutil.copy2(operator_path(source), operator_path(dst / source.name))
         else:
             dst = snapshot_backup_originals(level=args.level)
         print(f"snapshotted to {dst}")

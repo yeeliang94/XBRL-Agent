@@ -12,6 +12,7 @@ The ``?from=/?to=`` → ``date_from/date_to`` rewrite middleware stays on the
 app in server.py (APIRouter has no middleware hook). Shared helpers are read
 through ``server.X`` at call time.
 """
+from utils.paths import safe_path
 import asyncio
 import json
 import logging
@@ -491,10 +492,11 @@ async def get_agent_trace_endpoint(
         )
 
     try:
-        payload = json.loads(trace_path.read_text(encoding="utf-8"))
+        payload = json.loads(safe_path(trace_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Could not read trace %s: %s", trace_path.name, exc)
         raise HTTPException(
-            status_code=500, detail=f"Could not read trace: {exc}"
+            status_code=500, detail="Could not read trace."
         )
     return payload
 

@@ -48,6 +48,7 @@ import zipfile
 
 # Allow ``python mtool/examples/mtool_broken_file_probe.py`` from repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from utils.paths import operator_path  # noqa: E402
 
 from mtool.offline_fill import (  # noqa: E402
     EXCEL_CELL_CHAR_LIMIT,
@@ -250,10 +251,10 @@ def inspect_workbook(
         ))
         return result
 
-    raw_file = workbook.read_bytes()
+    raw_file = operator_path(workbook).read_bytes()
     result["workbook_sha256"] = _sha256_bytes(raw_file)
     try:
-        with zipfile.ZipFile(workbook) as zf:
+        with zipfile.ZipFile(operator_path(workbook)) as zf:
             bad_member = zf.testzip()
             names = zf.namelist()
             duplicates = [name for name, count in Counter(names).items() if count > 1]
@@ -497,7 +498,7 @@ def _write_payload_copy(
 
     sst_xml = data["xl/sharedStrings.xml"].decode("utf-8")
     patched_sst = replace_shared_string(sst_xml, sst_index, payload)
-    output.parent.mkdir(parents=True, exist_ok=True)
+    operator_path(output.parent).mkdir(parents=True, exist_ok=True)
     write_patched_zip(
         str(source), str(output),
         {"xl/sharedStrings.xml": patched_sst.encode("utf-8")},
@@ -533,7 +534,7 @@ def make_boundary_workbook(
     inspected = inspect_workbook(output, {key})
     inspected["probe"] = {
         "source_workbook": str(source),
-        "source_sha256": _sha256_bytes(source.read_bytes()),
+        "source_sha256": _sha256_bytes(operator_path(source).read_bytes()),
         "key": key,
         "hidden_cell": written["hidden_cell"],
         "requested_decoded_utf16_units": decoded_length,
@@ -713,8 +714,8 @@ def _write_json(report: dict, path: Optional[str]) -> None:
     rendered = json.dumps(report, indent=2, ensure_ascii=False)
     if path:
         output = Path(path)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(rendered + "\n", encoding="utf-8")
+        operator_path(output.parent).mkdir(parents=True, exist_ok=True)
+        operator_path(output).write_text(rendered + "\n", encoding="utf-8")
     else:
         print(rendered)
 

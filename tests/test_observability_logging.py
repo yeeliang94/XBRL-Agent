@@ -34,3 +34,20 @@ def test_rotating_json_log_carries_correlation_and_redacts(tmp_path):
         for handler in set(root.handlers) - before:
             root.removeHandler(handler)
             handler.close()
+
+
+def test_request_text_cannot_forge_a_log_line(capfd):
+    root = logging.getLogger()
+    configure_logging(level="INFO")
+    # Added after configure_logging: the protection must not depend on which
+    # handlers existed when logging was set up.
+    handler = logging.StreamHandler()
+    root.addHandler(handler)
+    try:
+        logging.getLogger("test.observability").warning(
+            "upload %s", "a.pdf\r\nERROR forged entry",
+        )
+    finally:
+        root.removeHandler(handler)
+    lines = [line for line in capfd.readouterr().err.splitlines() if "a.pdf" in line]
+    assert lines == ["upload a.pdf\\r\\nERROR forged entry"]

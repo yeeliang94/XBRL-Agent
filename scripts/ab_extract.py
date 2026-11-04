@@ -23,10 +23,11 @@ assert LEVEL in ("company", "group")
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from utils.paths import operator_path  # noqa: E402
 WORK = ROOT / "ab_work"
-WORK.mkdir(exist_ok=True)
+operator_path(WORK).mkdir(exist_ok=True)
 OUT = WORK / f"output_{LEVEL}"
-OUT.mkdir(exist_ok=True)
+operator_path(OUT).mkdir(exist_ok=True)
 DB = WORK / f"audit_{LEVEL}.db"
 
 os.environ["LLM_PROXY_URL"] = "http://localhost:4000/v1"
@@ -48,7 +49,7 @@ pdf = ROOT / "data" / "FINCO-Audited-Financial-Statement-2021.pdf"
 print(f"[{LEVEL}] db={DB} out={OUT}")
 
 with TestClient(server.app) as client:
-    with open(pdf, "rb") as f:
+    with open(operator_path(pdf), "rb") as f:
         r = client.post(
             "/api/upload",
             files={"file": ("finco.pdf", f, "application/pdf")},
@@ -72,7 +73,7 @@ with TestClient(server.app) as client:
     dt = time.time() - t0
     print(f"[{LEVEL}] run status={resp.status_code} in {dt:.0f}s")
 
-conn = sqlite3.connect(str(DB))
+conn = sqlite3.connect(str(operator_path(str(DB))))
 conn.row_factory = sqlite3.Row
 row = conn.execute(
     "SELECT id, status, merged_workbook_path FROM runs ORDER BY id DESC LIMIT 1"

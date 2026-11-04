@@ -119,7 +119,7 @@ def compute_backoff_delay(exc: BaseException, attempt: int) -> float:
     schedule (also ceilinged). Jitter is always added so a parallel
     burst de-synchronises on retry.
     """
-    jitter = random.uniform(_JITTER_MIN, _JITTER_MAX)
+    jitter = random.SystemRandom().uniform(_JITTER_MIN, _JITTER_MAX)
     hint = parse_retry_after(exc)
     if hint is not None:
         return min(max(hint, _RL_FLOOR) + jitter, _RL_CEILING)

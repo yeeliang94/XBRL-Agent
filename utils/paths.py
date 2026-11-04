@@ -66,6 +66,65 @@ _TEMP_ROOTS: tuple[Path, ...] = tuple(
 )
 
 
+class UnsafePathError(PermissionError):
+    """A file path outside every approved folder. An OSError, so the existing
+    file-error handling around each operation applies to it too."""
+
+
+# Folders named on a command line for this process. Web requests never add here.
+_OPERATOR_ROOTS: list[Path] = []
+
+
+def approve_operator_folder(path: Union[str, os.PathLike]) -> Path:
+    """Approve a folder someone chose with a command-line option such as
+    ``--output-dir``. Lasts for this process only."""
+    resolved = operator_path(path)
+    _OPERATOR_ROOTS.append(resolved)
+    return resolved
+
+
+def _is_under_safe_root(resolved: Path) -> bool:
+    roots = [PROJECT_ROOT, *_TEMP_ROOTS]
+    # Read at call time: an operator's folders can sit outside the project, as
+    # on Azure App Service (/home/data).
+    configured = os.environ.get("XBRL_OUTPUT_DIR")
+    if configured:
+        roots.append(Path(configured).expanduser().resolve())
+    roots.extend(_OPERATOR_ROOTS)
+    return any(resolved.is_relative_to(root) for root in roots)
+
+
+def safe_path(path: Union[str, os.PathLike]) -> Path:
+    """Return ``path`` fully resolved, or raise UnsafePathError if it leaves the
+    approved folders. Every app file operation goes through this.
+
+    Symlinks and ``..`` resolve first, so neither can step outside a root.
+    """
+    text = os.fspath(path)
+    if "\x00" in text:
+        raise UnsafePathError(f"File path contains a null byte: {text!r}")
+    resolved = Path(text).expanduser().resolve()
+    if not _is_under_safe_root(resolved):
+        raise UnsafePathError(f"File path is outside the approved folders: {resolved}")
+    return resolved
+
+
+def safe_db_target(path: Union[str, os.PathLike]) -> str:
+    """``safe_path`` for sqlite3.connect, which also accepts an in-memory name."""
+    text = os.fspath(path)
+    return text if text == ":memory:" else str(safe_path(text))
+
+
+def operator_path(path: Union[str, os.PathLike]) -> Path:
+    """Resolve a path the person running a command-line tool typed. There is no
+    folder limit: they already have this machine's access, and pointing the
+    tool at their own file is its job. Never use this for web request data."""
+    text = os.fspath(path)
+    if "\x00" in text:
+        raise UnsafePathError(f"File path contains a null byte: {text!r}")
+    return Path(text).expanduser().resolve()
+
+
 def assert_writable_output_dir(
     output_dir: Union[str, Path],
     label: str = "output_dir",
@@ -87,21 +146,7 @@ def assert_writable_output_dir(
     that points elsewhere is still rejected.
     """
     resolved = Path(output_dir).expanduser().resolve()
-
-    def _under(parent: Path) -> bool:
-        try:
-            return resolved.is_relative_to(parent)
-        except AttributeError:
-            # Defensive: very old Python — manual prefix check.
-            return str(resolved).startswith(str(parent))
-
-    if _under(PROJECT_ROOT):
-        return resolved
-    for temp_root in _TEMP_ROOTS:
-        if _under(temp_root):
-            return resolved
-    configured_root = os.environ.get("XBRL_OUTPUT_DIR")
-    if configured_root and _under(Path(configured_root).expanduser().resolve()):
+    if _is_under_safe_root(resolved):
         return resolved
 
     raise ValueError(

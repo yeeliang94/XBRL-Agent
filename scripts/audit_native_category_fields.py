@@ -20,6 +20,7 @@ from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from utils.paths import approve_operator_folder, operator_path  # noqa: E402
 NS = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
 HREF = re.compile(r'[A-Za-z0-9_.-]+\.xsd#([A-Za-z_][A-Za-z0-9_.-]*)')
 
@@ -35,7 +36,7 @@ def schema_elements(filename):
 
 def raw_workbook(path):
     """Decode raw cells without calling mtool's parser or destination resolver."""
-    with zipfile.ZipFile(path) as archive:
+    with zipfile.ZipFile(operator_path(path)) as archive:
         entries = {name: archive.read(name) for name in archive.namelist()}
     shared = []
     if 'xl/sharedStrings.xml' in entries:
@@ -205,10 +206,10 @@ def run_workbook(source, output_dir, include_primary=False):
     standard = 'mpers' if '_MPERS_' in source.name else 'mfrs'
     level = 'group' if '_Group_' in source.name else 'company'
     first_time = '_FirstTime_' in source.name
-    output_dir.mkdir(parents=True, exist_ok=True)
+    operator_path(output_dir).mkdir(parents=True, exist_ok=True)
     fields = inventory(source)+(primary_inventory(source) if include_primary else [])
     source_entries, source_cells = raw_workbook(source)
-    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    source_hash = hashlib.sha256(operator_path(source).read_bytes()).hexdigest()
     db = output_dir/'facts.db'
     if db.exists():
         raise FileExistsError(db)
@@ -228,7 +229,7 @@ def run_workbook(source, output_dir, include_primary=False):
     roots = numeric_category_catalog(standard, roots_only=True)
     catalog = numeric_category_catalog(standard)
     counts = Counter()
-    with sqlite3.connect(db) as conn:
+    with sqlite3.connect(str(operator_path(db))) as conn:
         conn.row_factory = sqlite3.Row
         run = conn.execute("INSERT INTO runs(created_at,pdf_filename,status,run_config_json) VALUES (?,?,?,?)", (
             '2026-10-03', 'CATEGORY-QA-SYNTHETIC.pdf', 'completed', json.dumps({
@@ -361,7 +362,7 @@ def run_workbook(source, output_dir, include_primary=False):
                     negatives.append({'outcome':'rejected_as_designed','dimensions':dimensions,'detail':exc.detail})
         conn.commit()
     doc = build_fill_doc(db,run,filing_standard=standard,filing_level=level)
-    with sqlite3.connect(db) as conn:
+    with sqlite3.connect(str(operator_path(db))) as conn:
         conn.row_factory = sqlite3.Row
         config = conn.execute('SELECT run_config_json FROM runs WHERE id=?',(run,)).fetchone()[0]
         negative_run = conn.execute('INSERT INTO runs(created_at,pdf_filename,status,run_config_json) VALUES (?,?,?,?)',
@@ -399,7 +400,7 @@ def run_workbook(source, output_dir, include_primary=False):
             field['actual'] = actual
             field['outcome'] = 'mapped_correctly' if actual and float(actual) == field['value'] else 'numeric_readback_failed'
     from eval.human_file import read_human_file, HumanFileError
-    with sqlite3.connect(db) as conn:
+    with sqlite3.connect(str(operator_path(db))) as conn:
         conn.row_factory = sqlite3.Row
         try:
             reverse = read_human_file(conn,run,output,'thousands' if '_RM000' in source.name else 'units')
@@ -444,11 +445,11 @@ def run_workbook(source, output_dir, include_primary=False):
                'excluded_reason_counts':dict(Counter(w['reason_code'] for w in coverage.get('excluded_writes', []))),
                'mapped':coverage['mapped'],'unmapped':coverage['unmapped'],'ambiguous':coverage['ambiguous'],
                'numeric_written':len(report['written']),'formula_mismatches':len(report['mismatches']),
-               'source_sha256':source_hash, 'source_unchanged':source_hash == hashlib.sha256(source.read_bytes()).hexdigest(),
+               'source_sha256':source_hash, 'source_unchanged':source_hash == hashlib.sha256(operator_path(source).read_bytes()).hexdigest(),
                'reverse_issues':reverse_issues, 'reverse_error':reverse_error, 'formula_changes':formula_changes,
                'style_changes':style_changes,'negatives':negatives}
     for name, payload in [('fields',fields),('summary',summary),('coverage',coverage),('fill-report',report),('doc',doc)]:
-        (output_dir/f'{name}.json').write_text(json.dumps(payload,indent=2,default=str),encoding='utf-8')
+        (operator_path(output_dir/f'{name}.json')).write_text(json.dumps(payload,indent=2,default=str),encoding='utf-8')
     return summary
 
 
@@ -459,20 +460,21 @@ def main():
     parser.add_argument('--inventory-only', action='store_true')
     parser.add_argument('--include-primary', action='store_true')
     args = parser.parse_args()
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    approve_operator_folder(args.output_dir)
+    operator_path(args.output_dir).mkdir(parents=True, exist_ok=True)
     manifest = []
     for source in sorted((ROOT/'data').glob('mTool*.xlsx')):
         if args.filename and source.name != args.filename:
             continue
         fields = inventory(source)+(primary_inventory(source) if args.include_primary else [])
-        manifest.append({'filename':source.name,'sha256':hashlib.sha256(source.read_bytes()).hexdigest(),
+        manifest.append({'filename':source.name,'sha256':hashlib.sha256(operator_path(source).read_bytes()).hexdigest(),
                          'instances':len(fields),'fields':fields})
         print(source.name, len(fields), sorted({a for f in fields for a in f['dimensions']}), flush=True)
         if not args.inventory_only:
             result = run_workbook(source,args.output_dir/source.stem,args.include_primary)
             print(json.dumps({k:v for k,v in result.items() if k != 'reverse_issues'}
                              | {'reverse_issue_count':len(result['reverse_issues'])}),flush=True)
-    (args.output_dir/'inventory.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
+    (operator_path(args.output_dir/'inventory.json')).write_text(json.dumps(manifest,indent=2),encoding='utf-8')
 
 
 if __name__ == '__main__':

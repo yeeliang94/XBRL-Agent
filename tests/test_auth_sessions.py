@@ -215,3 +215,15 @@ def test_sweep_expired_auth_sessions_reaps_only_old_rows(tmp_path):
         assert remaining == {"live"}
     finally:
         conn.close()
+
+
+def test_session_key_without_env_is_not_published_in_the_code(monkeypatch):
+    from pathlib import Path
+
+    from auth import config
+
+    monkeypatch.delenv("SESSION_SECRET", raising=False)
+    key = config.session_secret()
+    assert len(key) >= 32
+    assert key == config.session_secret()
+    assert key not in Path(config.__file__).read_text(encoding="utf-8")

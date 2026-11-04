@@ -5,6 +5,7 @@ can run on every server start without a separate migration step. Real
 migrations (if they become necessary) will go through `schema_version`.
 """
 from __future__ import annotations
+from utils.paths import safe_db_target, safe_path
 
 import sqlite3
 from pathlib import Path
@@ -2286,9 +2287,9 @@ def init_db(path: str | Path) -> None:
     p = Path(path)
     # Make sure the parent directory exists so callers can pass paths like
     # ``output/xbrl_agent.db`` without pre-creating the folder themselves.
-    p.parent.mkdir(parents=True, exist_ok=True)
+    safe_path(p.parent).mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(str(p))
+    conn = sqlite3.connect(safe_db_target(str(p)))
     try:
         # Foreign keys are off by default in SQLite — turn them on per-conn.
         conn.execute("PRAGMA foreign_keys = ON")

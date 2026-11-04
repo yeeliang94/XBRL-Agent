@@ -7,6 +7,7 @@ Run mode: POST /api/run/{session_id} with RunConfigRequest body.
 Orchestrates N sub-agents via coordinator, merges workbooks, runs
 cross-checks, and persists results to SQLite audit DB.
 """
+from utils.paths import safe_db_target, safe_path
 # Force UTF-8 on Windows (avoids charmap codec errors with Unicode text from PDFs)
 import sys
 if sys.platform == "win32":
@@ -223,7 +224,7 @@ def _export_canonical_workbooks(
         # with the "01/01/YYYY" placeholder.
         scratch_path = all_workbook_paths.get(stmt)
         try:
-            shutil.copyfile(master, canon_path)
+            shutil.copyfile(safe_path(master), safe_path(canon_path))
             applied = export_run_to_xlsx(
                 db_path, run_id, canon_path,
                 filing_level=filing_level,
@@ -279,7 +280,7 @@ def _run_has_facts(db_path, run_id: int) -> Optional[bool]:
     """
     import sqlite3
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = sqlite3.connect(safe_db_target(str(db_path)))
         try:
             return conn.execute(
                 "SELECT 1 FROM run_concept_facts WHERE run_id = ? LIMIT 1",
@@ -400,7 +401,7 @@ def _reexport_and_remerge_from_facts(run_id: int) -> Optional[Path]:
             skip_recalc=True,
         )
         if not getattr(result, "success", False):
-            tmp_path.unlink(missing_ok=True)
+            safe_path(tmp_path).unlink(missing_ok=True)
             logger.warning(
                 "download re-export merge failed for run %s: %s",
                 run_id, getattr(result, "errors", None),
@@ -916,7 +917,7 @@ def _open_conflict_count(db_path, run_id) -> int:
     """
     import sqlite3
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = sqlite3.connect(safe_db_target(str(db_path)))
         try:
             return conn.execute(
                 "SELECT COUNT(*) FROM run_concept_conflicts "
@@ -1137,7 +1138,7 @@ def _warn_if_gemini_loses_thought_signatures(model_name: str, proxy_url: str) ->
     )
 
 
-def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
+def _create_proxy_model(model_name: str, proxy_url: str, api_key: str, *, use_given_key: bool = False):
     """Create a PydanticAI model with multi-provider support.
 
     Routing logic:
@@ -1194,7 +1195,9 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
         # The proxy authenticates with its own master key, not a provider key.
         # Prefer LLM_PROXY_API_KEY (local-dev proxy) and fall back to the passed
         # key (enterprise proxy, where GOOGLE_API_KEY is the real proxy key).
-        proxy_auth = os.environ.get("LLM_PROXY_API_KEY", "") or api_key
+        # use_given_key: the connection test on a new address must not send it
+        # a saved key.
+        proxy_auth = api_key if use_given_key else (os.environ.get("LLM_PROXY_API_KEY", "") or api_key)
         provider = OpenAIProvider(base_url=proxy_url, api_key=proxy_auth)
         if _detect_provider(model_name) == "openai":
             from pydantic_ai.models.openai import OpenAIResponsesModel
@@ -1656,7 +1659,7 @@ async def _run_reviewer_pass(
     # first. Checked BEFORE snapshotting so we never write a 0-row snapshot.
     import sqlite3 as _sqlite3_count
     try:
-        _cc = _sqlite3_count.connect(str(db_path))
+        _cc = _sqlite3_count.connect(safe_db_target(str(db_path)))
         try:
             _fact_count = _cc.execute(
                 "SELECT COUNT(*) FROM run_concept_facts WHERE run_id = ?",
@@ -1716,7 +1719,7 @@ async def _run_reviewer_pass(
     # Falls back to the PDF's parent (pdf_path is {output_dir}/uploaded.pdf).
     _review_out_dir: Optional[str] = None
     try:
-        _cc2 = _sqlite3_count.connect(str(db_path))
+        _cc2 = _sqlite3_count.connect(safe_db_target(str(db_path)))
         try:
             _row = _cc2.execute(
                 "SELECT output_dir FROM runs WHERE id = ?", (run_id,),
@@ -2342,19 +2345,19 @@ def _refresh_merged_notes_workbook(
 
     destination = Path(merged_workbook_path)
     fd, staged = tempfile.mkstemp(
-        suffix=".xlsx", dir=str(destination.resolve().parent),
+        suffix=".xlsx", dir=safe_path(str(destination.resolve().parent)),
     )
     os.close(fd)
     try:
-        shutil.copyfile(nxt, staged)
+        shutil.copyfile(safe_path(nxt), safe_path(staged))
         replace_with_retry(staged, destination)
     finally:
         try:
-            Path(staged).unlink(missing_ok=True)
+            safe_path(Path(staged)).unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
             pass
         try:
-            Path(nxt).unlink(missing_ok=True)
+            safe_path(Path(nxt)).unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
             pass
 
@@ -2733,7 +2736,7 @@ async def _run_notes_reviewer_pass(
         flag_persistence_error = _persist_flags_and_refresh()
         try:
             log_path = Path(output_dir) / "notes_reviewer_log.json"
-            log_path.write_text(
+            safe_path(log_path).write_text(
                 json.dumps(deps.correction_log, indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
@@ -3015,7 +3018,7 @@ def _save_trace(result, output_dir: str):
         "usage": usage_data,
         "output": result.output if isinstance(result.output, str) else str(result.output),
     }
-    trace_path.write_text(json.dumps(trace, indent=2, default=str), encoding="utf-8")
+    safe_path(trace_path).write_text(json.dumps(trace, indent=2, default=str), encoding="utf-8")
 
 
 def _strip_binary(obj):
@@ -3962,7 +3965,7 @@ def _load_available_models() -> list[dict]:
     if not models_file.exists():
         return []
     try:
-        return json.loads(models_file.read_text(encoding="utf-8"))
+        return json.loads(safe_path(models_file).read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Failed to load config/models.json: %s", exc)
         return []
@@ -4276,7 +4279,7 @@ def _run_notes_numeric_footing(run_id: int, filing_level: str,
             TOLERANCE, check_notes_numeric_footing,
         )
         import server as _self
-        with sqlite3.connect(str(_self.AUDIT_DB_PATH)) as conn:
+        with sqlite3.connect(safe_db_target(str(_self.AUDIT_DB_PATH))) as conn:
             findings = check_notes_numeric_footing(
                 conn, run_id, filing_level, filing_standard)
     except Exception:  # noqa: BLE001 — advisory, never fail a run
@@ -5236,7 +5239,7 @@ async def run_multi_agent_stream(
     # These are the only values create_run needs. Compute them up-front so
     # even a totally malformed request still leaves a History row behind.
     output_dir = str(session_dir)
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    safe_path(Path(output_dir)).mkdir(parents=True, exist_ok=True)
     # Read the original filename from the sidecar written at upload time.
     # The on-disk file is always "uploaded.pdf" so that downstream tools
     # can find it by a stable name; the sidecar records the user-visible
@@ -5245,7 +5248,7 @@ async def run_multi_agent_stream(
     sidecar = session_dir / "original_filename.txt"
     if sidecar.exists():
         try:
-            pdf_filename = sidecar.read_text(encoding="utf-8").strip() or "uploaded.pdf"
+            pdf_filename = safe_path(sidecar).read_text(encoding="utf-8").strip() or "uploaded.pdf"
         except OSError:
             pdf_filename = "uploaded.pdf"
     else:
@@ -5265,7 +5268,7 @@ async def run_multi_agent_stream(
     terminal_status: Optional[str] = None
     notes_review_finalize_gate: Optional[asyncio.Event] = None
     try:
-        db_conn = sqlite3.connect(str(AUDIT_DB_PATH))
+        db_conn = sqlite3.connect(safe_db_target(str(AUDIT_DB_PATH)))
         db_conn.execute("PRAGMA foreign_keys = ON")
         db_conn.execute("PRAGMA journal_mode = WAL")
         db_conn.execute("PRAGMA busy_timeout = 5000")
@@ -8537,7 +8540,7 @@ def _reexport_remerge_durable(run_id: int) -> bool:
         try:
             run = repo.fetch_run(conn, run_id)
             if run is not None and run.merged_workbook_path:
-                shutil.copyfile(final, run.merged_workbook_path)
+                shutil.copyfile(safe_path(final), safe_path(run.merged_workbook_path))
                 repo.mark_run_merged(conn, run_id, run.merged_workbook_path)
                 conn.commit()
                 return True
@@ -8548,7 +8551,7 @@ def _reexport_remerge_durable(run_id: int) -> bool:
     finally:
         for _p in [tmp, *overlay_temps]:
             try:
-                _p.unlink(missing_ok=True)
+                safe_path(_p).unlink(missing_ok=True)
             except Exception:  # noqa: BLE001
                 pass
     return False
@@ -8654,7 +8657,7 @@ def _open_audit_conn():
     # Concurrent first readers must not race the rollback-journal to WAL
     # transition. The lock covers setup only, not queries or transactions.
     with _audit_connection_init_lock:
-        conn = sqlite3.connect(str(AUDIT_DB_PATH))
+        conn = sqlite3.connect(safe_db_target(str(AUDIT_DB_PATH)))
         try:
             conn.execute("PRAGMA busy_timeout = 5000")
             conn.execute("PRAGMA foreign_keys = ON")
@@ -8676,7 +8679,7 @@ def _open_audit_conn():
         from db.schema import init_db
         init_db(AUDIT_DB_PATH)
         with _audit_connection_init_lock:
-            conn = sqlite3.connect(str(AUDIT_DB_PATH))
+            conn = sqlite3.connect(safe_db_target(str(AUDIT_DB_PATH)))
             try:
                 conn.execute("PRAGMA busy_timeout = 5000")
                 conn.execute("PRAGMA foreign_keys = ON")
@@ -8893,6 +8896,23 @@ async def _request_observability(request: Request, call_next):
 # Extracted as a helper so tests can wire it up against a temp dist
 # directory without monkeypatching module globals.
 
+# Blocks inline scripts and event handlers even if bad markup reaches a page.
+# Inline styles stay allowed because the frontend styles components that way.
+_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; "
+    "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+)
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("Content-Security-Policy", _CONTENT_SECURITY_POLICY)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    return response
+
+
 def mount_spa(app, dist_directory: Path) -> None:
     """Register the SPA fallback + StaticFiles mount onto a FastAPI app.
 
@@ -8920,11 +8940,11 @@ def mount_spa(app, dist_directory: Path) -> None:
             except ValueError:
                 raise HTTPException(status_code=404, detail="Not found")
             if candidate.is_file():
-                return FileResponse(str(candidate))
+                return FileResponse(safe_path(str(candidate)))
 
         # Otherwise hand back the SPA shell. The client router takes over
         # from here and renders the right view based on window.location.
-        return FileResponse(str(index_html), media_type="text/html")
+        return FileResponse(safe_path(str(index_html)), media_type="text/html")
 
     # Mount StaticFiles AFTER the catch-all so the catch-all wins for
     # arbitrary paths but the mount can still handle the bare "/" request

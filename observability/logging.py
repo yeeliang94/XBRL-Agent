@@ -20,6 +20,26 @@ _STRUCTURED_FIELDS = (
 )
 
 
+def _keep_on_one_line(record: logging.LogRecord) -> None:
+    """Stop text from a request or document forging extra log lines."""
+    try:
+        message = record.getMessage()
+    except Exception:  # noqa: BLE001 - a bad format string must not break the caller
+        return
+    if "\n" in message or "\r" in message:
+        record.msg = message.replace("\r", "\\r").replace("\n", "\\n")
+        record.args = None
+
+
+_BASE_RECORD_FACTORY = logging.getLogRecordFactory()
+
+
+def _one_line_record(*args: Any, **kwargs: Any) -> logging.LogRecord:
+    record = _BASE_RECORD_FACTORY(*args, **kwargs)
+    _keep_on_one_line(record)
+    return record
+
+
 class CorrelationFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if not getattr(record, "correlation_id", None):
@@ -61,6 +81,8 @@ def configure_logging(
     Console formatting is left to uvicorn/local tooling; the durable file is
     always structured JSON.
     """
+    # On the record itself, so it holds whichever handlers end up writing it.
+    logging.setLogRecordFactory(_one_line_record)
     root = logging.getLogger()
     resolved_level = (level or os.environ.get("XBRL_LOG_LEVEL", "INFO")).upper()
     root.setLevel(getattr(logging, resolved_level, logging.INFO))

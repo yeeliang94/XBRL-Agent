@@ -6,6 +6,11 @@ documented scalar/matrix layout, never concept_targets or exporter routing.
 Every slot is reported, including non-inputs and unsupported outcomes.
 """
 from __future__ import annotations
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from utils.paths import approve_operator_folder, operator_path  # noqa: E402
 
 import argparse
 from collections import Counter
@@ -36,7 +41,7 @@ from notes.persistence import overlay_notes_cells_into_workbook
 
 
 def fingerprint(path: Path) -> str:
-    return sha256(path.read_bytes()).hexdigest()
+    return sha256(operator_path(path).read_bytes()).hexdigest()
 
 
 def physical_coordinates(target, standard: str, level: str):
@@ -100,7 +105,7 @@ def import_for_audit(db: Path, path: Path, level: str, targets):
 
 def audit_templates(paths: list[Path], output: Path) -> dict:
     """Run the audit in isolated files. Return summary; retain row-level evidence."""
-    output.mkdir(parents=True, exist_ok=True)
+    operator_path(output).mkdir(parents=True, exist_ok=True)
     db = output / "canonical-audit.db"
     if db.exists():
         raise FileExistsError(f"Use a fresh evidence directory; database exists: {db}")
@@ -113,14 +118,14 @@ def audit_templates(paths: list[Path], output: Path) -> dict:
         before_hash = fingerprint(path)
         template_id, targets = targets_for_template(path)
         import_for_audit(db, path, level, targets)
-        wb = openpyxl.load_workbook(path, data_only=False)
+        wb = openpyxl.load_workbook(operator_path(path), data_only=False)
         original = snapshot(wb)
         protection = {s.title: str(s.protection) for s in wb}
         merges = {s.title: str(s.merged_cells) for s in wb}
         work = output / "workbooks" / relative
-        work.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(path, work)
-        conn = sqlite3.connect(db)
+        operator_path(work.parent).mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(operator_path(path), operator_path(work))
+        conn = sqlite3.connect(str(operator_path(db)))
         conn.row_factory = sqlite3.Row
         config = {"filing_standard": standard, "filing_level": level}
         run_id = conn.execute(
@@ -222,11 +227,11 @@ def audit_templates(paths: list[Path], output: Path) -> dict:
                 overlay = overlay_notes_cells_into_workbook(xlsx_path=work, run_id=run_id,
                                                             db_path=str(db), filing_level=level)
                 if overlay != work:
-                    shutil.copyfile(overlay, work)
-                    Path(overlay).unlink()
+                    shutil.copyfile(operator_path(overlay), operator_path(work))
+                    operator_path(Path(overlay)).unlink()
         except Exception as exc:
             export_error = str(exc)
-        final = openpyxl.load_workbook(work, data_only=False)
+        final = openpyxl.load_workbook(operator_path(work), data_only=False)
         after = snapshot(final)
         formula_changes = [f"{sheet}!{cell}" for (sheet, cell), state in original.items()
                            if isinstance(state["value"], str) and state["value"].startswith("=")
@@ -257,7 +262,7 @@ def audit_templates(paths: list[Path], output: Path) -> dict:
                                  "formula_changes": formula_changes, "style_changes": style_changes,
                                  "sheet_protection_preserved": protection_pass, "merged_cells_preserved": merges_pass,
                                  "export_error": export_error})
-        with sqlite3.connect(db) as conn:
+        with sqlite3.connect(str(operator_path(db))) as conn:
             clean = (export_error is None and all(r["status"] in {"passed", "preserved"} for r in local_records)
                      and not formula_changes and not style_changes and protection_pass and merges_pass and source_unchanged)
             conn.execute("UPDATE runs SET status=?,ended_at=? WHERE id=?",
@@ -280,10 +285,10 @@ def audit_templates(paths: list[Path], output: Path) -> dict:
                "notes_layout": "generated_plaintext_only_native_rich_rendering_not_tested",
                "templates_detail": template_records}
     for filename, records in (("declared-slots.jsonl", slot_records), ("physical-results.jsonl", physical_records)):
-        with (output / filename).open("w", encoding="utf-8") as handle:
+        with (operator_path(output / filename)).open("w", encoding="utf-8") as handle:
             for record in records:
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-    (output / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    (operator_path(output / "summary.json")).write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return summary
 
 
@@ -292,6 +297,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--template", action="append", help="Repository-relative template path; default all active templates")
     args = parser.parse_args()
+    approve_operator_folder(args.output)
     paths = [ROOT / p for p in args.template] if args.template else active_template_paths(ROOT)
     summary = audit_templates(paths, args.output.resolve())
     print(json.dumps({k: v for k, v in summary.items() if k != "templates_detail"}, indent=2))

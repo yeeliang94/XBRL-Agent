@@ -10,6 +10,7 @@ The route-local helpers/constants (``_resolve_run_pdf_path``, the DPI clamp,
 the download whitelist) live here since nothing
 else uses them. Shared run/fact helpers are read through ``server.X``.
 """
+from utils.paths import safe_path
 import asyncio
 import logging
 from pathlib import Path
@@ -90,7 +91,8 @@ async def pdf_info_endpoint(run_id: int):
         # file raises, which we surface as a 422 rather than a 500.
         pages = await asyncio.to_thread(count_pdf_pages, str(pdf_path))
     except Exception as exc:  # noqa: BLE001 — bad file is a client-visible condition
-        raise HTTPException(status_code=422, detail=f"Could not read source PDF: {exc}")
+        logger.warning("Could not read source PDF for run %s: %s", run_id, exc)
+        raise HTTPException(status_code=422, detail="Could not read source PDF.")
     return {"run_id": run_id, "pages": pages}
 
 
@@ -128,7 +130,8 @@ async def pdf_page_endpoint(run_id: int, page: int, dpi: int = _PDF_DEFAULT_DPI)
     try:
         total_pages = await asyncio.to_thread(count_pdf_pages, str(pdf_path))
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=422, detail=f"Could not read source PDF: {exc}")
+        logger.warning("Could not read source PDF for run %s: %s", run_id, exc)
+        raise HTTPException(status_code=422, detail="Could not read source PDF.")
     if page < 1 or page > total_pages:
         raise HTTPException(
             status_code=404,
@@ -145,7 +148,8 @@ async def pdf_page_endpoint(run_id: int, page: int, dpi: int = _PDF_DEFAULT_DPI)
             )
         )[0]
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=422, detail=f"Could not render page {page}: {exc}")
+        logger.warning("Could not render page %s for run %s: %s", page, run_id, exc)
+        raise HTTPException(status_code=422, detail=f"Could not render page {page}.")
     return Response(
         content=png_bytes,
         media_type="image/png",
@@ -222,4 +226,4 @@ async def download_result(session_id: str, filename: str):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found.")
 
-    return FileResponse(str(file_path), filename=filename)
+    return FileResponse(safe_path(str(file_path)), filename=filename)

@@ -9,6 +9,7 @@ the connection lifecycle. Use `db_session()` for the usual commit/rollback
 dance.
 """
 from __future__ import annotations
+from utils.paths import safe_db_target
 
 import json
 import sqlite3
@@ -304,7 +305,7 @@ def db_session(path: str | Path) -> Iterator[sqlite3.Connection]:
         `db_session` would raise `SQLITE_BUSY` when the recorder is
         mid-commit (peer-review finding I5).
     """
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(safe_db_target(str(path)))
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 5000")

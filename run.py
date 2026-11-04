@@ -388,6 +388,9 @@ if __name__ == "__main__":
         use_scout=args.use_scout,
     )
     if args.output_dir:
+        from utils.paths import approve_operator_folder
+
+        approve_operator_folder(args.output_dir)
         kwargs["output_dir"] = args.output_dir
 
     result = run_agent(**kwargs)

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { isBlankHtml, moveNotesCell, type NotesCell, type NotesSheet } from "../lib/notesCells";
+import { safeNotesHtml } from "../lib/safeHtml";
 import { notesSheetDisplayName } from "../lib/sheetLabels";
 import { ds } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
@@ -43,7 +44,7 @@ export function NotesDestinationCompare({ runId, sourceSheet, source, sheets, di
     </select>
     {destination && <>
       <p style={{ fontSize: 12 }}>{occupied ? "This field already has content. Choose an empty field to move." : "Empty destination. Moving leaves the current field empty and keeps its source evidence."}</p>
-      {occupied && <div className="tiptap" style={{ maxHeight: 220, overflow: "auto", padding: 12, border: `1px solid ${ds.grey200}` }} dangerouslySetInnerHTML={{ __html: destination.cell.html }} />}
+      {occupied && <div className="tiptap" style={{ maxHeight: 220, overflow: "auto", padding: 12, border: `1px solid ${ds.grey200}` }} dangerouslySetInnerHTML={{ __html: safeNotesHtml(destination.cell.html) }} />}
       <button type="button" style={{ ...ui.buttonGhost, marginTop: 8 }} disabled={disabled || busy || moved || occupied || source.content_revision == null || sourceIsBlank}
         onClick={async () => {
           if (source.content_revision == null) return;

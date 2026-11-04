@@ -646,7 +646,19 @@ async def test_connection(body: dict, request: Request):
 
     model_name = body.get("model") or os.environ.get("TEST_MODEL", _DEFAULT_MODEL_ID)
     api_key = body.get("api_key") or os.environ.get("GOOGLE_API_KEY", "")
-    proxy_url = body.get("proxy_url") or os.environ.get("LLM_PROXY_URL", "")
+    saved_proxy_url = os.environ.get("LLM_PROXY_URL", "")
+    proxy_url = body.get("proxy_url") or saved_proxy_url
+
+    # The saved key may only go to the saved address. Testing a new address
+    # needs a key typed for it, so this button can't send the key elsewhere.
+    if not isinstance(proxy_url, str):
+        return JSONResponse(status_code=400, content={"status": "error", "message": "Proxy address must be text."})
+    new_address = proxy_url.rstrip("/") != saved_proxy_url.rstrip("/")
+    if new_address and not body.get("api_key"):
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "Enter the API key to test a different proxy address."},
+        )
 
     if not api_key:
         return JSONResponse(status_code=400, content={"status": "error", "message": "API key is required."})
@@ -655,7 +667,7 @@ async def test_connection(body: dict, request: Request):
     try:
         from pydantic_ai import Agent
 
-        model = server._create_proxy_model(model_name, proxy_url, api_key)
+        model = server._create_proxy_model(model_name, proxy_url, api_key, use_given_key=new_address)
         test_agent = Agent(model)
         result = await test_agent.run("Say OK")
         latency_ms = int((time.time() - start) * 1000)

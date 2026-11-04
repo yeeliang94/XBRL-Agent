@@ -21,6 +21,7 @@ scope (owner decision). When document preparation has transcribed the pages
 instead, and each result says so (2026-09-25 owner decision).
 """
 from __future__ import annotations
+from utils.paths import safe_path
 
 import json
 import os
@@ -70,7 +71,7 @@ def _load_page_texts(pdf_path: str) -> tuple[list[str], list[str]]:
             if cached is not None:
                 _text_cache.move_to_end(key)
                 return cached
-    doc = fitz.open(pdf_path)
+    doc = fitz.open(safe_path(pdf_path))
     try:
         page_texts = [p.get_text("text") for p in doc]
     finally:

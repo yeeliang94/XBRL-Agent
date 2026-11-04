@@ -8,6 +8,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from utils.paths import operator_path  # noqa: E402
 
 from openpyxl import Workbook
 from scripts.generate_mpers_templates import walk_role_for_taxonomy, _apply_company_sheet_layout
@@ -16,7 +17,7 @@ from utils.workbook_io import atomic_save_workbook
 
 
 def generate(snapshot: Path) -> None:
-    snapshot.mkdir(parents=True, exist_ok=False)
+    operator_path(snapshot).mkdir(parents=True, exist_ok=False)
     for standard in ("mfrs", "mpers"):
         for report, (_, role, sheet) in REPORTS.items():
             rows = walk_role_for_taxonomy(ROOT / f"SSMxT_2022v1.0/rep/ssm/ca-2016/fs/{standard}", standard, role)
@@ -25,8 +26,8 @@ def generate(snapshot: Path) -> None:
                 relative = path.relative_to(ROOT)
                 if path.exists():
                     before = snapshot / "before" / relative
-                    before.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(path, before)
+                    operator_path(before.parent).mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(operator_path(path), operator_path(before))
                 wb = Workbook()
                 ws = wb.active
                 ws.title = sheet
@@ -37,8 +38,8 @@ def generate(snapshot: Path) -> None:
                 atomic_save_workbook(wb, str(path))
                 wb.close()
                 after = snapshot / "after" / relative
-                after.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(path, after)
+                operator_path(after.parent).mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(operator_path(path), operator_path(after))
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ list of surprises rather than silently skip them.  SOCIE's matrix layout
 raises ``UnsupportedSchemaShape`` until Phase 5 lands.
 """
 from __future__ import annotations
+from utils.paths import safe_path
 
 import re
 import uuid
@@ -146,7 +147,7 @@ def parse_template(xlsx_path: str) -> ConceptTree:
         _attach_semantic_addresses(tree, path)
         return tree
 
-    wb = openpyxl.load_workbook(str(path), data_only=False)
+    wb = openpyxl.load_workbook(safe_path(str(path)), data_only=False)
     nodes: list[ConceptNode] = []
     # First pass: per-sheet, classify every column-A row and collect any
     # formula edges.  Cross-sheet references are stashed for the second
@@ -299,7 +300,7 @@ def _parse_socie_matrix(path: Path, template_id: str) -> ConceptTree:
     period/scope dimension shifts the ROW (stacked blocks) rather than the
     column.
     """
-    wb = openpyxl.load_workbook(str(path), data_only=False)
+    wb = openpyxl.load_workbook(safe_path(str(path)), data_only=False)
     sheet_name = "SOCIE" if "SOCIE" in wb.sheetnames else wb.sheetnames[0]
     ws = wb[sheet_name]
 
@@ -823,7 +824,7 @@ def _cli_all(pretty: bool) -> int:
 
     repo = Path(__file__).resolve().parent.parent
     out_dir = repo / "output" / "concept_trees"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    safe_path(out_dir).mkdir(parents=True, exist_ok=True)
 
     template_roots = [
         repo / "XBRL-template-MFRS",
@@ -850,7 +851,7 @@ def _cli_all(pretty: bool) -> int:
                 skipped.append((xlsx, str(exc)))
                 continue
             indent = 2 if pretty else None
-            (out_dir / f"{tree.template_id}.json").write_text(
+            (safe_path(out_dir / f"{tree.template_id}.json")).write_text(
                 json.dumps(tree.to_json(), indent=indent, sort_keys=True),
                 encoding="utf-8",
             )

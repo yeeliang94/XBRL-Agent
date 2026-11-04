@@ -23,6 +23,11 @@ Usage:
         [--output-dir output] [--db output/xbrl_agent.db]
 """
 from __future__ import annotations
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from utils.paths import operator_path  # noqa: E402
 
 import argparse
 import json
@@ -95,7 +100,7 @@ def _category(part: dict) -> str:
 
 
 def analyze_trace(path: Path) -> dict:
-    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc = json.loads(operator_path(path).read_text(encoding="utf-8"))
     messages = doc.get("messages") or []
 
     tool_counts: dict[str, int] = {}
@@ -170,7 +175,7 @@ def analyze_trace(path: Path) -> dict:
 
 def load_rollups(db: Path) -> dict[str, dict]:
     """CORRECTION rollups keyed by the run's output dir name."""
-    conn = sqlite3.connect(str(db))
+    conn = sqlite3.connect(str(operator_path(str(db))))
     try:
         rows = conn.execute(
             "SELECT r.output_dir, a.model, a.status, a.total_cost, "

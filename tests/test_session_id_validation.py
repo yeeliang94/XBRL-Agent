@@ -76,3 +76,58 @@ def test_configured_output_root_outside_the_project_is_writable(monkeypatch):
     assert paths.assert_writable_output_dir(root / "session") == (root / "session").resolve()
     with pytest.raises(ValueError):
         paths.assert_writable_output_dir("/home/other/session")
+
+
+@pytest.mark.parametrize("path", [
+    "/etc/passwd",
+    "output/../../../../../../../../etc/passwd",
+    "~/.ssh/id_rsa",
+    "output/a\x00.xlsx",
+])
+def test_safe_path_refuses_paths_outside_approved_folders(path):
+    with pytest.raises(paths.UnsafePathError):
+        paths.safe_path(path)
+    assert issubclass(paths.UnsafePathError, OSError)
+
+
+def test_safe_path_refuses_a_symlink_that_leaves_the_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "PROJECT_ROOT", tmp_path / "project")
+    monkeypatch.setattr(paths, "_TEMP_ROOTS", (tmp_path / "project",))
+    (tmp_path / "project").mkdir()
+    (tmp_path / "secret.txt").write_text("x")
+    link = tmp_path / "project" / "link.txt"
+    link.symlink_to(tmp_path / "secret.txt")
+    with pytest.raises(paths.UnsafePathError):
+        paths.safe_path(link)
+
+
+def test_safe_path_accepts_project_temp_and_configured_folders(tmp_path, monkeypatch):
+    assert paths.safe_path(paths.PROJECT_ROOT / "output" / "a.xlsx").is_absolute()
+    assert paths.safe_path(tmp_path / "a.xlsx") == (tmp_path / "a.xlsx").resolve()
+    monkeypatch.setenv("XBRL_OUTPUT_DIR", "/home/data")
+    assert paths.safe_path("/home/data/run/a.xlsx").name == "a.xlsx"
+
+
+def test_database_open_is_guarded_but_memory_still_works():
+    from db.repository import db_session
+
+    assert paths.safe_db_target(":memory:") == ":memory:"
+    with pytest.raises(paths.UnsafePathError):
+        with db_session("/etc/xbrl-test.db"):
+            pass
+
+
+def test_command_line_tools_may_name_a_file_anywhere():
+    assert paths.operator_path("/etc/passwd").is_absolute()
+    with pytest.raises(paths.UnsafePathError):
+        paths.operator_path("a\x00.xlsx")
+
+
+def test_a_folder_named_on_the_command_line_is_approved(tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "_OPERATOR_ROOTS", [])
+    chosen = "/opt/xbrl-chosen-runs"
+    with pytest.raises(paths.UnsafePathError):
+        paths.safe_path(f"{chosen}/run_001/a.xlsx")
+    paths.approve_operator_folder(chosen)
+    assert paths.safe_path(f"{chosen}/run_001/a.xlsx").name == "a.xlsx"
+    assert paths.assert_writable_output_dir(f"{chosen}/run_001").name == "run_001"

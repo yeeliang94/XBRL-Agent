@@ -6,6 +6,7 @@ callers consume the resulting writable-target decision instead of recreating
 label, style, or row-position rules.
 """
 from __future__ import annotations
+from utils.paths import safe_db_target, safe_path
 
 from dataclasses import asdict, dataclass
 from functools import lru_cache
@@ -105,7 +106,7 @@ def _is_managed_template(path_value: str | Path) -> bool:
 
 
 def _workbook_fingerprint(path: Path) -> str:
-    return sha256(path.read_bytes()).hexdigest()
+    return sha256(safe_path(path).read_bytes()).hexdigest()
 
 
 def _reviewed_exception(path: Path, node: ConceptNode | None = None) -> str | None:
@@ -130,7 +131,7 @@ def _numeric_targets(path: Path) -> tuple[str, list[FilingTarget]]:
     # so the per-target drift check below becomes quadratic (about 10 seconds
     # for one live template).  A normal worksheet keeps cells addressable in
     # memory and makes the same checks constant-time.
-    wb = openpyxl.load_workbook(path, read_only=False, data_only=False)
+    wb = openpyxl.load_workbook(safe_path(path), read_only=False, data_only=False)
     try:
         for node in tree.concepts:
             rk = node.render_key
@@ -242,7 +243,7 @@ def _numeric_targets(path: Path) -> tuple[str, list[FilingTarget]]:
 
 def _prose_targets(path: Path) -> tuple[str, list[FilingTarget]]:
     from reports.registry import value_kind as report_value_kind
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
+    wb = openpyxl.load_workbook(safe_path(path), read_only=True, data_only=False)
     try:
         sheet = wb.sheetnames[0]
     finally:
@@ -425,7 +426,7 @@ def persist_template_manifest(db_path: str | Path, path_value: str | Path) -> in
     path = Path(path_value).resolve()
     fingerprint = _workbook_fingerprint(path)
     template_id = derive_template_id(path)
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(safe_db_target(str(db_path)))
     conn.execute("PRAGMA foreign_keys = ON")
     existing = conn.execute(
         "SELECT COUNT(*), MIN(manifest_version), MAX(manifest_version), "
@@ -660,7 +661,7 @@ def semantic_coverage_for_run(
     complete. Invalid historical values remain visible as quarantined counts.
     """
     family_prefix = f"{filing_standard.lower()}-{filing_level.lower()}-"
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(safe_db_target(str(db_path)))
     conn.row_factory = sqlite3.Row
     try:
         selected = {
@@ -874,7 +875,7 @@ def audit_active_templates(repository_root: str | Path) -> dict[str, Any]:
     paths = active_template_paths(repository_root)
     for path in paths:
         relative_path = path.resolve().relative_to(repository_root).as_posix()
-        wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
+        wb = openpyxl.load_workbook(safe_path(path), read_only=True, data_only=False)
         try:
             sheet_count = len(wb.sheetnames)
         finally:

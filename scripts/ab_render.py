@@ -22,6 +22,7 @@ assert LEVEL in ("company", "group")
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from utils.paths import operator_path  # noqa: E402
 WORK = ROOT / "ab_work"
 DB = WORK / f"audit_{LEVEL}.db"
 OUT = WORK / f"output_{LEVEL}"
@@ -34,7 +35,7 @@ import server  # noqa: E402
 server.OUTPUT_DIR = OUT
 server.AUDIT_DB_PATH = DB
 
-conn = sqlite3.connect(str(DB))
+conn = sqlite3.connect(str(operator_path(str(DB))))
 run_id = conn.execute("SELECT id FROM runs ORDER BY id DESC LIMIT 1").fetchone()[0]
 conn.close()
 
@@ -42,6 +43,6 @@ tmp = server._reexport_and_remerge_from_facts(run_id)
 if tmp is None:
     print(f"[{LEVEL}] re-export returned None (no facts / failure)")
     sys.exit(1)
-shutil.copyfile(tmp, OUT_PATH)
-Path(tmp).unlink(missing_ok=True)
+shutil.copyfile(operator_path(tmp), operator_path(OUT_PATH))
+operator_path(Path(tmp)).unlink(missing_ok=True)
 print(f"[{LEVEL}] run_id={run_id} rendered -> {OUT_PATH}")

@@ -1,5 +1,6 @@
 """Read-only projection of canonical facts for the legacy Data Preview tab."""
 from __future__ import annotations
+from utils.paths import safe_db_target, safe_path
 
 import json
 import sqlite3
@@ -20,7 +21,7 @@ def build_preview_fields(
         return []
     template_ids = list(statements_by_template_id)
     placeholders = ",".join("?" for _ in template_ids)
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(safe_db_target(str(db_path)))
     conn.row_factory = sqlite3.Row
     try:
         from concept_model.periods import run_periods
@@ -73,9 +74,9 @@ def build_preview_fields(
 def write_preview_result(path: str | Path, fields: list[dict]) -> None:
     """Atomically replace preview JSON, including the empty-result case."""
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    safe_path(target.parent).mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(target.name + ".tmp")
-    temporary.write_text(
+    safe_path(temporary).write_text(
         json.dumps({"fields": fields}, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
