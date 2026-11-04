@@ -61,3 +61,6 @@ ab_work/
 
 # Veracode upload zips
 veracode/
+
+# Local-only tool page, not part of the product
+tools/chomp/
