@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from utils.paths import approve_operator_folder, operator_path  # noqa: E402
+from utils.paths import approve_operator_folder, operator_entry_path, operator_path  # noqa: E402
 
 import argparse
 from collections import Counter
@@ -228,7 +228,7 @@ def audit_templates(paths: list[Path], output: Path) -> dict:
                                                             db_path=str(db), filing_level=level)
                 if overlay != work:
                     shutil.copyfile(operator_path(overlay), operator_path(work))
-                    operator_path(Path(overlay)).unlink()
+                    operator_entry_path(Path(overlay)).unlink()
         except Exception as exc:
             export_error = str(exc)
         final = openpyxl.load_workbook(operator_path(work), data_only=False)

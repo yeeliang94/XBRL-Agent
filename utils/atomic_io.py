@@ -1,6 +1,6 @@
 """Small cross-platform primitives for atomic file publication."""
 from __future__ import annotations
-from utils.paths import safe_path
+from utils.paths import safe_entry_path, safe_path
 
 import errno
 import json
@@ -46,7 +46,7 @@ def replace_with_retry(source: Pathish, destination: Pathish) -> None:
     delay = INITIAL_RETRY_DELAY_SECONDS
     for attempt in range(REPLACE_ATTEMPTS):
         try:
-            os.replace(safe_path(source), safe_path(destination))
+            os.replace(safe_entry_path(source), safe_entry_path(destination))
             return
         except OSError as exc:
             if attempt == REPLACE_ATTEMPTS - 1 or not _is_transient_replace_error(exc):
@@ -75,7 +75,7 @@ def write_json_atomic(
             os.fsync(handle.fileno())
         replace(temporary, destination)
     finally:
-        safe_path(Path(temporary)).unlink(missing_ok=True)
+        safe_entry_path(Path(temporary)).unlink(missing_ok=True)
 
 
 __all__ = ["replace_with_retry", "write_json_atomic"]

@@ -21,7 +21,7 @@ readiness reminders and the server-enforced report-acknowledgment before a
 degraded artifact is released (finding 5), not in hiding the feature.
 """
 from __future__ import annotations
-from utils.paths import safe_path
+from utils.paths import safe_entry_path, safe_path
 
 import json
 from contextlib import closing
@@ -1572,6 +1572,6 @@ def _operator_label(request) -> str | None:
 def _cleanup(path: Path) -> None:
     import shutil
     try:
-        shutil.rmtree(safe_path(path), ignore_errors=True)
+        shutil.rmtree(safe_entry_path(path), ignore_errors=True)
     except Exception:  # noqa: BLE001
         logger.warning("mTool temp cleanup failed for %s", path, exc_info=True)

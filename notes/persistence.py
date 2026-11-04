@@ -12,7 +12,7 @@ dependency — reliable to call from inside the coordinator's async
 hot path or from a unit test.
 """
 from __future__ import annotations
-from utils.paths import safe_path
+from utils.paths import safe_entry_path, safe_path
 
 import logging
 import json
@@ -559,6 +559,6 @@ def overlay_numeric_facts_into_workbook(
         wb.close()
 
     if not changed:
-        safe_path(tmp_path).unlink(missing_ok=True)
+        safe_entry_path(tmp_path).unlink(missing_ok=True)
         return xlsx_path
     return tmp_path

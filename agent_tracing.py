@@ -5,7 +5,7 @@ Previously duplicated verbatim across `coordinator.py`,
 owning it in one place.
 """
 from __future__ import annotations
-from utils.paths import safe_path
+from utils.paths import safe_entry_path, safe_path
 
 import dataclasses
 import json
@@ -277,7 +277,7 @@ def purge_run_diagnostics(
         for path in run_dir.glob(pattern):
             if path.parent.resolve() != run_dir or not (path.is_file() or path.is_symlink()):
                 continue
-            safe_path(path).unlink()
+            safe_entry_path(path).unlink()
             removed.append(path.name)
     return sorted(set(removed))
 
@@ -307,7 +307,7 @@ def purge_expired_diagnostics(
                 if not resolved.is_relative_to(root) or not path.is_file():
                     continue
                 if path.stat().st_mtime < cutoff:
-                    safe_path(path).unlink()
+                    safe_entry_path(path).unlink()
                     removed += 1
             except OSError:
                 logger.warning(

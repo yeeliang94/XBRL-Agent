@@ -22,7 +22,7 @@ assert LEVEL in ("company", "group")
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from utils.paths import operator_path  # noqa: E402
+from utils.paths import operator_entry_path, operator_path  # noqa: E402
 WORK = ROOT / "ab_work"
 DB = WORK / f"audit_{LEVEL}.db"
 OUT = WORK / f"output_{LEVEL}"
@@ -44,5 +44,5 @@ if tmp is None:
     print(f"[{LEVEL}] re-export returned None (no facts / failure)")
     sys.exit(1)
 shutil.copyfile(operator_path(tmp), operator_path(OUT_PATH))
-operator_path(Path(tmp)).unlink(missing_ok=True)
+operator_entry_path(Path(tmp)).unlink(missing_ok=True)
 print(f"[{LEVEL}] run_id={run_id} rendered -> {OUT_PATH}")

@@ -6,7 +6,7 @@ reply, change status and delete. Attached files are stored under
 or an admin; screenshots carry client figures, so there is no public link.
 """
 from __future__ import annotations
-from utils.paths import safe_path
+from utils.paths import safe_entry_path, safe_path
 
 import hashlib
 import io
@@ -170,7 +170,7 @@ async def create_issue(
                 stored = secrets.token_hex(16) + ext
                 tmp = issue_dir / (stored + ".part")
                 safe_path(tmp).write_bytes(data)
-                safe_path(tmp).replace(safe_path(issue_dir / stored))
+                safe_entry_path(tmp).replace(safe_entry_path(issue_dir / stored))
                 repo.add_issue_file(
                     conn, issue_id, stored, name, content_type, len(data),
                     hashlib.sha256(data).hexdigest(),
@@ -178,7 +178,7 @@ async def create_issue(
     except Exception:
         # The row rolled back; remove any files written for it.
         if issue_dir is not None:
-            shutil.rmtree(safe_path(issue_dir), ignore_errors=True)
+            shutil.rmtree(safe_entry_path(issue_dir), ignore_errors=True)
         raise
     return {"ok": True, "id": issue_id}
 
@@ -279,5 +279,5 @@ async def delete_issue(request: Request, issue_id: int):
         if not repo.delete_issue(conn, issue_id):
             return _error(404, "Issue not found.")
         repo.insert_audit_event(conn, auth_routes._actor_email(request), "issue_deleted", str(issue_id))
-    shutil.rmtree(safe_path(_issues_dir() / str(issue_id)), ignore_errors=True)
+    shutil.rmtree(safe_entry_path(_issues_dir() / str(issue_id)), ignore_errors=True)
     return {"ok": True}

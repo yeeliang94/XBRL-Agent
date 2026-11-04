@@ -109,3 +109,10 @@ def test_responses_block_inline_scripts():
     assert "script-src 'self'" in policy
     assert "'unsafe-inline'" not in policy.split("script-src", 1)[1].split(";", 1)[0]
     assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_built_in_api_pages_are_off(path):
+    import server
+
+    assert not any(getattr(route, "path", None) == path for route in server.app.routes)

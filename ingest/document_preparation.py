@@ -6,7 +6,7 @@ The process-wide FIFO request budget uses threading state, never loop-owned
 async primitives; capture, orientation, verification and boundary calls share it.
 """
 from __future__ import annotations
-from utils.paths import safe_path
+from utils.paths import safe_entry_path, safe_path
 
 import asyncio
 from collections import Counter, deque
@@ -570,7 +570,7 @@ def _atomic_text(path: Path, text: str) -> None:
         replace_with_retry(name, path)
     finally:
         if os.path.exists(name):
-            os.unlink(safe_path(name))
+            os.unlink(safe_entry_path(name))
 
 
 def _digest(path: Path) -> str:
@@ -704,7 +704,7 @@ def _derived_pdf(source: Path, target: Path, pages: list[dict]) -> None:
             doc.save(temporary)
             replace_with_retry(temporary, target)
         finally:
-            safe_path(temporary).unlink(missing_ok=True)
+            safe_entry_path(temporary).unlink(missing_ok=True)
 
 
 def _focused_views(source: Path, page_no: int, rotation: int) -> list[bytes]:

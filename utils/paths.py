@@ -75,6 +75,13 @@ class UnsafePathError(PermissionError):
 _OPERATOR_ROOTS: list[Path] = []
 
 
+def operator_entry_path(path: Union[str, os.PathLike]) -> Path:
+    """``operator_path`` for deleting, renaming or replacing: the same rule as
+    ``safe_entry_path``, without the folder limit."""
+    candidate = Path(os.fspath(path)).expanduser()
+    return _entry_under(operator_path(candidate.parent), candidate.name, path)
+
+
 def approve_operator_folder(path: Union[str, os.PathLike]) -> Path:
     """Approve a folder someone chose with a command-line option such as
     ``--output-dir``. Lasts for this process only."""
@@ -96,7 +103,8 @@ def _is_under_safe_root(resolved: Path) -> bool:
 
 def safe_path(path: Union[str, os.PathLike]) -> Path:
     """Return ``path`` fully resolved, or raise UnsafePathError if it leaves the
-    approved folders. Every app file operation goes through this.
+    approved folders. App file operations go through this; deletes, renames and
+    replaces use ``safe_entry_path``.
 
     Symlinks and ``..`` resolve first, so neither can step outside a root.
     """
@@ -107,6 +115,20 @@ def safe_path(path: Union[str, os.PathLike]) -> Path:
     if not _is_under_safe_root(resolved):
         raise UnsafePathError(f"File path is outside the approved folders: {resolved}")
     return resolved
+
+
+def _entry_under(parent: Path, name: str, original: object) -> Path:
+    if name in ("", ".", ".."):
+        raise UnsafePathError(f"File path has no file name: {original!r}")
+    return parent / name
+
+
+def safe_entry_path(path: Union[str, os.PathLike]) -> Path:
+    """``safe_path`` for deleting, renaming or replacing. Checks the containing
+    folder but keeps the last step as it is, so the operation acts on a symbolic
+    link itself and never on the file the link points to."""
+    candidate = Path(os.fspath(path)).expanduser()
+    return _entry_under(safe_path(candidate.parent), candidate.name, path)
 
 
 def safe_db_target(path: Union[str, os.PathLike]) -> str:

@@ -25,7 +25,7 @@ is left untouched and a warning is logged; the run does NOT fail on
 advisory recalc telemetry.
 """
 from __future__ import annotations
-from utils.paths import safe_path
+from utils.paths import safe_entry_path, safe_path
 
 import logging
 import os
@@ -181,7 +181,7 @@ def recalc_workbook(path: str | Path) -> Path:
     tmp_path = Path(tmp_str)
     try:
         wb.save(tmp_path)
-        safe_path(tmp_path).replace(safe_path(workbook_path))
+        safe_entry_path(tmp_path).replace(safe_entry_path(workbook_path))
     except Exception:  # noqa: BLE001
         logger.warning(
             "recalc: atomic save failed for %s — original workbook intact",
@@ -189,7 +189,7 @@ def recalc_workbook(path: str | Path) -> Path:
         )
         if tmp_path.exists():
             try:
-                safe_path(tmp_path).unlink()
+                safe_entry_path(tmp_path).unlink()
             except OSError:
                 pass
         return workbook_path

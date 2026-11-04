@@ -3,7 +3,7 @@
 Endpoints: ``POST /api/upload``, ``POST /api/scout/{session_id}``.
 Shared state/helpers are reached through ``server.X`` at call time.
 """
-from utils.paths import safe_db_target, safe_path
+from utils.paths import safe_db_target, safe_entry_path, safe_path
 import asyncio
 import json
 import logging
@@ -104,8 +104,8 @@ async def upload_pdf(file: UploadFile = File(...)):
                     # file so a half-written upload doesn't linger.
                     out.close()
                     try:
-                        safe_path(target).unlink()
-                        safe_path(session_dir).rmdir()
+                        safe_entry_path(target).unlink()
+                        safe_entry_path(session_dir).rmdir()
                     except OSError:
                         pass
                     raise HTTPException(
@@ -119,8 +119,8 @@ async def upload_pdf(file: UploadFile = File(...)):
         # Clean up partial files on any non-HTTP error.
         try:
             if target.exists():
-                safe_path(target).unlink()
-            safe_path(session_dir).rmdir()
+                safe_entry_path(target).unlink()
+            safe_entry_path(session_dir).rmdir()
         except OSError:
             pass
         raise
@@ -141,7 +141,7 @@ async def upload_pdf(file: UploadFile = File(...)):
             )
         except WordConversionError as exc:
             logger.warning("docx conversion failed for %s: %s", file.filename, exc)
-            shutil.rmtree(safe_path(session_dir), ignore_errors=True)
+            shutil.rmtree(safe_entry_path(session_dir), ignore_errors=True)
             raise HTTPException(status_code=422, detail=exc.user_message)
         except Exception:
             # Invariant (gotcha #29): a conversion failure is a 422, never a
@@ -150,7 +150,7 @@ async def upload_pdf(file: UploadFile = File(...)):
             # OS-level fault) must not escape as a 500 that orphans the session
             # dir. Tear down and return the same operator-actionable 422.
             logger.exception("Unexpected docx conversion error for %s", file.filename)
-            shutil.rmtree(safe_path(session_dir), ignore_errors=True)
+            shutil.rmtree(safe_entry_path(session_dir), ignore_errors=True)
             raise HTTPException(
                 status_code=422,
                 detail=(

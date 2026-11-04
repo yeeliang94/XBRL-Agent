@@ -131,3 +131,37 @@ def test_a_folder_named_on_the_command_line_is_approved(tmp_path, monkeypatch):
     paths.approve_operator_folder(chosen)
     assert paths.safe_path(f"{chosen}/run_001/a.xlsx").name == "a.xlsx"
     assert paths.assert_writable_output_dir(f"{chosen}/run_001").name == "run_001"
+
+
+def test_deleting_a_symlink_removes_the_link_and_keeps_its_target(tmp_path):
+    target = tmp_path / "uploaded.pdf"
+    target.write_text("source")
+    link = tmp_path / "SOFP_conversation_trace.json"
+    link.symlink_to(target)
+
+    paths.safe_entry_path(link).unlink()
+
+    assert target.read_text() == "source"
+    assert not link.is_symlink()
+
+
+def test_replacing_a_symlink_replaces_the_link_and_keeps_its_target(tmp_path):
+    from utils.atomic_io import replace_with_retry
+
+    target = tmp_path / "workbook.xlsx"
+    target.write_text("original")
+    link = tmp_path / "linked.xlsx"
+    link.symlink_to(target)
+    new = tmp_path / "new.xlsx"
+    new.write_text("new")
+
+    replace_with_retry(new, link)
+
+    assert target.read_text() == "original"
+    assert not link.is_symlink() and link.read_text() == "new"
+
+
+@pytest.mark.parametrize("path", ["/etc/passwd", "output/.."])
+def test_entry_path_refuses_outside_folders_and_nameless_paths(path):
+    with pytest.raises(paths.UnsafePathError):
+        paths.safe_entry_path(path)

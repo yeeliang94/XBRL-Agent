@@ -25,7 +25,7 @@ missing-converter case surfaces as a :class:`WordConversionError` at call time,
 never an ImportError at import time.
 """
 from __future__ import annotations
-from utils.paths import safe_path
+from utils.paths import safe_entry_path, safe_path
 
 import logging
 import os
@@ -191,7 +191,7 @@ def _convert_with_soffice(src: Path, dest: Path, soffice: str) -> None:
     except OSError as exc:
         raise WordConversionError(f"Could not launch LibreOffice ({soffice}): {exc}") from exc
     finally:
-        shutil.rmtree(safe_path(profile_dir), ignore_errors=True)
+        shutil.rmtree(safe_entry_path(profile_dir), ignore_errors=True)
 
     if proc.returncode != 0:
         raise WordConversionError(

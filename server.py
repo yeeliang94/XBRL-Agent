@@ -7,7 +7,7 @@ Run mode: POST /api/run/{session_id} with RunConfigRequest body.
 Orchestrates N sub-agents via coordinator, merges workbooks, runs
 cross-checks, and persists results to SQLite audit DB.
 """
-from utils.paths import safe_db_target, safe_path
+from utils.paths import safe_db_target, safe_entry_path, safe_path
 # Force UTF-8 on Windows (avoids charmap codec errors with Unicode text from PDFs)
 import sys
 if sys.platform == "win32":
@@ -401,7 +401,7 @@ def _reexport_and_remerge_from_facts(run_id: int) -> Optional[Path]:
             skip_recalc=True,
         )
         if not getattr(result, "success", False):
-            safe_path(tmp_path).unlink(missing_ok=True)
+            safe_entry_path(tmp_path).unlink(missing_ok=True)
             logger.warning(
                 "download re-export merge failed for run %s: %s",
                 run_id, getattr(result, "errors", None),
@@ -2353,11 +2353,11 @@ def _refresh_merged_notes_workbook(
         replace_with_retry(staged, destination)
     finally:
         try:
-            safe_path(Path(staged)).unlink(missing_ok=True)
+            safe_entry_path(Path(staged)).unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
             pass
         try:
-            safe_path(Path(nxt)).unlink(missing_ok=True)
+            safe_entry_path(Path(nxt)).unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
             pass
 
@@ -3341,7 +3341,12 @@ async def _lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="XBRL Agent", version="0.3.0", lifespan=_lifespan)
+# The built-in API pages stay off: nothing uses them, they would need a looser
+# browser policy, and login only guards /api/*.
+app = FastAPI(
+    title="XBRL Agent", version="0.3.0", lifespan=_lifespan,
+    docs_url=None, redoc_url=None, openapi_url=None,
+)
 
 # Track active extraction runs by session_id
 active_runs: set[str] = set()
@@ -8551,7 +8556,7 @@ def _reexport_remerge_durable(run_id: int) -> bool:
     finally:
         for _p in [tmp, *overlay_temps]:
             try:
-                safe_path(_p).unlink(missing_ok=True)
+                safe_entry_path(_p).unlink(missing_ok=True)
             except Exception:  # noqa: BLE001
                 pass
     return False
