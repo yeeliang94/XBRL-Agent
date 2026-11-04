@@ -194,7 +194,7 @@ _MFRS_SOPL_REVENUE_NOTE = """=== MFRS REVENUE CLASSIFICATION ===
 For a service business, use the live services revenue leaf, such as
 "Revenue from rendering of other services". For goods, use the suitable
 sale-of-goods leaf. Inspect the principal activity disclosure when the face
-label is generic. Use lookup_definitions when plausible categories compete.
+label is generic. Use lookup_definitions when unsure which category fits.
 Reserve generic Other revenue for revenue with no suitable specific class.
 Use disclosed reconciled components for mixed goods/services revenue; never
 invent a split from principal activity alone.

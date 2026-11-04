@@ -204,6 +204,8 @@ class ExtractionDeps:
         self.face_workbook_only_targets: set[str] = set()
         self.face_coverage_errors: list[str] = []
         self.face_coverage_warnings: list[str] = []
+        # Cells already given catch-all feedback, so a rewrite does not repeat it.
+        self.catch_all_warned: set[tuple[str, int, int]] = set()
         self.seen_coverage_refusal: bool = False
         self.source_fidelity_errors: list[str] = []
 
@@ -1449,6 +1451,25 @@ def create_extraction_agent(
             except Exception:  # noqa: BLE001 — never fail a valid workbook write
                 logger.warning(
                     "Could not run sign checks for %s",
+                    ctx.deps.template_path,
+                    exc_info=True,
+                )
+            # Advisory like the sign checks: totals cannot see a figure parked
+            # in a catch-all while a dedicated row beside it stays empty.
+            try:
+                from tools.catch_all_feedback import catch_all_warnings_for_resolved_writes
+
+                result.warnings.extend(
+                    catch_all_warnings_for_resolved_writes(
+                        ctx.deps.template_path,
+                        output_path,
+                        result.resolved_writes,
+                        ctx.deps.catch_all_warned,
+                    )
+                )
+            except Exception:  # noqa: BLE001 — never fail a valid workbook write
+                logger.warning(
+                    "Could not run catch-all checks for %s",
                     ctx.deps.template_path,
                     exc_info=True,
                 )

@@ -75,7 +75,9 @@ Apply these to whatever the source in front of you says.
 1. Classify by substance. Decide what the item IS, not what its wording
    resembles or who the counterparty is. For example, "trade" versus "other"
    receivables turns on whether the amount arose from selling goods or
-   services, not on whether the counterparty is related.
+   services, not on whether the counterparty is related. A state or location
+   (in transit, on consignment, held by a third party) says where an item
+   stands, not what it is; classify the underlying item.
 2. Follow the source's own classification. When a note states how it treats
    an item (as a contract liability, as cash held but not a cash equivalent,
    as a provision, as current or non-current), use the row for
@@ -86,13 +88,26 @@ Apply these to whatever the source in front of you says.
    because the names sound alike or the asset sits in the same premises.
    A disclosed class that no dedicated row covers goes to the catch-all
    `Other …` row, as does an amount the source itself labels as other.
-4. Break ties with definitions. When two rows plausibly fit, call
-   `lookup_definitions([...])` for both, choose on the official definitions,
-   and say why in `evidence`.
-5. Match the template's grain. Roll finer note lines up into the nearest
+4. Treat `Other …` as a conclusion. If a dedicated row would fit once one
+   fact is known, such as an asset's tenure or the nature of goods, the
+   catch-all case above does not apply yet. Look for that fact with
+   `search_pdf_text`, or by reading likely pages where text search is
+   unavailable, including accounting policies and related notes, and decide
+   from what the source shows. You may draw a conclusion the
+   disclosed facts support; cite them in `evidence`. If the fact stays unknown,
+   use the catch-all and state in `evidence` which fact is missing and what
+   you searched.
+5. Search before claiming absence. Before stating that an item has no
+   breakdown, tenure or other disclosure, look for it the same way and state
+   what you checked in `evidence`. Pages you did not read are not evidence
+   that it is absent.
+6. Use definitions when unsure. When you are uncertain which row fits, call
+   `lookup_definitions([...])` for the candidates in one call, choose on the
+   official definitions, and say why in `evidence`.
+7. Match the template's grain. Roll finer note lines up into the nearest
    broader row that still reflects their nature. Split a coarse amount only
    when the source discloses its components. Never invent rows.
-6. Classify each period and entity scope independently. A class can be zero
+8. Classify each period and entity scope independently. A class can be zero
    in one year and material in the other; read each column of the note
    separately. A subtotal ties however its classes are split, so a
    misallocation between classes is invisible to `verify_totals`.

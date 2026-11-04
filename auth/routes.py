@@ -429,6 +429,9 @@ async def admin_disable_user(request: Request, email: str):
     """Block an account's login (admin only). Refuses to disable the last
     enabled admin (would lock everyone out of user management)."""
     with db_session(server.AUDIT_DB_PATH) as conn:
+        # Hold the write lock through the last-admin check so two admins
+        # acting at once cannot both pass it and leave no admin.
+        conn.execute("BEGIN IMMEDIATE")
         denied = _require_admin(conn, request)
         if denied is not None:
             return denied
@@ -499,6 +502,7 @@ async def admin_set_admin(request: Request, email: str, body: SetAdminRequest):
     """Promote or demote an account's admin role (admin only). Refuses to demote
     the last enabled admin."""
     with db_session(server.AUDIT_DB_PATH) as conn:
+        conn.execute("BEGIN IMMEDIATE")
         denied = _require_admin(conn, request)
         if denied is not None:
             return denied

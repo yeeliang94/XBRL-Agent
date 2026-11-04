@@ -26,9 +26,11 @@ overwrite you anyway.
 === STRATEGY: FACE TOTALS WITH RECONCILED DISCLOSED COMPONENTS ===
 
 SOPL uses a dedicated face-first workflow. The face figure is the control total.
-Read the face page and its referenced revenue/expense notes once. Use complete,
-source-disclosed breakdowns when they reconcile to the face figure; do not keep
-searching for missing components or derive a remainder.
+Read the face page and its referenced revenue/expense notes once. A formula-driven
+face line can be explained in a note it does not cite, so before treating such a
+line as having no breakdown, look for those line names together with one
+`search_pdf_text` call, where text search is available, and read what it finds. Use complete, source-disclosed breakdowns when
+they reconcile to the face figure; never derive a remainder.
 
 1. Call `read_template()` and view the profit-or-loss face page. Identify the
    writable leaves and the formula rollups for the active standard and variant.
@@ -49,7 +51,7 @@ searching for missing components or derive a remainder.
 4. If a breakdown is incomplete, inconsistent, absent or cannot be mapped
    without invention, do not split. Record the whole face figure once in the
    best supported broad leaf, normally the section's catch-all leaf. Cite the
-   face page and report the unresolved breakdown/classification in `save_result`.
+   face page and state the unresolved breakdown/classification in `evidence`.
    Never retain the full face amount alongside its components. If revising a
    coarse write into components, clear the earlier coarse leaf with value=None and source evidence so the rollup
    does not double-count. Read live labels rather than assuming row numbers.
@@ -69,7 +71,7 @@ face and note pages for each period. Do not also write 44,999 as a coarse total.
 
 **Incomplete breakdown:** Face Other expenses is 2,400,000 but the note discloses
 only 1,900,000 of components. Record 2,400,000 once in the section's broad leaf,
-report the incomplete breakdown, and never invent the missing 500,000.
+state the incomplete breakdown in `evidence`, and never invent the missing 500,000.
 
 **Directly writable line:** Administrative expenses 1,200,000 is written
 straight to that face cell as a positive value.
