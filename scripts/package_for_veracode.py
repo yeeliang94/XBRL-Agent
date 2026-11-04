@@ -3,9 +3,10 @@
 Usage: venv/bin/python scripts/package_for_veracode.py [--include-tests] [--out PATH]
 
 Rules:
-- Start from the files git knows about or would add (tracked + untracked),
-  which already skips everything in .gitignore: venv, node_modules, dist,
-  output/, data/, logs, .env, *.db.
+- Start from the files git tracks, which already skips everything in
+  .gitignore: venv, node_modules, dist, output/, data/, logs, .env, *.db.
+  Untracked files are listed and refused, so a loose export in the checkout
+  never reaches the upload; commit, delete or gitignore them first.
 - Drop data folders that hold no code: the SSM taxonomy, the Excel
   templates, docs, and binary files (xlsx, pdf, docx, images).
 - Drop tests by default (they are not shipped and add false positives).
@@ -42,8 +43,8 @@ EXCLUDED_SUFFIXES = (
 EXCLUDED_NAMES = (".gitignore", ".gitattributes", ".DS_Store", "greptile.json")
 
 
-def git_files() -> list[str]:
-    cmd = ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"]
+def git_files(*extra: str) -> list[str]:
+    cmd = ["git", "ls-files", "-z", *extra]
     out = subprocess.run(cmd, cwd=ROOT, check=True, capture_output=True).stdout
     return [p for p in out.decode("utf-8", "surrogateescape").split("\0") if p]
 
@@ -70,12 +71,20 @@ def main() -> int:
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
+    loose = sorted(f for f in git_files("--others", "--exclude-standard") if keep(f, args.include_tests))
+    if loose:
+        print("ERROR: untracked files would be uploaded. Commit, delete or "
+              "gitignore them first:", file=sys.stderr)
+        for rel in loose:
+            print(f"  {rel}", file=sys.stderr)
+        return 1
+
     stamp = datetime.now().strftime("%Y%m%d-%H%M")
     out_dir = ROOT / "veracode"
     out_dir.mkdir(exist_ok=True)
     out = Path(args.out) if args.out else out_dir / f"xbrl-agent-veracode-{stamp}.zip"
 
-    files = sorted(f for f in git_files() if keep(f, args.include_tests))
+    files = sorted(f for f in git_files("--cached") if keep(f, args.include_tests))
     if not files:
         print("ERROR: no files selected; is this a git checkout?", file=sys.stderr)
         return 1
@@ -86,7 +95,8 @@ def main() -> int:
 
     by_ext: dict[str, int] = {}
     for rel in files:
-        by_ext[os.path.splitext(rel)[1] or "(none)"] = by_ext.get(os.path.splitext(rel)[1] or "(none)", 0) + 1
+        ext = os.path.splitext(rel)[1] or "(none)"
+        by_ext[ext] = by_ext.get(ext, 0) + 1
     print(f"Wrote {out}")
     print(f"  {len(files)} files, {out.stat().st_size / 1_048_576:.1f} MB")
     for ext, n in sorted(by_ext.items(), key=lambda kv: -kv[1]):

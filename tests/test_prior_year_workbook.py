@@ -107,12 +107,24 @@ def test_import_guidance_retry_protection_and_comparative_checks(tmp_path):
     # rechecked; a new difference reopens it.
     with sqlite3.connect(db) as conn:
         conn.execute(
-            "UPDATE run_concept_conflicts SET status='dismissed' WHERE run_id=? AND kind='prior_year_comparative'",
+            "UPDATE run_concept_conflicts SET status='dismissed', resolved_at='2026-11-04T09:00:00' "
+            "WHERE run_id=? AND kind='prior_year_comparative'",
             (run,),
         )
+        accepted_id = conn.execute(
+            "SELECT id FROM run_concept_conflicts WHERE run_id=? AND concept_uuid=? AND kind='prior_year_comparative'",
+            (run, facts[0][0]),
+        ).fetchone()[0]
     assert "already accepted" in compare_value(
         db, run, SOFP, facts[0][0], facts[0][2] + 5, "PDF page 8: restated comparative"
     )
+    # The accepted record keeps its id and the time of the decision, so an open
+    # review queue still points at it.
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            "SELECT id, resolved_at FROM run_concept_conflicts WHERE run_id=? AND concept_uuid=? AND kind='prior_year_comparative'",
+            (run, facts[0][0]),
+        ).fetchone() == (accepted_id, "2026-11-04T09:00:00")
     assert not any(r.status == "failed" for r in check_results(db, run))
     assert "prior_year_comparatives_differ" not in preflight_codes(db, run)
     assert "1 differences accepted" in next(
@@ -120,6 +132,18 @@ def test_import_guidance_retry_protection_and_comparative_checks(tmp_path):
     )
     compare_value(db, run, SOFP, facts[0][0], facts[0][2] + 6, "PDF page 8: restated again")
     assert any(r.status == "failed" for r in check_results(db, run))
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            "SELECT status, resolved_at FROM run_concept_conflicts WHERE id=?", (accepted_id,)
+        ).fetchone() == ("open", None)
+    # Agreement closes the record with the time it closed, not the reviewer's
+    # earlier time.
+    compare_value(db, run, SOFP, facts[0][0], facts[0][2], "PDF page 8: rechecked")
+    with sqlite3.connect(db) as conn:
+        closed = conn.execute(
+            "SELECT status, resolved_at FROM run_concept_conflicts WHERE id=?", (accepted_id,)
+        ).fetchone()
+    assert closed[0] == "resolved" and closed[1] not in (None, "2026-11-04T09:00:00")
 
     # A comparative the workbook leaves blank cannot be filed in this mode, so
     # it is named; a printed zero against a blank is not. Ordinary blank

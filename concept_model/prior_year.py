@@ -533,27 +533,29 @@ def compare_value(
         sign_note = _sign_only_note(conn, concept_uuid, imported, value)
         if difference != 0 and previous and previous[0] == difference and previous[1] != "open":
             status = previous[1]
-        conn.execute(
-            "DELETE FROM run_concept_conflicts WHERE run_id=? AND concept_uuid=? AND period='PY' "
-            "AND entity_scope=? AND dimension_key=? AND kind='prior_year_comparative'",
-            (run_id, concept_uuid, entity_scope, dims),
-        )
-        conn.execute(
-            "INSERT INTO run_concept_conflicts(run_id,concept_uuid,period,entity_scope,dimension_key,kind,residual,detail,status,created_at) "
-            "VALUES (?,?,'PY',?,?,'prior_year_comparative',?,?,?,datetime('now'))",
-            (
-                run_id,
-                concept_uuid,
-                entity_scope,
-                dims,
-                difference,
-                json.dumps({
-                    "imported": imported, "report": value, "evidence": evidence,
-                    **({"sign_dispute": dispute} if dispute else {}),
-                }),
-                status,
-            ),
-        )
+        detail = json.dumps({
+            "imported": imported, "report": value, "evidence": evidence,
+            **({"sign_dispute": dispute} if dispute else {}),
+        })
+        if previous:
+            # Update in place so the record keeps its id and, when a reviewer's
+            # decision carries over, the time that decision was made. A record
+            # that reopens loses its time; one that closes now is stamped now.
+            conn.execute(
+                "UPDATE run_concept_conflicts SET residual=?,detail=?,status=?,"
+                "resolved_at=CASE WHEN ?='open' THEN NULL WHEN ?=status THEN resolved_at "
+                "ELSE datetime('now') END "
+                "WHERE run_id=? AND concept_uuid=? AND period='PY' "
+                "AND entity_scope=? AND dimension_key=? AND kind='prior_year_comparative'",
+                (difference, detail, status, status, status, run_id, concept_uuid, entity_scope, dims),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO run_concept_conflicts(run_id,concept_uuid,period,entity_scope,dimension_key,kind,residual,detail,status,created_at,resolved_at) "
+                "VALUES (?,?,'PY',?,?,'prior_year_comparative',?,?,?,datetime('now'),"
+                "CASE WHEN ?='open' THEN NULL ELSE datetime('now') END)",
+                (run_id, concept_uuid, entity_scope, dims, difference, detail, status, status),
+            )
     if difference == 0:
         return "Comparative agrees."
     if imported is None:
