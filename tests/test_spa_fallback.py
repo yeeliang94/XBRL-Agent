@@ -99,3 +99,20 @@ def test_api_routes_do_not_fall_through_to_spa(app_with_dist):
     # And the body must not be the SPA HTML.
     assert "id='root'" not in resp.text
     assert 'id="root"' not in resp.text
+
+
+def test_responses_block_inline_scripts():
+    import server
+
+    response = TestClient(server.app).get("/api/health")
+    policy = response.headers["Content-Security-Policy"]
+    assert "script-src 'self'" in policy
+    assert "'unsafe-inline'" not in policy.split("script-src", 1)[1].split(";", 1)[0]
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_built_in_api_pages_are_off(path):
+    import server
+
+    assert not any(getattr(route, "path", None) == path for route in server.app.routes)

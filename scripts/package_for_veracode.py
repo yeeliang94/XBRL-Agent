@@ -15,6 +15,11 @@ Rules:
   web/package-lock.json so Veracode SCA can read the dependency list.
 """
 from __future__ import annotations
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from utils.paths import operator_path  # noqa: E402
 
 import argparse
 import os
@@ -81,7 +86,7 @@ def main() -> int:
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M")
     out_dir = ROOT / "veracode"
-    out_dir.mkdir(exist_ok=True)
+    operator_path(out_dir).mkdir(exist_ok=True)
     out = Path(args.out) if args.out else out_dir / f"xbrl-agent-veracode-{stamp}.zip"
 
     files = sorted(f for f in git_files("--cached") if keep(f, args.include_tests))
@@ -89,7 +94,7 @@ def main() -> int:
         print("ERROR: no files selected; is this a git checkout?", file=sys.stderr)
         return 1
 
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(operator_path(out), "w", zipfile.ZIP_DEFLATED) as zf:
         for rel in files:
             zf.write(ROOT / rel, rel)
 

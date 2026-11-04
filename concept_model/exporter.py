@@ -17,6 +17,7 @@ module owns:
   distinguish "agent didn't try" from "agent confirmed missing").
 """
 from __future__ import annotations
+from utils.paths import safe_db_target, safe_path
 
 import json
 import sqlite3
@@ -80,7 +81,7 @@ def _stamp_period_headers(
         return
     src_wb = None
     try:
-        src_wb = openpyxl.load_workbook(carry_forward_row1_from, data_only=False)
+        src_wb = openpyxl.load_workbook(safe_path(carry_forward_row1_from), data_only=False)
         for sheet in wb.sheetnames:
             if sheet not in src_wb.sheetnames:
                 continue
@@ -144,9 +145,9 @@ def export_run_to_xlsx(
     xlsx_path = str(xlsx_path)
     source_col = _DEFAULT_SOURCE_COL.get(filing_level, "D")
 
-    wb = openpyxl.load_workbook(xlsx_path, data_only=False)
+    wb = openpyxl.load_workbook(safe_path(xlsx_path), data_only=False)
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(safe_db_target(db_path))
     conn.row_factory = sqlite3.Row
     try:
         from concept_model.periods import run_periods
@@ -414,7 +415,7 @@ def export_run_to_xlsx(
     # (even if empty) so downstream tools don't have to special-case
     # absence.
     side = Path(xlsx_path + ".not_disclosed.json")
-    side.write_text(
+    safe_path(side).write_text(
         json.dumps({"run_id": run_id, "entries": not_disclosed},
                    indent=2, sort_keys=True),
         encoding="utf-8",

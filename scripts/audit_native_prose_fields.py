@@ -1,5 +1,10 @@
 """Offline native text-block audit; expected trigger cells come from raw XML."""
 from __future__ import annotations
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from utils.paths import approve_operator_folder, operator_path  # noqa: E402
 import argparse
 from collections import Counter
 import hashlib
@@ -16,7 +21,7 @@ import re
 
 
 def run(source, directory):
-    directory.mkdir(parents=True,exist_ok=True)
+    operator_path(directory).mkdir(parents=True,exist_ok=True)
     db = directory/'prose.db'
     if db.exists():
         raise FileExistsError(db)
@@ -24,7 +29,7 @@ def run(source, directory):
     standard = source.name.split('_')[1].lower()
     level = 'group' if '_Group_' in source.name else 'company'
     original, cells = raw_workbook(source)
-    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    source_hash = hashlib.sha256(operator_path(source).read_bytes()).hexdigest()
     alias = {}
     for sheet, values in cells.items():
         alias[sheet] = {}
@@ -40,7 +45,7 @@ def run(source, directory):
             import_for_audit(db,path,level,candidates)
             targets.extend(html)
     fields = []
-    with sqlite3.connect(db) as conn:
+    with sqlite3.connect(str(operator_path(db))) as conn:
         conn.row_factory = sqlite3.Row
         run_id = conn.execute('INSERT INTO runs(created_at,pdf_filename,status,run_config_json) VALUES(?,?,?,?)',
             ('2026-10-03','SYNTHETIC-PROSE.pdf','completed',json.dumps({'filing_standard':standard,'filing_level':level}))).lastrowid
@@ -94,12 +99,12 @@ def run(source, directory):
         if field['outcome']=='stored':
             field.update(outcome='export_unresolved',reason='no_exact_native_trigger_written')
     summary = {'filename':source.name,'instances':len(fields),'outcomes':dict(Counter(f['outcome'] for f in fields)),
-               'source_unchanged':source_hash==hashlib.sha256(source.read_bytes()).hexdigest(),
+               'source_unchanged':source_hash==hashlib.sha256(operator_path(source).read_bytes()).hexdigest(),
                'style_changes':style_changes,'formula_changes':formula_changes,
                'footnote_mismatches':report.get('footnote_mismatches',[]),
                'reverse_ingest_scope':'numeric human-file reader excludes prose; exact XHTML patcher readback verified'}
     for name,payload in [('fields',fields),('summary',summary),('fill-report',report),('doc',doc)]:
-        (directory/(name+'.json')).write_text(json.dumps(payload,indent=2,default=str),encoding='utf-8')
+        (operator_path(directory/(name+'.json'))).write_text(json.dumps(payload,indent=2,default=str),encoding='utf-8')
     return summary
 
 
@@ -108,6 +113,7 @@ if __name__ == '__main__':
     parser.add_argument('--output-dir',type=__import__('pathlib').Path,required=True)
     parser.add_argument('--filename')
     args=parser.parse_args()
+    approve_operator_folder(args.output_dir)
     for source in sorted((ROOT/'data').glob('mTool*.xlsx')):
         if args.filename and source.name != args.filename:
             continue

@@ -12,6 +12,7 @@ dependency — reliable to call from inside the coordinator's async
 hot path or from a unit test.
 """
 from __future__ import annotations
+from utils.paths import safe_entry_path, safe_path
 
 import logging
 import json
@@ -395,7 +396,7 @@ def overlay_notes_cells_into_workbook(
     )
     tmp.close()
     tmp_path = Path(tmp.name)
-    shutil.copy(str(xlsx_path), str(tmp_path))
+    shutil.copy(safe_path(str(xlsx_path)), safe_path(str(tmp_path)))
 
     def _set_cell(ws, row: int, column: int, value) -> None:
         """Write a cell unless it carries a formula (never clobber one)."""
@@ -416,7 +417,7 @@ def overlay_notes_cells_into_workbook(
     # this is the self-healing backstop to persist_notes_cells clearing them).
     live_coords = {(c.sheet, c.row) for c in cells}
 
-    wb = openpyxl.load_workbook(str(tmp_path))
+    wb = openpyxl.load_workbook(safe_path(str(tmp_path)))
     try:
         for cell in cells:
             if cell.sheet not in wb.sheetnames:
@@ -534,9 +535,9 @@ def overlay_numeric_facts_into_workbook(
     )
     tmp.close()
     tmp_path = Path(tmp.name)
-    shutil.copy(str(xlsx_path), str(tmp_path))
+    shutil.copy(safe_path(str(xlsx_path)), safe_path(str(tmp_path)))
 
-    wb = openpyxl.load_workbook(str(tmp_path))
+    wb = openpyxl.load_workbook(safe_path(str(tmp_path)))
     changed = False
     try:
         for fr in facts:
@@ -558,6 +559,6 @@ def overlay_numeric_facts_into_workbook(
         wb.close()
 
     if not changed:
-        tmp_path.unlink(missing_ok=True)
+        safe_entry_path(tmp_path).unlink(missing_ok=True)
         return xlsx_path
     return tmp_path

@@ -1,6 +1,7 @@
 """Authenticated rolled-forward workbook upload and run source retrieval."""
 
 from __future__ import annotations
+from utils.paths import safe_path
 
 import hashlib
 import json
@@ -68,10 +69,10 @@ def upload_prior_year(
         raise HTTPException(status_code=422, detail="The workbook is empty.")
     token = hashlib.sha256(raw).hexdigest()
     root = session_dir / "prior_year"
-    root.mkdir(exist_ok=True)
+    safe_path(root).mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(dir=root) as tmp:
         path = Path(tmp) / "workbook.xlsx"
-        path.write_bytes(raw)
+        safe_path(path).write_bytes(raw)
         _assert_zip_within_budget(str(path))
         try:
             with closing(server._open_audit_conn()) as conn:
@@ -93,7 +94,7 @@ def upload_prior_year(
         # with another scale must not change the meaning of an existing run.
         destination = root / f"{token}.xlsx"
         if destination.exists():
-            previous = json.loads(destination.with_suffix(".json").read_text())
+            previous = json.loads(safe_path(destination.with_suffix(".json")).read_text())
             if previous["unit"] != unit:
                 raise HTTPException(
                     status_code=422,
@@ -109,7 +110,7 @@ def upload_prior_year(
 def prior_year_metadata(session_id: str, token: str):
     try:
         path = workbook_path(_session(session_id), token)
-        return json.loads(path.with_suffix(".json").read_text())
+        return json.loads(safe_path(path.with_suffix(".json")).read_text())
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -127,11 +128,11 @@ def run_prior_year_workbook(run_id: int):
         )
     try:
         path = workbook_path(_session(run.session_id), token)
-        meta = json.loads(path.with_suffix(".json").read_text())
+        meta = json.loads(safe_path(path.with_suffix(".json")).read_text())
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return FileResponse(
-        path,
+        safe_path(path),
         filename=meta["filename"],
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )

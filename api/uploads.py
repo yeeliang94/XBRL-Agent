@@ -3,6 +3,7 @@
 Endpoints: ``POST /api/upload``, ``POST /api/scout/{session_id}``.
 Shared state/helpers are reached through ``server.X`` at call time.
 """
+from utils.paths import safe_db_target, safe_entry_path, safe_path
 import asyncio
 import json
 import logging
@@ -83,7 +84,7 @@ async def upload_pdf(file: UploadFile = File(...)):
     # running byte counter trips 413 as soon as the cap is exceeded.
     session_id = str(uuid.uuid4())
     session_dir = server.OUTPUT_DIR / session_id
-    session_dir.mkdir(parents=True, exist_ok=True)
+    safe_path(session_dir).mkdir(parents=True, exist_ok=True)
     # A Word upload lands as uploaded.docx and is converted to uploaded.pdf
     # below; a PDF lands as uploaded.pdf directly. The pipeline always reads
     # uploaded.pdf, so nothing downstream learns a new path.
@@ -92,7 +93,7 @@ async def upload_pdf(file: UploadFile = File(...)):
     _CHUNK_SIZE = 1 * 1024 * 1024  # 1 MB reads
     total_bytes = 0
     try:
-        with open(target, "wb") as out:
+        with open(safe_path(target), "wb") as out:
             while True:
                 chunk = await file.read(_CHUNK_SIZE)
                 if not chunk:
@@ -103,8 +104,8 @@ async def upload_pdf(file: UploadFile = File(...)):
                     # file so a half-written upload doesn't linger.
                     out.close()
                     try:
-                        target.unlink()
-                        session_dir.rmdir()
+                        safe_entry_path(target).unlink()
+                        safe_entry_path(session_dir).rmdir()
                     except OSError:
                         pass
                     raise HTTPException(
@@ -118,8 +119,8 @@ async def upload_pdf(file: UploadFile = File(...)):
         # Clean up partial files on any non-HTTP error.
         try:
             if target.exists():
-                target.unlink()
-            session_dir.rmdir()
+                safe_entry_path(target).unlink()
+            safe_entry_path(session_dir).rmdir()
         except OSError:
             pass
         raise
@@ -140,7 +141,7 @@ async def upload_pdf(file: UploadFile = File(...)):
             )
         except WordConversionError as exc:
             logger.warning("docx conversion failed for %s: %s", file.filename, exc)
-            shutil.rmtree(session_dir, ignore_errors=True)
+            shutil.rmtree(safe_entry_path(session_dir), ignore_errors=True)
             raise HTTPException(status_code=422, detail=exc.user_message)
         except Exception:
             # Invariant (gotcha #29): a conversion failure is a 422, never a
@@ -149,7 +150,7 @@ async def upload_pdf(file: UploadFile = File(...)):
             # OS-level fault) must not escape as a 500 that orphans the session
             # dir. Tear down and return the same operator-actionable 422.
             logger.exception("Unexpected docx conversion error for %s", file.filename)
-            shutil.rmtree(session_dir, ignore_errors=True)
+            shutil.rmtree(safe_entry_path(session_dir), ignore_errors=True)
             raise HTTPException(
                 status_code=422,
                 detail=(
@@ -168,7 +169,7 @@ async def upload_pdf(file: UploadFile = File(...)):
     # truth for the user-facing name.
     # UTF-8 encoding is mandatory — Windows defaults to charmap and will
     # crash on non-ASCII filenames (see CLAUDE.md issue #1).
-    (session_dir / "original_filename.txt").write_text(
+    (safe_path(session_dir / "original_filename.txt")).write_text(
         file.filename, encoding="utf-8"
     )
 
@@ -189,7 +190,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         # `init_db` already runs once in the lifespan handler — see the
         # comment at `_lifespan` for the per-request-cost rationale
         # (peer-review #9). Don't re-run it here.
-        db_conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
+        db_conn = sqlite3.connect(safe_db_target(str(server.AUDIT_DB_PATH)))
         try:
             db_conn.execute("PRAGMA foreign_keys = ON")
             db_conn.execute("PRAGMA busy_timeout = 5000")
@@ -302,7 +303,7 @@ async def scout_pdf(session_id: str, request: Request):
     def _resolve_scout_run_id() -> Optional[int]:
         try:
             import sqlite3
-            conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
+            conn = sqlite3.connect(safe_db_target(str(server.AUDIT_DB_PATH)))
             try:
                 row = conn.execute(
                     "SELECT id FROM runs WHERE session_id = ? "
@@ -323,7 +324,7 @@ async def scout_pdf(session_id: str, request: Request):
         try:
             import sqlite3
             from db import repository as repo
-            conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
+            conn = sqlite3.connect(safe_db_target(str(server.AUDIT_DB_PATH)))
             try:
                 # Idempotent per run: a re-scout (e.g. cancel Auto-detect
                 # midway, then re-run) reuses the existing SCOUT row instead
@@ -367,7 +368,7 @@ async def scout_pdf(session_id: str, request: Request):
                 )
             except Exception:  # noqa: BLE001 — pricing is advisory
                 cost = 0.0
-            conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
+            conn = sqlite3.connect(safe_db_target(str(server.AUDIT_DB_PATH)))
             try:
                 repo.finish_run_agent(
                     conn, agent_row_id, status,
@@ -447,7 +448,7 @@ async def scout_pdf(session_id: str, request: Request):
                 import sqlite3
                 from db import repository as _scout_repo
 
-                scout_audit_conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
+                scout_audit_conn = sqlite3.connect(safe_db_target(str(server.AUDIT_DB_PATH)))
                 scout_audit_conn.execute("PRAGMA foreign_keys = ON")
                 scout_audit_conn.execute("PRAGMA busy_timeout = 5000")
                 scout_repo = _scout_repo

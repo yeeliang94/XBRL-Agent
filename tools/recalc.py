@@ -25,6 +25,7 @@ is left untouched and a warning is logged; the run does NOT fail on
 advisory recalc telemetry.
 """
 from __future__ import annotations
+from utils.paths import safe_entry_path, safe_path
 
 import logging
 import os
@@ -137,7 +138,7 @@ def recalc_workbook(path: str | Path) -> Path:
     # We do this in-place — the merged workbook is run-output, not a
     # template, so destructive replacement of formula strings is safe.
     try:
-        wb = load_workbook(workbook_path, data_only=False)
+        wb = load_workbook(safe_path(workbook_path), data_only=False)
     except Exception:  # noqa: BLE001
         logger.warning(
             "recalc: openpyxl reload failed for %s — recalc abandoned",
@@ -174,13 +175,13 @@ def recalc_workbook(path: str | Path) -> Path:
     fd, tmp_str = tempfile.mkstemp(
         prefix=workbook_path.stem + ".",
         suffix=".recalc.xlsx",
-        dir=str(workbook_path.parent),
+        dir=safe_path(str(workbook_path.parent)),
     )
     os.close(fd)
     tmp_path = Path(tmp_str)
     try:
         wb.save(tmp_path)
-        tmp_path.replace(workbook_path)
+        safe_entry_path(tmp_path).replace(safe_entry_path(workbook_path))
     except Exception:  # noqa: BLE001
         logger.warning(
             "recalc: atomic save failed for %s — original workbook intact",
@@ -188,7 +189,7 @@ def recalc_workbook(path: str | Path) -> Path:
         )
         if tmp_path.exists():
             try:
-                tmp_path.unlink()
+                safe_entry_path(tmp_path).unlink()
             except OSError:
                 pass
         return workbook_path

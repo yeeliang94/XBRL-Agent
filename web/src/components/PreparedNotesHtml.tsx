@@ -1,5 +1,6 @@
 import type { PreparedNoteOutput } from "../lib/notesOutput";
 import { outputNotice } from "../lib/notesOutput";
+import { parseSafeHtml } from "../lib/safeHtml";
 import { ds } from "../lib/theme";
 import { useMemo } from "react";
 
@@ -19,7 +20,7 @@ function filledColumnCount(table: HTMLTableElement): number {
 
 /** Display-only markers; canonical and clipboard HTML stay untouched. */
 export function readablePreviewHtml(html: string): string {
-  const document = new DOMParser().parseFromString(html, "text/html");
+  const document = parseSafeHtml(html);
   for (const table of document.querySelectorAll("table")) {
     if (filledColumnCount(table) >= 5) {
       table.setAttribute("data-wide-preview", "true");

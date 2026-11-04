@@ -70,6 +70,7 @@ import { copyPreparedHtmlAsRichText } from "../lib/clipboard";
 import { apiFetch } from "../lib/api";
 import { fetchNoteOutput } from "../lib/notesOutput";
 import { PreparedNotesHtml, readablePreviewHtml } from "./PreparedNotesHtml";
+import { safeNotesHtml } from "../lib/safeHtml";
 import { useNoteOutput } from "./useNoteOutput";
 import { tagNumericCells } from "../lib/tableAlign";
 import { formatGroupedInput } from "../lib/numberFormat";
@@ -374,8 +375,8 @@ export const TIPTAP_EXTENSIONS = [
 // it is robust in both the browser and jsdom (jsdom does NOT auto-normalise the
 // style attribute on an innerHTML round-trip — verified). Exported for tests.
 export function canonicalizeHtmlForCompare(html: string): string {
-  const root = document.createElement("div");
-  root.innerHTML = html;
+  // An inert document: comparing a note must never load or run anything in it.
+  const root = new DOMParser().parseFromString(html, "text/html").body;
   root.querySelectorAll<HTMLElement>("[style]").forEach((node) => {
     const canon = (node.getAttribute("style") || "")
       .split(";")
@@ -1600,7 +1601,7 @@ function HumanNoteCell({
         {html ? (
           // Sanitised with the notes whitelist on upload (eval/human_file.py).
           <div className="tiptap ProseMirror notes-human-content" style={styles.humanNoteBody}
-            dangerouslySetInnerHTML={{ __html: html }} />
+            dangerouslySetInnerHTML={{ __html: safeNotesHtml(html) }} />
         ) : (
           <p style={{ ...styles.dim, margin: 0 }}>Not in human file</p>
         )}

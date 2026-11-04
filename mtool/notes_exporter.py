@@ -31,6 +31,7 @@ What this module owns:
   the mTool XHTML shell still happens in the filler, not here.
 """
 from __future__ import annotations
+from utils.paths import safe_db_target
 
 import hashlib
 import json
@@ -49,7 +50,7 @@ from notes.format_verify import content_structure
 
 def notes_source_sheets(db_path: str | Path, run_id: int) -> set[str]:
     """Read selection names without rendering or decorating note content."""
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(safe_db_target(str(db_path)))
     try:
         sheets = {row[0] for row in conn.execute(
             "SELECT DISTINCT sheet FROM notes_cells WHERE run_id = ?", (run_id,)
@@ -115,7 +116,7 @@ def build_notes_fill_doc(
     the notes pipeline and confines label matching to that workbook sheet;
     ``source_row`` remains provenance for diagnostics.
     """
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(safe_db_target(str(db_path)))
     conn.row_factory = sqlite3.Row
     try:
         run = conn.execute(

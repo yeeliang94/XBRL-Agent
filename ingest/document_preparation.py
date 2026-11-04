@@ -6,6 +6,7 @@ The process-wide FIFO request budget uses threading state, never loop-owned
 async primitives; capture, orientation, verification and boundary calls share it.
 """
 from __future__ import annotations
+from utils.paths import safe_entry_path, safe_path
 
 import asyncio
 from collections import Counter, deque
@@ -81,7 +82,7 @@ def _word_content_tokens(html: str, *, include_list_markers: bool = True) -> Cou
 
 
 def _pdf_content_tokens(path: Path) -> Counter:
-    with fitz.open(path) as converted:
+    with fitz.open(safe_path(path)) as converted:
         return Counter(re.findall(
             r"\w+", " ".join(page.get_text() for page in converted).casefold()
         ))
@@ -560,7 +561,7 @@ async def _request_model(
 
 
 def _atomic_text(path: Path, text: str) -> None:
-    fd, name = tempfile.mkstemp(prefix=".prepare-", dir=path.parent)
+    fd, name = tempfile.mkstemp(prefix=".prepare-", dir=safe_path(path.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             stream.write(text)
@@ -569,7 +570,7 @@ def _atomic_text(path: Path, text: str) -> None:
         replace_with_retry(name, path)
     finally:
         if os.path.exists(name):
-            os.unlink(name)
+            os.unlink(safe_entry_path(name))
 
 
 def _digest(path: Path) -> str:
@@ -594,7 +595,7 @@ def _cached_digest(path: Path, signature: tuple[int, ...]) -> str:
     # Thread-safe bounded cache of immutable strings. On POSIX, ctime also
     # invalidates same-size edits whose modification timestamp was restored.
     hasher = hashlib.sha256()
-    with path.open("rb") as stream:
+    with safe_path(path).open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             hasher.update(chunk)
     return hasher.hexdigest()
@@ -625,7 +626,7 @@ def read_prepared_document(
     pdf = Path(pdf_path)
     path = pdf.parent / PREPARATION_NAME
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(safe_path(path).read_text(encoding="utf-8"))
         expected = _identity(pdf, model_name or data["model_name"],
                              data.get("configuration_key", "") if configuration_key is None else configuration_key)
         if data["status"] != "succeeded" or any(data.get(k) != v for k, v in expected.items()):
@@ -649,7 +650,7 @@ def read_prepared_document(
 
 
 def _inspect(pdf: Path) -> list[dict]:
-    with fitz.open(pdf) as doc:
+    with fitz.open(safe_path(pdf)) as doc:
         if not len(doc):
             raise PreparationError("The document has no pages.")
         return [
@@ -691,7 +692,7 @@ def _blocks(html: str, page: int, revision: str) -> list[dict]:
 
 def _derived_pdf(source: Path, target: Path, pages: list[dict]) -> None:
     # set_rotation is metadata-only; no content is rasterised or cropped.
-    with fitz.open(source) as doc:
+    with fitz.open(safe_path(source)) as doc:
         for item in pages:
             page = doc[item["page"] - 1]
             original_derotation = page.derotation_matrix
@@ -703,7 +704,7 @@ def _derived_pdf(source: Path, target: Path, pages: list[dict]) -> None:
             doc.save(temporary)
             replace_with_retry(temporary, target)
         finally:
-            temporary.unlink(missing_ok=True)
+            safe_entry_path(temporary).unlink(missing_ok=True)
 
 
 def _focused_views(source: Path, page_no: int, rotation: int) -> list[bytes]:
@@ -713,7 +714,7 @@ def _focused_views(source: Path, page_no: int, rotation: int) -> list[bytes]:
     area budget, not inflated resolution. Original page content is untouched.
     """
     from ingest.pdf_sidecar import RENDER_DPI
-    with fitz.open(source) as doc:
+    with fitz.open(safe_path(source)) as doc:
         page = doc[page_no - 1]
         page.set_rotation((page.rotation + rotation) % 360)
         rect = page.rect
@@ -878,7 +879,7 @@ def _write_checkpoint_with_evidence(path: Path, checkpoint: dict) -> None:
                 continue
             payload = json.dumps(attempt, ensure_ascii=False, sort_keys=True)
             digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-            directory.mkdir(exist_ok=True)
+            safe_path(directory).mkdir(exist_ok=True)
             evidence = directory / (digest + ".json")
             if not evidence.exists():
                 _atomic_text(evidence, payload)
@@ -1072,7 +1073,7 @@ async def prepare_document(
     checkpoint_path = pdf.parent / ("preparation-checkpoint-" + revision[:16] + ".json")
     checkpoint = {**identity, "pages": {}, "calls": []}
     try:
-        previous = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        previous = json.loads(safe_path(checkpoint_path).read_text(encoding="utf-8"))
         if all(previous.get(k) == v for k, v in identity.items()):
             checkpoint = previous
     except (OSError, ValueError, TypeError):
@@ -1658,7 +1659,7 @@ async def reconcile_prepared_inventory(
     """
     from copy import deepcopy
 
-    data = json.loads(prepared.metadata_path.read_text(encoding="utf-8"))
+    data = json.loads(safe_path(prepared.metadata_path).read_text(encoding="utf-8"))
     if data.get("revision") != prepared.revision or data.get("status") != "succeeded":
         raise PreparationError("Prepared source changed before inventory reconciliation.")
     original_path = prepared.metadata_path.parent / data.get("source_file", "uploaded.pdf")
@@ -1732,14 +1733,14 @@ async def reconcile_prepared_inventory(
     for page in data["pages"]:
         page["blocks"] = [lookup[b["block_id"]] for b in page["blocks"]]
     data["inventory_reconciled"] = True
-    latest = json.loads(prepared.metadata_path.read_text(encoding="utf-8"))
+    latest = json.loads(safe_path(prepared.metadata_path).read_text(encoding="utf-8"))
     current = read_prepared_document(original_path)
     if latest.get("revision") != prepared.revision or current is None or current.revision != prepared.revision:
         raise PreparationError("Prepared source changed during inventory reconciliation.")
     _atomic_text(prepared.metadata_path, json.dumps(data, ensure_ascii=False))
     sidecar_meta = prepared.metadata_path.parent / "source_meta.json"
     if prepared.metadata_path.name == PREPARATION_NAME and sidecar_meta.exists():
-        sidecar = json.loads(sidecar_meta.read_text(encoding="utf-8"))
+        sidecar = json.loads(safe_path(sidecar_meta).read_text(encoding="utf-8"))
         if sidecar.get("revision") == prepared.revision:
             sidecar.update(verified=all(p.get("verified") is True for p in data["pages"]),
                            checked_pages=len(data["pages"]), verified_pages=sum(p.get("verified") is True for p in data["pages"]),
@@ -1791,7 +1792,7 @@ async def recapture_table(
     old_nodes = _page_nodes(page_html)
     if not 0 <= block_index < len(old_nodes) or getattr(old_nodes[block_index], "name", None) != "table":
         raise PreparationError("The named source table is not on its recorded page.")
-    with fitz.open(pdf) as doc:
+    with fitz.open(safe_path(pdf)) as doc:
         metadata_rotation = doc[page_number - 1].rotation
     image = await asyncio.to_thread(_render_page, pdf, page_number, rotation)
     focused = await asyncio.to_thread(_focused_views, pdf, page_number, rotation)
@@ -1882,7 +1883,7 @@ def _correction_lock(path: Path) -> threading.Lock:
 
 
 def _record_table_correction(path: Path, *, block_id: str, table_html: str, record: dict) -> None:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(safe_path(path).read_text(encoding="utf-8"))
     block = next((b for b in data["blocks"] if b["block_id"] == block_id), None)
     if block is None:
         raise PreparationError("The corrected source table is not in the prepared document.")

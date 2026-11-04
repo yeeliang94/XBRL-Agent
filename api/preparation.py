@@ -4,6 +4,7 @@ Workers use their own event loop, like reviewer jobs. Only plain snapshots and
 thread handles cross loops; cancellation goes through task_registry.
 """
 from __future__ import annotations
+from utils.paths import safe_db_target, safe_path
 
 import asyncio
 import json
@@ -79,7 +80,7 @@ def _key(directory: Path) -> str:
 
 def _read(directory: Path) -> dict:
     try:
-        return json.loads((directory / "preparation_status.json").read_text(encoding="utf-8"))
+        return json.loads((safe_path(directory / "preparation_status.json")).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {
             "status": "not_started", "stage": "pending", "phase": "pending",
@@ -169,7 +170,7 @@ def _update(directory: Path, attempt: str, **changes) -> dict:
 
 
 def _connection(db_path: Path):
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(safe_db_target(str(db_path)))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=5000")
@@ -248,7 +249,7 @@ def _usage_totals(directory: Path) -> dict[str, dict[str, int]]:
     ledgers: dict[str, list] = {}
     for path in [*directory.glob("preparation-checkpoint-*.json"), directory / "preparation.json"]:
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(safe_path(path).read_text(encoding="utf-8"))
             revision = str(data.get("revision") or path.stem.removeprefix("preparation-checkpoint-"))[:16]
             calls = data.get("calls", [])
             if len(calls) >= len(ledgers.get(revision, [])):
@@ -343,7 +344,7 @@ async def remap_prepared_inventory(prepared: PreparedDocument, infopack: dict, *
             raise PreparationError("The AI service needs an API key. Ask an administrator to configure Settings, then retry.")
         model = server._create_proxy_model(model_name, os.environ.get("LLM_PROXY_URL", ""), api_key)
         path = prepared.metadata_path.parent / f"preparation-run-{run_id}.json"
-        _atomic_text(path, prepared.metadata_path.read_text(encoding="utf-8"))
+        _atomic_text(path, safe_path(prepared.metadata_path).read_text(encoding="utf-8"))
         isolated = replace(prepared, metadata_path=path)
         _, assignments = await build_prepared_document_map(
             isolated, model, inventory=infopack, on_progress=on_progress, usage_out=usage,

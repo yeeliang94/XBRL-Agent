@@ -1,6 +1,8 @@
 // Copy server-prepared notes as rich HTML and readable plain text.
 // Formatting and mTool transport markup are owned by the backend exporter.
 
+import { safeNotesHtml } from "./safeHtml";
+
 /** Encode a string as a `text/plain` clipboard variant. This is a
  *  best-effort plaintext rendering — the editor also keeps the exact
  *  HTML in the text/html variant for rich targets.
@@ -14,8 +16,8 @@
  *  Like `notes/html_to_text.py`, it preserves structure; inline whitespace
  *  collapses here for browser paste targets while the backend keeps it. */
 export function htmlToPlaintext(html: string): string {
-  const tmp = document.createElement("div");
-  tmp.innerHTML = html;
+  // An inert document: nothing in the note loads or runs while reading its text.
+  const tmp = new DOMParser().parseFromString(html, "text/html").body;
   const out: string[] = [];
   renderNodeToPlaintext(tmp, out, { listStack: [] });
   // Collapse 3+ blank lines back to 2 so repeated `<p>` or nested
@@ -163,7 +165,7 @@ export async function copyPreparedHtmlAsRichText(html: string, plainSource = htm
     const holder = document.createElement("div");
     holder.contentEditable = "true";
     // Preserve the server-prepared markup in the fallback too.
-    holder.innerHTML = html;
+    holder.innerHTML = safeNotesHtml(html);
     // Pull off-screen rather than display:none — hidden elements cannot
     // carry a Selection in most browsers.
     holder.style.position = "fixed";

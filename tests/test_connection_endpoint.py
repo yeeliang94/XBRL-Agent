@@ -58,3 +58,45 @@ def test_test_connection_does_not_leak_api_key_in_error(monkeypatch):
     payload = resp.json()
     assert payload.get("status") == "error"
     assert payload.get("message")
+
+
+def test_typed_key_replaces_the_saved_key_on_a_new_proxy_address(monkeypatch):
+    monkeypatch.setenv("LLM_PROXY_URL", "https://proxy.example.test/v1")
+    monkeypatch.setenv("LLM_PROXY_API_KEY", _FAKE_SECRET)
+    monkeypatch.setattr(server, "_reload_runtime_settings", lambda: None)
+    import pydantic_ai
+    monkeypatch.setattr(pydantic_ai, "Agent", _BoomAgent)
+    sent = {}
+    import pydantic_ai.providers.openai as openai_provider
+    real = openai_provider.OpenAIProvider
+
+    class _Spy(real):
+        def __init__(self, *a, **kw):
+            sent.update(kw)
+            super().__init__(*a, **kw)
+
+    monkeypatch.setattr(openai_provider, "OpenAIProvider", _Spy)
+    client.post(
+        "/api/test-connection",
+        json={"model": "openai.gpt-5.4", "proxy_url": "https://other.example.test/v1", "api_key": "typed"},
+    )
+
+    assert sent["base_url"] == "https://other.example.test/v1"
+    assert sent["api_key"] == "typed"
+
+
+def test_saved_key_is_not_sent_to_a_new_proxy_address(monkeypatch):
+    monkeypatch.setenv("LLM_PROXY_URL", "https://proxy.example.test/v1")
+    monkeypatch.setenv("GOOGLE_API_KEY", _FAKE_SECRET)
+    called = []
+    monkeypatch.setattr(server, "_create_proxy_model", lambda *a, **kw: called.append(a))
+    monkeypatch.setattr(server, "_reload_runtime_settings", lambda: None)
+
+    resp = client.post(
+        "/api/test-connection",
+        json={"model": "m", "proxy_url": "https://attacker.example.test/v1"},
+    )
+
+    assert resp.status_code == 400
+    assert called == []
+    assert _FAKE_SECRET not in resp.text

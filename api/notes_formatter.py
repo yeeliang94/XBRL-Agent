@@ -5,6 +5,7 @@ writes only ``notes_cells.html`` after deterministic content-preservation
 checks pass.
 """
 from __future__ import annotations
+from utils.paths import safe_path
 
 import asyncio
 import json
@@ -353,9 +354,10 @@ async def notes_formatter_trace(run_id: int, sheet: str):
             detail=f"No formatter trace captured for {sheet}.",
         )
     try:
-        return json.loads(trace_path.read_text(encoding="utf-8"))
+        return json.loads(safe_path(trace_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=500, detail=f"Could not read trace: {exc}")
+        logger.warning("Could not read formatter trace %s: %s", trace_path.name, exc)
+        raise HTTPException(status_code=500, detail="Could not read trace.")
 
 
 class _NotesFormatRevert(BaseModel):

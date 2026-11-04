@@ -20,6 +20,7 @@ matrix (SOCIE) templates write per-cell targets inline during import.
 The exporter no longer falls back to ``concept_nodes.render_*``.
 """
 from __future__ import annotations
+from utils.paths import safe_db_target, safe_path
 
 import json
 import sqlite3
@@ -42,7 +43,7 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
     Returns the ``template_id`` for the caller's convenience (so the
     coordinator can immediately link a run to the template).
     """
-    payload: dict[str, Any] = json.loads(Path(json_path).read_text(encoding="utf-8"))
+    payload: dict[str, Any] = json.loads(safe_path(Path(json_path)).read_text(encoding="utf-8"))
     template_id: str = payload["template_id"]
     concepts: list[dict[str, Any]] = payload["concepts"]
     # "linear" (face statements) or "matrix" (SOCIE). Matrix templates
@@ -52,7 +53,7 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
     shape: str = payload.get("shape", "linear")
     is_matrix = shape == "matrix"
 
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(safe_db_target(str(db_path)))
     conn.execute("PRAGMA foreign_keys = ON")
     # Self-referencing concept_nodes.parent_uuid can point at a sibling
     # that arrives later in iteration order (e.g. dedup picks the sub-
@@ -422,7 +423,7 @@ def import_company_targets(db_path: str | Path, template_id: str) -> int:
     Skips ABSTRACT concepts (never written) and SOCIE (matrix — its
     per-cell targets are written inline by :func:`import_template`).
     """
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(safe_db_target(str(db_path)))
     conn.execute("PRAGMA foreign_keys = ON")
     try:
         template = conn.execute(
@@ -495,7 +496,7 @@ def import_group_targets(db_path: str | Path, template_id: str) -> int:
     Skips ABSTRACT concepts — they're never written to, so they don't
     need per-scope render coordinates.
     """
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(safe_db_target(str(db_path)))
     conn.execute("PRAGMA foreign_keys = ON")
     try:
         template = conn.execute(

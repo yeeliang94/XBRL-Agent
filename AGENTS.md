@@ -154,6 +154,11 @@ whose code lives in one directory are in that directory's `AGENTS.md`
   `SESSION_SECRET` and refuses `AUTH_MODE=dev`.
 - Keep secrets out of source, logs, fixtures, and responses. A production
   dependency requires a request-backed reason and user approval.
+- App file operations go through `utils.paths.safe_path` or `safe_db_target`,
+  which refuse paths outside the approved folders. Deletes, renames and replaces
+  use `safe_entry_path`, which acts on a symbolic link and not its target.
+  `operator_path` and `operator_entry_path` are only for a path someone typed
+  into a command-line tool, never web request data.
 
 ## Windows Enterprise Environment
 

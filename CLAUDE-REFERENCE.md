@@ -2476,7 +2476,7 @@ gotcha #11 (v18 `auth_users` / `auth_sessions`); the operational invariants:
   tests opt OUT with `monkeypatch.delenv("AUTH_MODE")`. **Running pytest with
   `AUTH_MODE` unset makes API-hitting tests 401.**
 - **Production fails fast on misconfig.** `SESSION_SECRET` is mandatory in prod
-  (startup refuses to boot without it; dev falls back to an insecure constant).
+  (startup refuses to boot without it; dev falls back to a random per-process key).
   A startup guard also **refuses to boot in `AUTH_MODE=dev` under production**
   (`WEBSITE_SITE_NAME` present) so dev-mode can never ship to Azure.
 - **Sessions are server-side + revocable** (`auth_sessions` row, not a stateless

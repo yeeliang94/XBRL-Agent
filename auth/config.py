@@ -7,6 +7,7 @@ server reads settings (e.g. server._auto_review_enabled).
 from __future__ import annotations
 
 import os
+import secrets
 
 # Cookie names. The __Host- prefix is a browser-enforced hardening: the cookie
 # is only accepted if it is Secure, has Path=/, and carries no Domain — which
@@ -15,10 +16,11 @@ import os
 SECURE_COOKIE_NAME = "__Host-xbrl_session"
 PLAIN_COOKIE_NAME = "xbrl_session"
 
-# A clearly-labelled, non-secret fallback so local dev works with zero config.
+# Local dev works with zero config: without SESSION_SECRET, this process signs
+# cookies with a key nobody else can know, so a restart signs local users out.
 # Production REFUSES to start without a real SESSION_SECRET (see server startup
-# fail-closed check), so this default can never gate confidential data.
-_DEV_SESSION_SECRET = "dev-insecure-session-secret-not-for-production"
+# fail-closed check).
+_LOCAL_SESSION_SECRET = secrets.token_urlsafe(48)
 
 # Sliding idle-timeout default: 1 hour. Raised from 15 min per the operator's
 # request (docs/PLAN-design-qa-fixes.md R5) — a tool handling financial
@@ -62,9 +64,9 @@ def dev_bypass_active() -> bool:
 
 
 def session_secret() -> str:
-    """HMAC key for signing the session cookie. Falls back to a dev constant
-    locally; production validates presence at startup."""
-    return os.environ.get("SESSION_SECRET") or _DEV_SESSION_SECRET
+    """HMAC key for signing the session cookie. Falls back to a random per-process
+    key locally; production validates presence at startup."""
+    return os.environ.get("SESSION_SECRET") or _LOCAL_SESSION_SECRET
 
 
 def secure_cookies() -> bool:

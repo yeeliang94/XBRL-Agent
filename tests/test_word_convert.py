@@ -293,3 +293,12 @@ def test_real_conversion_produces_text_pdf(tmp_path: Path):
     assert dest.exists() and dest.stat().st_size > 0
     from tools.pdf_search import pdf_has_text_layer
     assert pdf_has_text_layer(str(dest)) is True
+
+
+def test_option_like_path_is_refused(tmp_path: Path, monkeypatch):
+    called = []
+    monkeypatch.setattr(word_convert, "_run_conversion", lambda *a: called.append(a))
+    src = _write(tmp_path / "in.docx")
+    with pytest.raises(WordConversionError):
+        convert_docx_to_pdf(src, "--outdir=/somewhere/out.pdf")
+    assert called == []

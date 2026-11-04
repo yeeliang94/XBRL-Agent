@@ -24,6 +24,7 @@ Two invariants:
   is entitled to.
 """
 from __future__ import annotations
+from utils.paths import safe_db_target
 
 import hashlib
 import json
@@ -62,7 +63,7 @@ def snapshot_facts(
     both (schema v39). Two digests, because there are two reads.
     """
     family_prefix = f"{filing_standard.lower()}-{filing_level.lower()}-"
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(safe_db_target(str(db_path)))
     conn.row_factory = sqlite3.Row
     try:
         # One transaction => one consistent view of run_concept_facts for the
@@ -192,7 +193,7 @@ def write_fill_receipt(
     a failed fill and withhold the artifact (module docstring). Losing the
     audit trail silently is the one outcome this table exists to prevent.
     """
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(safe_db_target(str(db_path)))
     try:
         semantics = (preflight or {}).get("field_semantics") or {}
         taxonomy_versions = semantics.get("taxonomy_versions") or []
@@ -250,7 +251,7 @@ def record_receipt_download(
     """Stamp when the filled workbook was actually taken, and any degraded-fill
     acknowledgement given at that moment. Best-effort, like the insert."""
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = sqlite3.connect(safe_db_target(str(db_path)))
         try:
             if acknowledgement:
                 conn.execute(
@@ -271,7 +272,7 @@ def record_receipt_download(
 
 def fetch_receipts(db_path: str | Path, run_id: int) -> list[dict[str, Any]]:
     """Every receipt for a run, newest first (the run page's audit list)."""
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(safe_db_target(str(db_path)))
     conn.row_factory = sqlite3.Row
     try:
         # Columns named rather than `SELECT *`: a rename then fails here, at

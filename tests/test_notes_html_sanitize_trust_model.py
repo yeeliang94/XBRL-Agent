@@ -12,6 +12,8 @@ bypass every downstream guard.
 """
 from __future__ import annotations
 
+import pytest
+
 from notes.html_sanitize import sanitize_notes_html
 
 
@@ -116,3 +118,18 @@ def test_class_attribute_stripped_from_whitelisted_tag():
     assert "class" not in out.lower()
     assert "sneaky" not in out
     assert "legit" in out
+
+
+@pytest.mark.parametrize("payload", [
+    "<p>safe<!--><img src=x onerror=alert(1)>--></p>",
+    "<p>safe<![CDATA[ > <img src=x onerror=alert(1)> ]]></p>",
+    "<p>safe<?pi > <img src=x onerror=alert(1)> ?></p>",
+    "<p>safe<!foo > <img src=x onerror=alert(1)></p>",
+])
+def test_markup_that_browsers_end_early_cannot_smuggle_an_element(payload):
+    """html.parser and browsers disagree on where these constructs end."""
+    out = _clean(payload)
+    assert "safe" in out
+    assert "<img" not in out
+    assert "<!" not in out
+    assert "<?" not in out

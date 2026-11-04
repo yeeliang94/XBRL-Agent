@@ -19,6 +19,7 @@ Design constraints (from the plan):
   ``server._auto_review_enabled``'s resolver semantics.
 """
 from __future__ import annotations
+from utils.paths import safe_path
 
 import logging
 import os
@@ -118,7 +119,7 @@ def persist_infopack(output_dir: str | Path, infopack: Any) -> Optional[Path]:
         return None
     try:
         path = Path(output_dir) / INFOPACK_FILENAME
-        path.write_text(infopack.to_json(), encoding="utf-8")
+        safe_path(path).write_text(infopack.to_json(), encoding="utf-8")
         return path
     except Exception:  # noqa: BLE001 — advisory persistence, never fatal
         logger.warning("Failed to persist infopack.json to %s", output_dir, exc_info=True)
@@ -141,7 +142,7 @@ def _load_infopack_from_run(run: Any) -> Optional[Any]:
         path = Path(output_dir) / INFOPACK_FILENAME
         if path.exists():
             try:
-                return Infopack.from_json(path.read_text(encoding="utf-8"))
+                return Infopack.from_json(safe_path(path).read_text(encoding="utf-8"))
             except Exception:  # noqa: BLE001 — defensive; skip a bad pack
                 logger.debug("Unparseable infopack.json for run %s", getattr(run, "id", "?"))
 

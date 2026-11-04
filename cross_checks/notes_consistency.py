@@ -27,6 +27,7 @@ Kept intentionally small:
   compare" when either side has no parseable page.
 """
 from __future__ import annotations
+from utils.paths import safe_path
 
 import re
 from dataclasses import dataclass
@@ -287,7 +288,7 @@ def check_notes_citation_consistency(
     if not path.exists():
         return []
     try:
-        wb = openpyxl.load_workbook(str(path), data_only=True)
+        wb = openpyxl.load_workbook(safe_path(str(path)), data_only=True)
     except Exception:  # noqa: BLE001 — advisory, never raise
         return []
     try:
@@ -366,7 +367,7 @@ def check_notes_consistency(
     if not path.exists():
         return []
     try:
-        wb = openpyxl.load_workbook(str(path), data_only=True)
+        wb = openpyxl.load_workbook(safe_path(str(path)), data_only=True)
     except Exception:  # noqa: BLE001 — advisory check, never raise
         return []
 

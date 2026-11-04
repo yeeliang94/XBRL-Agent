@@ -5,6 +5,7 @@ Previously duplicated verbatim across `coordinator.py`,
 owning it in one place.
 """
 from __future__ import annotations
+from utils.paths import safe_entry_path, safe_path
 
 import dataclasses
 import json
@@ -196,7 +197,7 @@ def _write_trace(
     # most needed. Sanitizing here covers every caller, present and future.
     safe_prefix = re.sub(r'[<>:"/\\|?*]', "_", prefix)
     trace_path = Path(output_dir) / f"{safe_prefix}_conversation_trace.json"
-    trace_path.write_text(
+    safe_path(trace_path).write_text(
         json.dumps(payload, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
     )
@@ -276,7 +277,7 @@ def purge_run_diagnostics(
         for path in run_dir.glob(pattern):
             if path.parent.resolve() != run_dir or not (path.is_file() or path.is_symlink()):
                 continue
-            path.unlink()
+            safe_entry_path(path).unlink()
             removed.append(path.name)
     return sorted(set(removed))
 
@@ -306,7 +307,7 @@ def purge_expired_diagnostics(
                 if not resolved.is_relative_to(root) or not path.is_file():
                     continue
                 if path.stat().st_mtime < cutoff:
-                    path.unlink()
+                    safe_entry_path(path).unlink()
                     removed += 1
             except OSError:
                 logger.warning(

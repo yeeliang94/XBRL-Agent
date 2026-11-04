@@ -217,3 +217,17 @@ def test_expired_diagnostic_retention_is_bounded_to_run_dirs(tmp_path: Path) -> 
     assert not old_trace.exists()
     assert not old_repeat_trace.exists()
     assert fresh_trace.exists()
+
+
+def test_purging_a_run_keeps_the_file_behind_a_linked_trace(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    source = run_dir / "uploaded.pdf"
+    source.write_text("source")
+    (run_dir / "SOFP_conversation_trace.json").symlink_to(source)
+
+    removed = purge_run_diagnostics(run_dir, allowed_root=tmp_path)
+
+    assert removed == ["SOFP_conversation_trace.json"]
+    assert source.read_text() == "source"
+    assert not (run_dir / "SOFP_conversation_trace.json").is_symlink()

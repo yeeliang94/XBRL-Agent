@@ -28,6 +28,7 @@ without standing up the full pydantic-ai agent; the agent factory just
 registers thin ``@agent.tool`` wrappers around them.
 """
 from __future__ import annotations
+from utils.paths import safe_db_target, safe_path
 
 import dataclasses
 import json
@@ -126,7 +127,7 @@ def _prompt_user_guidance(value: object) -> str:
 
 
 def _open_conn(db_path: str | Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(safe_db_target(str(db_path)))
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.row_factory = sqlite3.Row
@@ -1357,11 +1358,11 @@ def render_reviewer_prompt(
     """
     mode = (spot_check_mode or "").lower() or None
     if investigation_handoff:
-        body = _SCOPED_INVESTIGATION_PROMPT_PATH.read_text(encoding="utf-8").strip()
+        body = safe_path(_SCOPED_INVESTIGATION_PROMPT_PATH).read_text(encoding="utf-8").strip()
     elif mode is not None:
-        body = _SPOT_CHECK_PROMPT_PATH.read_text(encoding="utf-8").strip()
+        body = safe_path(_SPOT_CHECK_PROMPT_PATH).read_text(encoding="utf-8").strip()
     else:
-        body = _PROMPT_PATH.read_text(encoding="utf-8").strip()
+        body = safe_path(_PROMPT_PATH).read_text(encoding="utf-8").strip()
     # Holistic sight (Phase 1): start the reviewer with the whole filled
     # picture so it can spot duplicates/misclassifications across statements,
     # not just the cell a check named. Best-effort — a summary failure must

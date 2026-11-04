@@ -13,6 +13,11 @@ Usage:
 
 Defaults to: /sessions/happy-zealous-dirac/mnt/xbrl-agent/XBRL-template-MFRS/02-SOFP-OrderOfLiquidity.xlsx
 """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from utils.paths import operator_path  # noqa: E402
 
 import re
 import sys
@@ -123,7 +128,7 @@ def validate_template(template_path: Path) -> dict[str, Any]:
     if not template_path.exists():
         raise FileNotFoundError(f"File not found: {template_path}")
 
-    wb = load_workbook(template_path, data_only=False)
+    wb = load_workbook(operator_path(template_path), data_only=False)
     try:
         if SHEET_NAME not in wb.sheetnames:
             raise KeyError(f"Sheet '{SHEET_NAME}' not found")

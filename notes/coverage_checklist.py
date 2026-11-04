@@ -31,6 +31,7 @@ point (draft before the reviewer pass, final after) from the same durable
 inputs.
 """
 from __future__ import annotations
+from utils.paths import safe_path
 
 import json
 from dataclasses import dataclass, field
@@ -243,7 +244,7 @@ def load_notes12_skips(output_dir: Optional[str]) -> list[dict]:
         path = Path(output_dir) / "notes12_skips.json"
         if not path.exists():
             return []
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(safe_path(path).read_text(encoding="utf-8"))
         return data if isinstance(data, list) else []
     except Exception:  # noqa: BLE001
         return []

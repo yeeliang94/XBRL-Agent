@@ -21,6 +21,7 @@ readiness reminders and the server-enforced report-acknowledgment before a
 degraded artifact is released (finding 5), not in hiding the feature.
 """
 from __future__ import annotations
+from utils.paths import safe_entry_path, safe_path
 
 import json
 from contextlib import closing
@@ -162,7 +163,7 @@ def _assert_zip_within_budget(path: str) -> None:
     import zipfile
 
     try:
-        with zipfile.ZipFile(path) as zf:
+        with zipfile.ZipFile(safe_path(path)) as zf:
             infos = zf.infolist()
             total = sum(info.file_size for info in infos)
     except zipfile.BadZipFile as exc:
@@ -593,11 +594,11 @@ def patch_mtool_template(
     # On success the dir is handed to the artifact registry and lives only
     # until the artifact expires, so the except never fires on success.
     work_root = _artifact_root()
-    work_root.mkdir(parents=True, exist_ok=True)
+    safe_path(work_root).mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(dir=work_root))
     try:
         src = tmp / "template.xlsx"
-        src.write_bytes(raw)
+        safe_path(src).write_bytes(raw)
 
         # Zip-bomb guard: check the central-directory metadata (cheap — no
         # decompression) and reject before load_workbook_entries expands every
@@ -609,7 +610,7 @@ def patch_mtool_template(
         try:
             from mtool.offline_fill import (
                 get_sheet_paths, load_workbook_entries)
-            _, data, _ = load_workbook_entries(str(src))
+            _, data, _ = load_workbook_entries(str(safe_path(src)))
             get_sheet_paths(data)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
@@ -646,7 +647,7 @@ def patch_mtool_template(
             except json.JSONDecodeError as exc:
                 raise HTTPException(
                     status_code=422,
-                    detail=f"column_map is not valid JSON: {exc}") from exc
+                    detail="column_map is not valid JSON.") from exc
             _validate_cmap_shape(cmap)
             _validate_cmap_semantics(cmap, doc)
             # Keep the detector's physical period markers, but apply the
@@ -748,7 +749,7 @@ def patch_mtool_template(
 
         out = tmp / "filled.xlsx"
         try:
-            report = fill_workbook(str(src), ready, str(out),
+            report = fill_workbook(str(safe_path(src)), ready, str(safe_path(out)),
                                    strict=strict, force_recalc=force_recalc)
         except _ET.ParseError as exc:
             # Malformed worksheet/sharedStrings XML inside an otherwise valid
@@ -877,7 +878,7 @@ def patch_mtool_template(
                 final = out
 
         from mtool.offline_fill import verify_numeric_snapshot
-        report["snapshot_verification"] = verify_numeric_snapshot(str(final), ready)
+        report["snapshot_verification"] = verify_numeric_snapshot(str(safe_path(final)), ready)
         if report["snapshot_verification"]["status"] != "ok":
             report["status"] = "degraded"
             # Keep final-write failures visible in the existing problem lists,
@@ -916,7 +917,7 @@ def patch_mtool_template(
             with closing(server._open_audit_conn()) as conn:
                 if current_reports(conn, run_id)["digest"] != doc["reports"]["digest"]:
                     raise HTTPException(409, "Reports changed during preparation. Prepare the workbook again.")
-            _, report_data, _ = load_workbook_entries(str(final))
+            _, report_data, _ = load_workbook_entries(str(safe_path(final)))
             occupied = [(w["sheet"], w["cell"]) for w in report.get("written", [])]
             for note in (notes_report or {}).get("footnotes_written", []):
                 if note.get("visible_cell") and "!" in note["visible_cell"]:
@@ -926,7 +927,7 @@ def patch_mtool_template(
             report_doc = resolve_reports(report_data, doc["reports"],
                                          selection["selected_sheets"] if selection else None, occupied)
             report_out = Path(final).with_name("reports-filled.xlsx")
-            report_fill = fill_report_fields(str(final), report_doc, str(report_out))
+            report_fill = fill_report_fields(str(safe_path(final)), report_doc, str(safe_path(report_out)))
             final = report_out
 
         summary = _full_report(report, notes_report)
@@ -1076,7 +1077,7 @@ def download_mtool_artifact(run_id: int, artifact_id: str,
     elif rec.get("receipt_id"):
         record_receipt_download(server.AUDIT_DB_PATH, rec["receipt_id"])
     return FileResponse(
-        str(rec["path"]),
+        safe_path(str(rec["path"])),
         media_type=("application/vnd.openxmlformats-officedocument."
                     "spreadsheetml.sheet"),
         filename=rec["filename"],
@@ -1110,16 +1111,16 @@ def detect_mtool_columns(
         raise HTTPException(status_code=422, detail="This file is empty. Export the template from mTool again and choose the new .xlsx file.")
 
     work_root = Path(server.OUTPUT_DIR) / "_mtool_tmp"
-    work_root.mkdir(parents=True, exist_ok=True)
+    safe_path(work_root).mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(dir=work_root))
     try:
         src = tmp / "template.xlsx"
-        src.write_bytes(raw)
+        safe_path(src).write_bytes(raw)
         _assert_zip_within_budget(str(src))
 
         from mtool.offline_fill import get_sheet_paths, load_workbook_entries
         try:
-            _, data, _ = load_workbook_entries(str(src))
+            _, data, _ = load_workbook_entries(str(safe_path(src)))
             get_sheet_paths(data)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
@@ -1213,17 +1214,17 @@ def preview_mtool_notes(
         raise HTTPException(status_code=422, detail="This file is empty. Export the template from mTool again and choose the new .xlsx file.")
 
     work_root = Path(server.OUTPUT_DIR) / "_mtool_tmp"
-    work_root.mkdir(parents=True, exist_ok=True)
+    safe_path(work_root).mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(dir=work_root))
     try:
         src = tmp / "template.xlsx"
-        src.write_bytes(raw)
+        safe_path(src).write_bytes(raw)
         _assert_zip_within_budget(str(src))
 
         from mtool.offline_fill import (
             get_sheet_paths, inspect_footnotes, load_workbook_entries)
         try:
-            _, data, _ = load_workbook_entries(str(src))
+            _, data, _ = load_workbook_entries(str(safe_path(src)))
             get_sheet_paths(data)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
@@ -1248,7 +1249,7 @@ def preview_mtool_notes(
 
         # dry_run: resolves + plans, writes nothing (output_path unused).
         try:
-            report = fill_footnotes(str(src), notes_doc, None, dry_run=True,
+            report = fill_footnotes(str(safe_path(src)), notes_doc, None, dry_run=True,
                                     create_missing=create_missing_notes)
         except _ET.ParseError as exc:
             raise HTTPException(
@@ -1303,7 +1304,7 @@ def _apply_notes_targets(notes_doc: dict, notes_targets: str | None) -> None:
     except json.JSONDecodeError as exc:
         raise HTTPException(
             status_code=422,
-            detail=f"notes_targets is not valid JSON: {exc}") from exc
+            detail="notes_targets is not valid JSON.") from exc
     if not isinstance(targets, dict):
         raise HTTPException(
             status_code=422,
@@ -1542,7 +1543,7 @@ def _sha256_file(path: Path) -> str:
     import hashlib
 
     h = hashlib.sha256()
-    with open(path, "rb") as fh:
+    with open(safe_path(path), "rb") as fh:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
@@ -1571,6 +1572,6 @@ def _operator_label(request) -> str | None:
 def _cleanup(path: Path) -> None:
     import shutil
     try:
-        shutil.rmtree(path, ignore_errors=True)
+        shutil.rmtree(safe_entry_path(path), ignore_errors=True)
     except Exception:  # noqa: BLE001
         logger.warning("mTool temp cleanup failed for %s", path, exc_info=True)

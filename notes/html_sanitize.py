@@ -51,6 +51,7 @@ import re
 from typing import Optional
 
 from bs4 import BeautifulSoup, Tag
+from bs4.element import PreformattedString
 
 
 # The HTML tag whitelist. The CORE block/inline tags an agent may emit are
@@ -388,6 +389,17 @@ def sanitize_notes_html(html: Optional[str]) -> tuple[str, list[str]]:
 
     warnings: list[str] = []
     soup = BeautifulSoup(html, "html.parser")
+
+    # Pass 0: drop comments, CDATA, processing instructions and declarations.
+    # Notes never need them, and html.parser and browsers disagree on where
+    # they end: `<!--><img onerror=...>-->` is one comment here but a live
+    # element in a browser.
+    for node in soup.find_all(string=lambda text: isinstance(text, PreformattedString)):
+        # Only a comment holding markup is worth a warning. Formatting treats a
+        # warning as a rejection, and an ordinary comment is no reason for that.
+        if "<" in node:
+            warnings.append("Removed HTML comment or declaration holding markup")
+        node.extract()
 
     # Pass 1: decompose anything we don't want to keep the contents
     # of (script / style / iframe / ...).

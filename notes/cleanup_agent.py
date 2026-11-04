@@ -1,5 +1,6 @@
 """Finalize notes and report narratives with source-backed deletions only."""
 from __future__ import annotations
+from utils.paths import safe_path
 import asyncio
 from dataclasses import dataclass, field
 import json
@@ -89,7 +90,7 @@ async def propose_cleanup(*, cells, pdf_path, model, usage, output_dir, trace_la
     """
     deps = CleanupDeps(pdf_path)
     agent = Agent(model, deps_type=CleanupDeps, output_type=Proposal,
-                  system_prompt=PROMPT_PATH.read_text(), end_strategy='early',
+                  system_prompt=safe_path(PROMPT_PATH).read_text(), end_strategy='early',
                   retries={'output': 2},
                   model_settings=build_model_settings(model, cache_key='xbrl-notes-cleanup',
                       thinking_level=configured_role_thinking_level('notes_formatter')))
