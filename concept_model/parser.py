@@ -22,7 +22,7 @@ list of surprises rather than silently skip them.  SOCIE's matrix layout
 raises ``UnsupportedSchemaShape`` until Phase 5 lands.
 """
 from __future__ import annotations
-from utils.paths import safe_path
+from utils.paths import approve_operator_folder, safe_path
 
 import re
 import uuid
@@ -811,6 +811,7 @@ def _cli(argv: Iterable[str]) -> int:
     if not args.xlsx:
         parser.error("xlsx path required unless --all is passed")
 
+    approve_operator_folder(args.xlsx)
     tree = parse_template(args.xlsx)
     indent = 2 if args.pretty else None
     json.dump(tree.to_json(), sys.stdout, indent=indent, sort_keys=True)

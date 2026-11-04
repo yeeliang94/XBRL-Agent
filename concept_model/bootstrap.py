@@ -150,6 +150,9 @@ def main() -> None:
     ap.add_argument("db_path", help="Path to the audit/canonical SQLite DB")
     args = ap.parse_args()
 
+    from utils.paths import approve_operator_folder, operator_path
+
+    approve_operator_folder(operator_path(args.db_path).parent)
     ids = import_all_face_templates(args.db_path)
     print(f"Imported {len(ids)} face templates into {args.db_path}")
 

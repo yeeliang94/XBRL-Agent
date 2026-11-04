@@ -165,3 +165,21 @@ def test_replacing_a_symlink_replaces_the_link_and_keeps_its_target(tmp_path):
 def test_entry_path_refuses_outside_folders_and_nameless_paths(path):
     with pytest.raises(paths.UnsafePathError):
         paths.safe_entry_path(path)
+
+
+def test_parser_command_line_reads_a_template_the_person_named(tmp_path, monkeypatch, capsys):
+    import shutil
+
+    from concept_model.parser import _cli
+
+    template = tmp_path / "chosen.xlsx"
+    shutil.copyfile(paths.PROJECT_ROOT / "XBRL-template-MFRS" / "Company" / "01-SOFP-CuNonCu.xlsx", template)
+    monkeypatch.setattr(paths, "PROJECT_ROOT", tmp_path / "elsewhere")
+    monkeypatch.setattr(paths, "_TEMP_ROOTS", ())
+    monkeypatch.delenv("XBRL_OUTPUT_DIR", raising=False)
+    monkeypatch.setattr(paths, "_OPERATOR_ROOTS", [])
+    with pytest.raises(paths.UnsafePathError):
+        paths.safe_path(template)
+
+    assert _cli([str(template)]) == 0
+    assert capsys.readouterr().out.strip()
