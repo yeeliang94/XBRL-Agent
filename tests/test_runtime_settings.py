@@ -25,7 +25,9 @@ def test_update_is_atomic_owner_only_and_round_trips(tmp_path, monkeypatch):
 
     assert saved == {"XBRL_TEST_SETTING": "local"}
     assert json.loads(path.read_text(encoding="utf-8")) == saved
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    # Windows has no owner-only file mode, so only check it elsewhere.
+    if sys.platform != "win32":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert os.environ["XBRL_TEST_SETTING"] == "local"
     assert not list(tmp_path.glob(".settings.json.*.tmp"))
 

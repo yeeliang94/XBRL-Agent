@@ -825,9 +825,6 @@ def test_diagnostics_zip_is_run_scoped_and_redacted(api_env, monkeypatch, status
         (run_dir / name).write_text(json.dumps(trace))
     for name in ("source.pdf", "filled.xlsx", ".env", "settings.json"):
         (run_dir / name).write_text("excluded-content")
-    outside = out / "other_conversation_trace.json"
-    outside.write_text('{"content": "other-run-secret"}')
-    (run_dir / "escape_conversation_trace.json").symlink_to(outside)
     log = out / "application.jsonl"
     log.write_text("\n".join(json.dumps(row) for row in [
         {"run_id": run_id, "message": "run failure; password=private-password"},
@@ -851,8 +848,25 @@ def test_diagnostics_zip_is_run_scoped_and_redacted(api_env, monkeypatch, status
         assert "earlier log" in exported
         assert json.loads(archive.read("run.json"))["run"]["config"]["max_tokens"] == 1200
         assert json.loads(archive.read("traces/SOFP_conversation_trace.json"))["total_tokens"] == 123
-        assert any(item["reason"] == "Unsafe diagnostic path" for item in json.loads(archive.read("manifest.json"))["unavailable"])
     assert json.loads((run_dir / "SOFP_conversation_trace.json").read_text()) == trace
+
+
+def test_diagnostics_zip_refuses_a_linked_trace_that_leaves_the_run(api_env, make_symlink):
+    from io import BytesIO
+    from zipfile import ZipFile
+
+    client, db_path, out = api_env
+    run_dir = out / "support"
+    run_dir.mkdir()
+    run_id = _seed_run(db_path, session_id="support", pdf_filename="source.pdf",
+                       output_dir=str(run_dir), status="completed")
+    outside = out / "other_conversation_trace.json"
+    outside.write_text('{"content": "other-run-secret"}')
+    make_symlink(run_dir / "escape_conversation_trace.json", outside)
+    with ZipFile(BytesIO(client.get(f"/api/runs/{run_id}/diagnostics").content)) as archive:
+        exported = "\n".join(archive.read(name).decode() for name in archive.namelist())
+        assert "other-run-secret" not in exported
+        assert any(item["reason"] == "Unsafe diagnostic path" for item in json.loads(archive.read("manifest.json"))["unavailable"])
 
 
 @pytest.mark.parametrize("with_output", [True, False])

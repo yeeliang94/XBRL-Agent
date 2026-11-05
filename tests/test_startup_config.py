@@ -34,7 +34,9 @@ def test_requirements_txt_has_deps():
 def test_start_sh_is_executable():
     script = BASE / "start.sh"
     mode = script.stat().st_mode
-    assert mode & stat.S_IXUSR
+    # Windows has no "executable" flag on files, so only check it elsewhere.
+    if sys.platform != "win32":
+        assert mode & stat.S_IXUSR
     content = script.read_text(encoding="utf-8")
     assert "venv/bin/python -m pip" in content
     assert "venv/bin/python server.py" in content

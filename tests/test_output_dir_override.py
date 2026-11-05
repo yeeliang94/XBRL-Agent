@@ -33,8 +33,8 @@ def test_default_output_dir_is_repo_output():
     env = {k: v for k, v in os.environ.items() if k != "XBRL_OUTPUT_DIR"}
     env["XBRL_OUTPUT_DIR"] = ""  # explicit empty = use default
     result = _probe(env)
-    assert result["output"].endswith("/output")
-    assert result["db"].endswith("/output/xbrl_agent.db")
+    assert Path(result["output"]).name == "output"
+    assert Path(result["db"]).parts[-2:] == ("output", "xbrl_agent.db")
 
 
 def test_xbrl_output_dir_override(tmp_path):

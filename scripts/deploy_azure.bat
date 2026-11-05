@@ -16,8 +16,9 @@ setlocal enabledelayedexpansion
 ::    2. npm ci + npm run build   (fresh web/dist -> repo-root/dist)
 ::    3. backend pytest + frontend vitest
 ::    4. stamp the commit hash into version.txt
-::    5. stage + zip (exclude output/, .env, node_modules, backup-originals/;
-::       include the XBRL-template-* and SSMxT_2022v1.0 runtime data)
+::    5. stage + zip (exclude output/, .env, node_modules, backup-originals/,
+::       tests/, web/ source; include dist/, scripts/, and the XBRL-template-*
+::       and SSMxT_2022v1.0 runtime data)
 ::    6. az webapp deploy --type zip
 :: ===========================================================================
 
@@ -93,6 +94,7 @@ if not exist "venv" (
 )
 call venv\Scripts\activate.bat
 pip install -r requirements.txt -q
+if errorlevel 1 ( echo ERROR: installing Python packages failed. & exit /b 1 )
 python -m pytest tests\ -q
 if errorlevel 1 ( echo ERROR: backend tests failed. & exit /b 1 )
 pushd web
@@ -119,10 +121,13 @@ if exist "%PKG%" del /q "%PKG%"
 :: the XBRL-template-* + SSMxT_2022v1.0 runtime data is copied by default.
 :: Ignored private material (.env files, data, logs, databases, working
 :: documents) must never enter the package; the app reads nothing from docs.
+:: Tests, the website source (the built site is in dist) and scan packages are
+:: not used by the running app. scripts stays: the app imports from it.
 :: robocopy exit codes 0-7 are success; >=8 is a real error.
 robocopy . "%STAGE%" /E /NFL /NDL /NJH /NJS /NP ^
     /XD output node_modules .git venv .pytest_cache web\node_modules backup-originals __pycache__ .vscode ^
         .claude .idea XBRL-Agent data logs ab_work .codex-remote-attachments "%CD%\docs" ^
+        "%CD%\tests" "%CD%\web" "%CD%\veracode" ^
     /XF .env .env.* *.pyc *.log *.db *.db-wal *.db-shm
 if %ERRORLEVEL% GEQ 8 ( echo ERROR: staging copy failed. & exit /b 1 )
 :: Python's zipfile writes forward-slash entry names. Windows PowerShell 5.1

@@ -105,7 +105,7 @@ def test_mtime_change_invalidates_cache(tmp_path):
     )
 
 
-def test_symlinked_path_shares_cache_entry(tmp_path):
+def test_symlinked_path_shares_cache_entry(tmp_path, make_symlink):
     """Peer-review I-3: on macOS ``/tmp`` is a symlink to ``/private/tmp``.
     A PDF written under one path and read through the other must share
     one cache slot, not double-render every page. ``realpath`` in
@@ -114,14 +114,12 @@ def test_symlinked_path_shares_cache_entry(tmp_path):
     The test builds a concrete symlink in tmp_path so the behaviour
     is platform-independent.
     """
-    import os
-
     real_pdf = tmp_path / "real" / "report.pdf"
     real_pdf.parent.mkdir()
     real_pdf.write_bytes(b"%PDF-1.4\n")
 
     symlinked_pdf = tmp_path / "via_symlink.pdf"
-    os.symlink(str(real_pdf), str(symlinked_pdf))
+    make_symlink(symlinked_pdf, real_pdf)
 
     # Populate via the real path.
     page_cache.set(str(real_pdf), 1, 200, b"PNG:shared")

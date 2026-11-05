@@ -49,3 +49,5 @@ docx2pdf>=0.1.8 ; sys_platform == "win32"
 # per-worker imports make a single-file/TDD run SLOWER, so parallelism is an
 # explicit `-n auto` flag for the full suite only (see CLAUDE.md → Testing).
 pytest-xdist>=3.8.0
+# Runs the backend tests written as async functions (about 440 of them).
+pytest-asyncio>=1.3.0

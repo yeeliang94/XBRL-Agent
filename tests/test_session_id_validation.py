@@ -90,13 +90,13 @@ def test_safe_path_refuses_paths_outside_approved_folders(path):
     assert issubclass(paths.UnsafePathError, OSError)
 
 
-def test_safe_path_refuses_a_symlink_that_leaves_the_folder(tmp_path, monkeypatch):
+def test_safe_path_refuses_a_symlink_that_leaves_the_folder(tmp_path, monkeypatch, make_symlink):
     monkeypatch.setattr(paths, "PROJECT_ROOT", tmp_path / "project")
     monkeypatch.setattr(paths, "_TEMP_ROOTS", (tmp_path / "project",))
     (tmp_path / "project").mkdir()
     (tmp_path / "secret.txt").write_text("x")
     link = tmp_path / "project" / "link.txt"
-    link.symlink_to(tmp_path / "secret.txt")
+    make_symlink(link, tmp_path / "secret.txt")
     with pytest.raises(paths.UnsafePathError):
         paths.safe_path(link)
 
@@ -133,11 +133,11 @@ def test_a_folder_named_on_the_command_line_is_approved(tmp_path, monkeypatch):
     assert paths.assert_writable_output_dir(f"{chosen}/run_001").name == "run_001"
 
 
-def test_deleting_a_symlink_removes_the_link_and_keeps_its_target(tmp_path):
+def test_deleting_a_symlink_removes_the_link_and_keeps_its_target(tmp_path, make_symlink):
     target = tmp_path / "uploaded.pdf"
     target.write_text("source")
     link = tmp_path / "SOFP_conversation_trace.json"
-    link.symlink_to(target)
+    make_symlink(link, target)
 
     paths.safe_entry_path(link).unlink()
 
@@ -145,13 +145,13 @@ def test_deleting_a_symlink_removes_the_link_and_keeps_its_target(tmp_path):
     assert not link.is_symlink()
 
 
-def test_replacing_a_symlink_replaces_the_link_and_keeps_its_target(tmp_path):
+def test_replacing_a_symlink_replaces_the_link_and_keeps_its_target(tmp_path, make_symlink):
     from utils.atomic_io import replace_with_retry
 
     target = tmp_path / "workbook.xlsx"
     target.write_text("original")
     link = tmp_path / "linked.xlsx"
-    link.symlink_to(target)
+    make_symlink(link, target)
     new = tmp_path / "new.xlsx"
     new.write_text("new")
 

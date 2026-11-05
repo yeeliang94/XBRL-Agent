@@ -49,6 +49,19 @@ db.schema.init_db = _init_db_from_template
 db.init_db = _init_db_from_template
 
 
+@pytest.fixture
+def make_symlink():
+    """Create a symbolic link, or skip where Windows refuses without admin rights."""
+    def _make(link, target):
+        try:
+            os.symlink(target, link)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) != 1314:  # "privilege not held"
+                raise
+            pytest.skip(f"Windows refused to create a symbolic link: {exc}")
+    return _make
+
+
 @pytest.fixture(autouse=True)
 def _auth_dev_mode_by_default():
     """Default the whole suite into AUTH_MODE=dev so the auth middleware (which
