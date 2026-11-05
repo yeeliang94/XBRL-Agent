@@ -12,7 +12,7 @@ Not listed here, by design:
   `SESSION_SECRET`, `AUTH_*`, `BOOTSTRAP_ADMIN_*`.
 - Values needed before the settings file can be found or that describe this
   machine: `PORT`, `XBRL_OUTPUT_DIR`, `XBRL_SETTINGS_FILE`, `XBRL_APP_LOG_*`,
-  `XBRL_APP_VERSION`, `XBRL_SOFFICE_PATH`, `XBRL_DOCX_CONVERTER`.
+  `XBRL_APP_VERSION`, `XBRL_DOCX_CONVERTER`.
 - Test fixtures (`MPERS_TEST_PDF`, `FINCO_PDF_PATH`) and the legacy
   `SCOUT_MODEL` fallback, which the per-role model setting replaces.
 

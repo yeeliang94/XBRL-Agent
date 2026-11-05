@@ -16,9 +16,12 @@ is deliberately unlike the removed docconvert/docling stack):
   --convert-to pdf``).
 
 Override the auto-selection with ``XBRL_DOCX_CONVERTER`` (``soffice`` |
-``docx2pdf``) or point at a specific LibreOffice binary with
-``XBRL_SOFFICE_PATH``. Both are for the odd deployment (e.g. LibreOffice
-installed on a Windows box) and for tests.
+``docx2pdf``). This is for the odd deployment (e.g. LibreOffice installed on a
+Windows box) and for tests.
+
+Neither converter's command line carries a file path. The Word helper reads its
+paths from standard input, and LibreOffice runs from a private folder holding a
+fixed file name, so nothing from an upload can be read as part of a command.
 
 The module imports cleanly without LibreOffice or ``docx2pdf`` present; the
 missing-converter case surfaces as a :class:`WordConversionError` at call time,
@@ -27,6 +30,7 @@ never an ImportError at import time.
 from __future__ import annotations
 from utils.paths import safe_entry_path, safe_path
 
+import json
 import logging
 import os
 import shutil
@@ -50,15 +54,26 @@ logger = logging.getLogger("server")
 _CONVERT_TIMEOUT_S = 180
 
 # Run inside a fresh child interpreter so a hung Word COM call can be killed on
-# timeout. argv: [-c, snippet, src, dest] → sys.argv[1]=src, [2]=dest.
-_WORD_COM_SNIPPET = "import sys; from docx2pdf import convert; convert(sys.argv[1], sys.argv[2])"
+# timeout. The two paths arrive on standard input as a JSON list [src, dest].
+_WORD_COM_SNIPPET = (
+    "import json, sys; from docx2pdf import convert; "
+    "src, dest = json.load(sys.stdin); convert(src, dest)"
+)
 
 _SOFFICE_CANDIDATES = (
     "soffice",
     "libreoffice",
     # macOS default install location — not on PATH by default.
     "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+    # Windows default install location — not on PATH by default.
+    r"C:\Program Files\LibreOffice\program\soffice.exe",
 )
+
+# LibreOffice runs inside a private folder and is always handed this one name.
+# With no --outdir it writes <stem>.pdf into that folder.
+_SOFFICE_INPUT_NAME = "input.docx"
+_SOFFICE_OUTPUT_NAME = "input.pdf"
+_SOFFICE_ARGS = ("--headless", "--convert-to", "pdf", _SOFFICE_INPUT_NAME)
 
 # Friendly, operator-facing fallback instruction reused across error messages.
 # The operator always has an escape hatch: Word can save a PDF itself, and the
@@ -106,9 +121,25 @@ _SOFFICE_ENV_KEYS = (
 )
 
 
+# The Word helper is a Python child that drives Word over COM. Same rule as
+# LibreOffice: no secrets. It also needs the Windows profile folders, for the COM
+# libraries and their cache, and the Python settings start.bat relies on.
+_WORD_HELPER_ENV_KEYS = _SOFFICE_ENV_KEYS + (
+    "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
+    "PROGRAMW6432", "COMMONPROGRAMFILES", "HOMEDRIVE", "HOMEPATH", "USERNAME",
+    "USERDOMAIN", "PATHEXT", "OS", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
+    "PYTHONUTF8", "PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV",
+)
+
+
 def _soffice_env() -> dict[str, str]:
     """A minimal environment for the LibreOffice subprocess (see comment above)."""
     return {k: os.environ[k] for k in _SOFFICE_ENV_KEYS if k in os.environ}
+
+
+def _word_helper_env() -> dict[str, str]:
+    """A minimal environment for the Word helper subprocess (see comment above)."""
+    return {k: os.environ[k] for k in _WORD_HELPER_ENV_KEYS if k in os.environ}
 
 
 def _validate_docx_structure(src: Path) -> None:
@@ -138,9 +169,6 @@ def _validate_docx_structure(src: Path) -> None:
 
 def _find_soffice() -> str | None:
     """Return a runnable LibreOffice binary path, or None if none is found."""
-    override = os.environ.get("XBRL_SOFFICE_PATH", "").strip()
-    if override:
-        return override if (shutil.which(override) or Path(override).exists()) else None
     for cand in _SOFFICE_CANDIDATES:
         found = shutil.which(cand)
         if found:
@@ -153,59 +181,49 @@ def _find_soffice() -> str | None:
 def _convert_with_soffice(src: Path, dest: Path, soffice: str) -> None:
     """Convert via LibreOffice headless into ``dest``.
 
-    ``soffice --convert-to pdf --outdir <dir> <src>`` writes
-    ``<dir>/<src-stem>.pdf``. We convert into a scratch dir and then move the
-    result to ``dest`` so the caller's exact target name is honoured regardless
-    of the source stem.
+    The source is copied into a private folder under a fixed name and converted
+    there, then the result moves to ``dest``. The folder lives in the system temp
+    area because the session folder can sit on a network share, where the
+    LibreOffice profile's file locks are unreliable.
     """
-    outdir = dest.parent
-    # Isolate the LibreOffice user profile per conversion. `soffice --headless`
-    # shares one default profile, so two concurrent uploads (two operators, or
-    # a retry) can hit a profile lock — the second run silently attaches to the
-    # first or dies with a lock error surfaced as an opaque 422. A unique
-    # UserInstallation dir makes each headless run independent.
-    profile_dir = tempfile.mkdtemp(prefix="lo_profile_")
-    profile_url = Path(profile_dir).as_uri()
-    cmd = [
-        soffice,
-        f"-env:UserInstallation={profile_url}",
-        "--headless",
-        "--convert-to",
-        "pdf",
-        "--outdir",
-        str(outdir),
-        str(src),
-    ]
+    # The folder also holds this run's LibreOffice user profile, which LibreOffice
+    # reads from the UserInstallation environment variable. `soffice --headless`
+    # otherwise shares one default profile, so two concurrent uploads (two
+    # operators, or a retry) can hit a profile lock — the second run silently
+    # attaches to the first or dies with a lock error surfaced as an opaque 422.
+    workdir = Path(tempfile.mkdtemp(prefix="lo_work_"))
     try:
+        shutil.copyfile(safe_path(src), safe_path(workdir / _SOFFICE_INPUT_NAME))
         proc = subprocess.run(
-            cmd,
+            [soffice, *_SOFFICE_ARGS],
             capture_output=True,
             text=True,
             timeout=_CONVERT_TIMEOUT_S,
-            env=_soffice_env(),
+            cwd=workdir,
+            env={**_soffice_env(), "UserInstallation": workdir.as_uri()},
         )
+        if proc.returncode != 0:
+            raise WordConversionError(
+                f"LibreOffice exited {proc.returncode}: "
+                f"{(proc.stderr or proc.stdout or '').strip()[:500]}"
+            )
+        produced = workdir / _SOFFICE_OUTPUT_NAME
+        if not produced.exists():
+            raise WordConversionError(
+                f"LibreOffice reported success but produced no PDF at {produced}"
+            )
+        # The temp area may be a different disk, so copy beside dest, then swap.
+        staged = dest.with_name(f"{dest.name}.converting")
+        shutil.copyfile(safe_path(produced), safe_path(staged))
+        replace_with_retry(staged, dest)
     except subprocess.TimeoutExpired as exc:
         raise WordConversionError(
             f"LibreOffice conversion timed out after {_CONVERT_TIMEOUT_S}s: {exc}"
         ) from exc
     except OSError as exc:
-        raise WordConversionError(f"Could not launch LibreOffice ({soffice}): {exc}") from exc
+        raise WordConversionError(f"LibreOffice conversion failed ({soffice}): {exc}") from exc
     finally:
-        shutil.rmtree(safe_entry_path(profile_dir), ignore_errors=True)
-
-    if proc.returncode != 0:
-        raise WordConversionError(
-            f"LibreOffice exited {proc.returncode}: "
-            f"{(proc.stderr or proc.stdout or '').strip()[:500]}"
-        )
-
-    produced = outdir / f"{src.stem}.pdf"
-    if produced != dest:
-        if not produced.exists():
-            raise WordConversionError(
-                f"LibreOffice reported success but produced no PDF at {produced}"
-            )
-        replace_with_retry(produced, dest)
+        shutil.rmtree(safe_entry_path(workdir), ignore_errors=True)
 
 
 def _convert_with_word_com(src: Path, dest: Path) -> None:
@@ -218,13 +236,14 @@ def _convert_with_word_com(src: Path, dest: Path) -> None:
     missing module or a Word automation error both surface as a
     :class:`WordConversionError`.
     """
-    cmd = [sys.executable, "-c", _WORD_COM_SNIPPET, str(src), str(dest)]
     try:
         proc = subprocess.run(
-            cmd,
+            [sys.executable, "-c", _WORD_COM_SNIPPET],
+            input=json.dumps([str(src), str(dest)]),
             capture_output=True,
             text=True,
             timeout=_CONVERT_TIMEOUT_S,
+            env=_word_helper_env(),
         )
     except subprocess.TimeoutExpired as exc:
         # subprocess.run has already killed the child by this point.
@@ -275,8 +294,7 @@ def _run_conversion(src: Path, dest: Path) -> None:
         soffice = _find_soffice()
         if not soffice:
             raise WordConversionError(
-                "XBRL_DOCX_CONVERTER=soffice but no LibreOffice binary found "
-                "(set XBRL_SOFFICE_PATH).",
+                "XBRL_DOCX_CONVERTER=soffice but no LibreOffice binary found.",
                 user_message=(
                     "The server's Word-to-PDF converter isn't installed. "
                     + _FALLBACK_HINT
@@ -311,11 +329,6 @@ def convert_docx_to_pdf(src: str | os.PathLike, dest: str | os.PathLike) -> Path
     """
     src_p = Path(src)
     dest_p = Path(dest)
-
-    # Both paths become command-line arguments; one starting with "-" would be
-    # read by the converter as an option.
-    if str(src_p).startswith("-") or str(dest_p).startswith("-"):
-        raise WordConversionError(f"Unsafe conversion path: {src_p} -> {dest_p}")
 
     if not src_p.exists():
         raise WordConversionError(f"Source .docx not found: {src_p}")

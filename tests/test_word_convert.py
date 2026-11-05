@@ -6,6 +6,7 @@ when no converter binary is installed, mirroring tests/test_pdf_viewer.py.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -143,18 +144,17 @@ def test_auto_on_posix_uses_soffice(tmp_path: Path, monkeypatch):
 
 
 def test_soffice_command_builder_moves_output(tmp_path: Path, monkeypatch):
-    """_convert_with_soffice builds the right argv and relocates the produced
-    <stem>.pdf to the requested dest name."""
+    """_convert_with_soffice runs a command with no paths in it, against a copy
+    of the source, and relocates the produced PDF to the requested dest name."""
     src = _write(tmp_path / "uploaded.docx")
     dest = tmp_path / "converted.pdf"
     captured = {}
 
-    def _fake_run(cmd, capture_output, text, timeout, env=None):
+    def _fake_run(cmd, capture_output, text, timeout, cwd=None, env=None):
         captured["cmd"] = cmd
-        captured["env"] = env
-        # Simulate LibreOffice writing <outdir>/<stem>.pdf
-        outdir = Path(cmd[cmd.index("--outdir") + 1])
-        (outdir / f"{src.stem}.pdf").write_bytes(b"%PDF-1.7")
+        captured["copied"] = (Path(cwd) / cmd[-1]).read_bytes()
+        # Simulate LibreOffice writing <cwd>/<stem>.pdf
+        (Path(cwd) / "input.pdf").write_bytes(b"%PDF-1.7")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(word_convert.subprocess, "run", _fake_run)
@@ -167,7 +167,9 @@ def test_soffice_command_builder_moves_output(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(word_convert, "replace_with_retry", replace)
     word_convert._convert_with_soffice(src, dest, "soffice")
     assert "--convert-to" in captured["cmd"] and "pdf" in captured["cmd"]
-    assert dest.exists()
+    assert str(tmp_path) not in " ".join(captured["cmd"])
+    assert captured["copied"] == src.read_bytes()
+    assert dest.read_bytes() == b"%PDF-1.7"
     assert promoted == [dest]
 
 
@@ -182,10 +184,9 @@ def test_soffice_gets_minimal_env_without_secrets(tmp_path: Path, monkeypatch):
     dest = tmp_path / "uploaded.pdf"
     captured = {}
 
-    def _fake_run(cmd, capture_output, text, timeout, env=None):
-        captured["env"] = env
-        outdir = Path(cmd[cmd.index("--outdir") + 1])
-        (outdir / f"{src.stem}.pdf").write_bytes(b"%PDF-1.7")
+    def _fake_run(cmd, capture_output, text, timeout, cwd=None, env=None):
+        captured["env"], captured["cwd"] = env, cwd
+        (Path(cwd) / "input.pdf").write_bytes(b"%PDF-1.7")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(word_convert.subprocess, "run", _fake_run)
@@ -195,6 +196,8 @@ def test_soffice_gets_minimal_env_without_secrets(tmp_path: Path, monkeypatch):
     assert "ANTHROPIC_API_KEY" not in env
     assert "SESSION_SECRET" not in env
     assert env.get("PATH") == "/usr/bin"  # essentials still pass through
+    # Concurrent uploads must not share a LibreOffice profile.
+    assert env["UserInstallation"] == Path(captured["cwd"]).as_uri()
 
 
 def test_rejects_non_ooxml_file(tmp_path: Path):
@@ -234,7 +237,7 @@ def test_valid_docx_passes_structure_gate(tmp_path: Path, monkeypatch):
 def test_word_com_timeout_raises(tmp_path: Path, monkeypatch):
     """The Windows path runs in a child process so a hung Word COM call is
     killed and surfaced as a WordConversionError, not an infinite hang."""
-    def _timeout_run(cmd, capture_output, text, timeout):
+    def _timeout_run(cmd, input, capture_output, text, timeout, env=None):
         raise subprocess.TimeoutExpired(cmd, timeout)
 
     monkeypatch.setattr(word_convert.subprocess, "run", _timeout_run)
@@ -243,8 +246,28 @@ def test_word_com_timeout_raises(tmp_path: Path, monkeypatch):
     assert "timed out" in str(ei.value).lower()
 
 
+def test_word_helper_cannot_read_server_secrets(tmp_path: Path, monkeypatch):
+    """Runs a real child process and reads back what it could see: no secrets,
+    but the UTF-8 setting Windows runs depend on (invariant 1) still arrives."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
+    monkeypatch.setenv("SESSION_SECRET", "hunter2")
+    monkeypatch.setenv("PYTHONUTF8", "1")
+    monkeypatch.setattr(
+        word_convert,
+        "_WORD_COM_SNIPPET",
+        "import json, os, sys; src, dest = json.load(sys.stdin); "
+        "open(dest, 'w').write('\\n'.join(os.environ))",
+    )
+    dest = tmp_path / "seen.txt"
+    word_convert._convert_with_word_com(tmp_path / "in.docx", dest)
+    seen = dest.read_text().splitlines()
+    assert "ANTHROPIC_API_KEY" not in seen
+    assert "SESSION_SECRET" not in seen
+    assert "PYTHONUTF8" in seen
+
+
 def test_word_com_missing_module_gives_clean_message(tmp_path: Path, monkeypatch):
-    def _fake_run(cmd, capture_output, text, timeout):
+    def _fake_run(cmd, input, capture_output, text, timeout, env=None):
         return subprocess.CompletedProcess(
             cmd, 1, "", "ModuleNotFoundError: No module named 'docx2pdf'"
         )
@@ -256,19 +279,27 @@ def test_word_com_missing_module_gives_clean_message(tmp_path: Path, monkeypatch
 
 
 def test_word_com_success_no_raise(tmp_path: Path, monkeypatch):
-    def _ok_run(cmd, capture_output, text, timeout):
+    captured = {}
+
+    def _ok_run(cmd, input, capture_output, text, timeout, env=None):
+        captured["cmd"], captured["input"] = cmd, input
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(word_convert.subprocess, "run", _ok_run)
     # _convert_with_word_com doesn't itself verify output (the outer
     # convert_docx_to_pdf does); a clean child exit must not raise.
     word_convert._convert_with_word_com(tmp_path / "in.docx", tmp_path / "out.pdf")
+    # The paths travel on standard input, never on the command line.
+    assert str(tmp_path) not in " ".join(captured["cmd"])
+    assert json.loads(captured["input"]) == [
+        str(tmp_path / "in.docx"), str(tmp_path / "out.pdf"),
+    ]
 
 
 def test_soffice_nonzero_exit_raises(tmp_path: Path, monkeypatch):
     src = _write(tmp_path / "in.docx")
 
-    def _fake_run(cmd, capture_output, text, timeout, env=None):
+    def _fake_run(cmd, capture_output, text, timeout, cwd=None, env=None):
         return subprocess.CompletedProcess(cmd, 1, "", "conversion boom")
 
     monkeypatch.setattr(word_convert.subprocess, "run", _fake_run)
@@ -293,12 +324,3 @@ def test_real_conversion_produces_text_pdf(tmp_path: Path):
     assert dest.exists() and dest.stat().st_size > 0
     from tools.pdf_search import pdf_has_text_layer
     assert pdf_has_text_layer(str(dest)) is True
-
-
-def test_option_like_path_is_refused(tmp_path: Path, monkeypatch):
-    called = []
-    monkeypatch.setattr(word_convert, "_run_conversion", lambda *a: called.append(a))
-    src = _write(tmp_path / "in.docx")
-    with pytest.raises(WordConversionError):
-        convert_docx_to_pdf(src, "--outdir=/somewhere/out.pdf")
-    assert called == []
