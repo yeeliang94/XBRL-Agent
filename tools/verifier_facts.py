@@ -96,9 +96,15 @@ def verify_statement_facts(
     elif name == StatementType.SOCF.value:
         result = _verify_socf_facts(nodes, facts, filing_level, pdf_values)
     elif name == StatementType.SOPL.value:
-        result = _verify_sopl_facts(nodes, facts, filing_level, pdf_values, filing_standard)
+        from concept_model.prior_year import is_preserved
+        result = _verify_sopl_facts(
+            nodes, facts, filing_level, pdf_values, filing_standard,
+            require_py_owners=not is_preserved(conn, run_id))
     elif name == StatementType.SOCI.value:
-        result = _verify_soci_facts(nodes, facts, filing_level, pdf_values)
+        from concept_model.prior_year import is_preserved
+        result = _verify_soci_facts(
+            nodes, facts, filing_level, pdf_values,
+            require_py_owners=not is_preserved(conn, run_id))
     else:
         return None
 
@@ -473,6 +479,7 @@ def _verify_sopl_facts(
     nodes: list[dict], facts: dict, filing_level: str,
     pdf_values: Optional[dict[str, float]],
     filing_standard: str = "mfrs",
+    require_py_owners: bool = True,
 ) -> VerificationResult:
     sheet = _sheet_present(nodes, ["SOPL-Function", "SOPL-Nature"])
     rows = _rows_on_sheet(nodes, sheet) if sheet else []
@@ -508,13 +515,12 @@ def _verify_sopl_facts(
         )
 
     owners_uuid = nci_uuid = None
-    if filing_level == "group":
-        for n in rows:
-            norm = _normalize_label(str(n["label"]))
-            if "profit" in norm and "owners of parent" in norm and "attribut" in norm:
-                owners_uuid = n["uuid"]
-            elif "profit" in norm and "non-controlling interest" in norm and "attribut" in norm:
-                nci_uuid = n["uuid"]
+    for n in rows:
+        norm = _normalize_label(str(n["label"]))
+        if "profit" in norm and "owners of parent" in norm and "attribut" in norm:
+            owners_uuid = n["uuid"]
+        elif "profit" in norm and "non-controlling interest" in norm and "attribut" in norm:
+            nci_uuid = n["uuid"]
 
     for scope, prefix in _cy_scopes(filing_level):
         pfx = f"{prefix} " if prefix else ""
@@ -551,6 +557,18 @@ def _verify_sopl_facts(
                 if hint:
                     diagnostics.append(hint)
 
+    # Company filings must carry the full profit in the owners-of-parent
+    # attribution leaf (same rule as Company SOCI): the mandatory attribution
+    # total is a formula over these leaves and stays blank otherwise. A
+    # rolled-forward PY is read-only, so a blank owners leaf there is not asked for.
+    if filing_level == "company":
+        for period in ("CY", "PY") if require_py_owners else ("CY",):
+            if period == "PY" and _fact_value(facts, profit_loss_uuid, period, "Company") is None:
+                continue
+            if not owners_uuid or _fact_value(facts, owners_uuid, period, "Company") is None:
+                is_balanced = False
+                mismatches.append(f"{period}: Company profit owners attribution is missing.")
+
     return VerificationResult(
         is_balanced=is_balanced,
         matches_pdf=_check_pdf_values(computed_totals, pdf_values),
@@ -574,6 +592,7 @@ def _verify_sopl_facts(
 def _verify_soci_facts(
     nodes: list[dict], facts: dict, filing_level: str,
     pdf_values: Optional[dict[str, float]],
+    require_py_owners: bool = True,
 ) -> VerificationResult:
     sheet = _sheet_present(nodes, ["SOCI-BeforeOfTax", "SOCI-NetOfTax"])
     rows = _rows_on_sheet(nodes, sheet) if sheet else []
@@ -657,7 +676,7 @@ def _verify_soci_facts(
                 )
 
     if filing_level == "company":
-        for period in ("CY", "PY"):
+        for period in ("CY", "PY") if require_py_owners else ("CY",):
             if period == "PY" and _fact_value(
                 facts, total_ci_uuids[0], period, "Company",
             ) is None:

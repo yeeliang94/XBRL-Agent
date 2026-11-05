@@ -9,10 +9,10 @@ OTHER statements where two subtotals are computed from INDEPENDENT leaf sets:
   twin (= owners + NCI).
 
 Key behaviours pinned: the check FAILS when the attribution split doesn't sum
-to the income-side total, PASSES when it does, and is ``not_applicable`` (never
-a false fail) when the attribution isn't disclosed at all — the common
-company-filing case, where the cascade writes no fact for the all-blank
-attribution total.
+to the income-side total, PASSES when it does, and FAILS on a Company filing
+whose owners leaf is blank. On a Group scope an undisclosed attribution stays
+``not_applicable``. MFRS SOPL-Nature is covered separately because it labels its
+attribution total "Profit (loss)", the same as the income row.
 """
 from __future__ import annotations
 
@@ -38,6 +38,13 @@ REPO = Path(__file__).resolve().parent.parent
 CASES = {
     "sopl": dict(
         fixture=REPO / "XBRL-template-MFRS" / "Company" / "03-SOPL-Function.xlsx",
+        stmt=StatementType.SOPL,
+        check=SOPLAttributionFootingCheck,
+        income_label="profit (loss)",
+        owners_label="profit (loss), attributable to owners of parent",
+    ),
+    "sopl_nature": dict(
+        fixture=REPO / "XBRL-template-MFRS" / "Company" / "04-SOPL-Nature.xlsx",
         stmt=StatementType.SOPL,
         check=SOPLAttributionFootingCheck,
         income_label="profit (loss)",
@@ -121,7 +128,7 @@ def _setup(tmp_path, case):
     return db, int(cur.lastrowid), tid, conn
 
 
-@pytest.mark.parametrize("case_key", ["sopl", "soci"])
+@pytest.mark.parametrize("case_key", ["sopl", "sopl_nature", "soci"])
 @pytest.mark.parametrize("articulates", [True, False])
 @pytest.mark.parametrize("attribution_source", ["owners", "nci"])
 @pytest.mark.parametrize("period", ["CY", "PY"])
@@ -165,14 +172,16 @@ def test_attribution_footing_catches_mismatch(tmp_path, case_key, articulates, a
     export_run_to_xlsx(db, run_id, str(workbook), template_id=tid)
     workbook_result = case["check"]().run({case["stmt"]: str(workbook)}, tolerance=1.0)
     conn.close()
-    expected = "passed" if articulates and (case_key != "soci" or attribution_source == "owners") else "failed"
+    expected = "passed" if articulates and attribution_source == "owners" else "failed"
     assert result.status == expected, result.message
     assert workbook_result.status == expected, workbook_result.message
 
 
-@pytest.mark.parametrize("case_key", ["sopl", "soci"])
-def test_attribution_footing_not_applicable_when_undisclosed(tmp_path, case_key):
-    """No attribution leaves filled → not_applicable, NOT a false fail."""
+@pytest.mark.parametrize("case_key", ["sopl", "sopl_nature", "soci"])
+def test_attribution_footing_fails_when_company_owners_undisclosed(tmp_path, case_key):
+    """No attribution leaves filled on a Company filing → failed. The
+    mandatory attribution total is a formula over the owners leaf, so a blank
+    owners leaf leaves it empty; the agent must carry the full figure there."""
     case = CASES[case_key]
     db, run_id, tid, conn = _setup(tmp_path, case)
     income_uuid = _computed_exact(conn, tid, case["income_label"])
@@ -185,13 +194,76 @@ def test_attribution_footing_not_applicable_when_undisclosed(tmp_path, case_key)
         conn=conn, run_id=run_id, template_ids={case["stmt"]: tid},
         filing_level="company", filing_standard="mfrs")
     result = case["check"]().run_facts(ctx, tolerance=1.0)
-    if case_key == "soci":
-        from tools.verifier_facts import verify_statement_facts
-        verification = verify_statement_facts(conn, run_id, tid, StatementType.SOCI)
-        assert not verification.is_balanced
-        assert any("owners attribution is missing" in m for m in verification.mismatches)
+    from tools.verifier_facts import verify_statement_facts
+    verification = verify_statement_facts(conn, run_id, tid, case["stmt"])
+    assert not verification.is_balanced
+    assert any("owners attribution is missing" in m for m in verification.mismatches)
     conn.close()
-    assert result.status == ("failed" if case_key == "soci" else "not_applicable"), result.message
+    assert result.status == "failed", result.message
+
+
+@pytest.mark.parametrize("case_key", ["sopl", "sopl_nature", "soci"])
+@pytest.mark.parametrize("preserved", [True, False])
+def test_blank_prior_year_owners_is_only_required_when_writable(tmp_path, case_key, preserved):
+    """A rolled-forward PY is read-only, so a blank owners leaf there cannot be
+    fixed on this run and must not fail it. An ordinary PY still fails."""
+    from tools.verifier_facts import verify_statement_facts
+    case = CASES[case_key]
+    db, run_id, tid, conn = _setup(tmp_path, case)
+    if preserved:
+        conn.execute("UPDATE runs SET run_config_json = ? WHERE id = ?",
+                     (json.dumps({"prior_year_workbook": "a" * 64}), run_id))
+    income_uuid = _computed_exact(conn, tid, case["income_label"])
+    owners = _leaf_like(conn, tid, case["owners_label"])
+    income_leaf = _descendant_leaf(conn, income_uuid)
+    _seed(conn, run_id, income_leaf, 1000.0)
+    _seed(conn, run_id, income_leaf, 900.0, "PY")
+    conn.commit()
+    recompute_after_turn(str(db), run_id)
+    _seed(conn, run_id, owners, _val(conn, run_id, income_uuid))
+    conn.commit()
+    recompute_after_turn(str(db), run_id)
+
+    ctx = FactsContext(
+        conn=conn, run_id=run_id, template_ids={case["stmt"]: tid},
+        filing_level="company", filing_standard="mfrs")
+    result = case["check"]().run_facts(ctx, tolerance=1.0)
+    verification = verify_statement_facts(conn, run_id, tid, case["stmt"])
+    conn.close()
+    assert result.status == ("passed" if preserved else "failed"), result.message
+    assert verification.is_balanced == preserved
+    if preserved:
+        assert "PY" in result.message and "not disclosed" in result.message
+
+
+@pytest.mark.parametrize("case_key", ["sopl", "sopl_nature", "soci"])
+@pytest.mark.parametrize("gap", ["current_year_owners_blank", "prior_year_split_wrong"])
+def test_rolled_forward_run_still_reports_real_attribution_gaps(tmp_path, case_key, gap):
+    """The prior-year exemption covers a blank PY owners leaf only: a blank CY
+    owners leaf and an imported PY split that does not foot both still fail."""
+    case = CASES[case_key]
+    db, run_id, tid, conn = _setup(tmp_path, case)
+    conn.execute("UPDATE runs SET run_config_json = ? WHERE id = ?",
+                 (json.dumps({"prior_year_workbook": "a" * 64}), run_id))
+    income_uuid = _computed_exact(conn, tid, case["income_label"])
+    owners = _leaf_like(conn, tid, case["owners_label"])
+    income_leaf = _descendant_leaf(conn, income_uuid)
+    _seed(conn, run_id, income_leaf, 1000.0)
+    _seed(conn, run_id, income_leaf, 900.0, "PY")
+    conn.commit()
+    recompute_after_turn(str(db), run_id)
+    if gap == "prior_year_split_wrong":
+        _seed(conn, run_id, owners, _val(conn, run_id, income_uuid))
+        _seed(conn, run_id, owners, _val(conn, run_id, income_uuid, "PY") + 50.0, "PY")
+        conn.commit()
+        recompute_after_turn(str(db), run_id)
+
+    ctx = FactsContext(
+        conn=conn, run_id=run_id, template_ids={case["stmt"]: tid},
+        filing_level="company", filing_standard="mfrs")
+    result = case["check"]().run_facts(ctx, tolerance=1.0)
+    conn.close()
+    assert result.status == "failed", result.message
 
 
 def test_attribution_footing_checks_registered():
@@ -297,11 +369,12 @@ def test_each_year_records_the_tolerance_that_decided_it():
     assert [c.tolerance for c in evaluated["comparands"]] == pytest.approx([10.000005, 10.000005])
 
 
-def test_xlsx_blank_attribution_is_not_applicable(tmp_path):
-    """The flip side: genuinely BLANK attribution leaves stay not_applicable
-    (no false-fail on a company filing that doesn't split the attribution)."""
+def test_xlsx_blank_attribution_fails_on_company(tmp_path):
+    """Genuinely BLANK attribution leaves fail a Company filing: the owners
+    leaf must carry the full profit so the mandatory total computes."""
     path = tmp_path / "sopl_blank.xlsx"
     _build_sopl_xlsx(path, owners=0.0, nci=0.0, income=1000.0, owners_blank=True)
     result = SOPLAttributionFootingCheck().run(
         {StatementType.SOPL: str(path)}, tolerance=1.0, filing_level="company")
-    assert result.status == "not_applicable", result.message
+    assert result.status == "failed", result.message
+    assert "owners attribution is missing" in result.message

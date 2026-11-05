@@ -87,5 +87,18 @@ make `verify_totals()` pass. No arithmetic-only catch-all allocations.
 - Expenses and losses charged to profit or loss are entered as POSITIVE
   magnitudes; the template formulas apply the sign. Follow the live per-row
   sign guidance where it says otherwise.
+- The "Profit (loss), attributable to" section is required, not optional. The
+  mandatory total beneath it is a formula over the attribution leaves, so it
+  stays empty until you fill them.
+  - On Company filings, write the full Profit (loss) to the live owners-of-parent
+    attribution leaf for each period this run may write, independently, even when
+    the source prints no separate attribution split. Cite the Company statement and explain that
+    the full Company profit belongs to its owners. Leave the NCI and
+    equity-other-components leaves blank when they are not disclosed; do not
+    fabricate a zero or an allocation.
+  - On Group filings, use the source-disclosed owners/NCI split for each entity
+    scope. Never copy a Group split into Company columns or infer a Group split.
+  - Confirm the attribution total equals Profit (loss). A blank Company
+    attribution is incomplete, not evidence that the check is inapplicable.
 - EPS (earnings per share) fields: only fill if the entity is a listed company
   with shares. CLG companies and entities without share capital skip EPS.

@@ -730,3 +730,31 @@ def test_company_soci_requires_owners_attribution_even_for_zero_income(tmp_path,
     assert result.is_balanced == (owners is not None)
     if owners is None:
         assert any("owners attribution is missing" in m for m in result.mismatches)
+
+
+@pytest.mark.parametrize("owners", [None, 0, -627539])
+@pytest.mark.parametrize("period", ["CY", "PY"])
+def test_company_sopl_requires_owners_attribution_even_for_zero_income(tmp_path, owners, period):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOPL-Function"
+    ws.append(["Revenue", 0 if owners is None else owners])
+    ws.append(["Profit (loss)", "=B1"])
+    ws.append(["Profit (loss), attributable to owners of parent", owners])
+    ws.append(["Profit (loss), attributable to non-controlling interests", None])
+    ws.append(["Total profit (loss)", "=B3+B4"])
+    if period == "PY":
+        ws["B1"] = ws["B3"] = 0
+        ws["C1"] = 0 if owners is None else owners
+        ws["C2"] = "=C1"
+        ws["C3"] = owners
+        ws["C5"] = "=C3+C4"
+    path = tmp_path / "sopl.xlsx"
+    wb.save(path)
+    result = verify_statement(str(path), StatementType.SOPL)
+    from cross_checks.attribution_footing import SOPLAttributionFootingCheck
+    footing = SOPLAttributionFootingCheck().run({StatementType.SOPL: str(path)}, tolerance=1.0)
+    assert footing.status == ("passed" if owners is not None else "failed")
+    assert result.is_balanced == (owners is not None)
+    if owners is None:
+        assert any("owners attribution is missing" in m for m in result.mismatches)

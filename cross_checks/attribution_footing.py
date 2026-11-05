@@ -20,11 +20,12 @@ no check is added for it. SOCIE's closing equity is likewise computed-from-cells
 and already reconciled to SOFP cross-statement (``socie_to_sofp_equity``), so it
 gets no internal check here either.
 
-SOCI Company filings require the full comprehensive income in the owners leaf,
-even without a printed split. Missing attribution fails rather than self-gating.
-Group scopes and SOPL retain the source-disclosed split gate: absent attribution
-is not_applicable, while explicit zero is checked against income. Extraction
-verification and both cross-check paths enforce the same Company SOCI rule.
+SOPL and SOCI Company filings require the full profit / comprehensive income
+in the owners leaf, even without a printed split. Missing attribution fails
+rather than self-gating. Group scopes retain the source-disclosed split gate:
+absent attribution is not_applicable, while explicit zero is checked against
+income. Extraction verification and both cross-check paths enforce the same
+Company rule.
 
 Both ``run`` (xlsx) and ``run_facts`` (facts, default-on) paths, group
 dual-pass, magnitude-scaled tolerance — same contract as every other check.
@@ -50,7 +51,7 @@ def _effective_tolerance(tolerance: float, *magnitudes: Optional[float]) -> floa
 def _find_value_last_match(ws, label: str, col: int, wb):
     """Value + row of the BOTTOM-MOST row whose col-A label matches ``label``
     exactly (xlsx twin of facts_util.read_labelled_value_last). Used for SOCI's
-    duplicate "*Total comprehensive income" rows."""
+    duplicate "*Total comprehensive income" rows and SOPL's attribution total."""
     from openpyxl.utils import get_column_letter
     from tools.verifier import _resolve_cell_value
 
@@ -91,9 +92,12 @@ class _AttributionFootingBase:
     # The attribution LEAF rows (owners / NCI / other components). The xlsx
     # path gates on whether any of these CELLS carry a value, because a
     # formula-evaluated attribution total reads 0 (not blank) when its leaves
-    # are empty — without this gate a company filing that doesn't split the
-    # attribution would false-fail. The facts path needs no equivalent: the
-    # cascade writes no row for an all-blank computed total (reads as None).
+    # are empty — this gate makes an all-blank split read as MISSING (failed on
+    # a Company filing, not_applicable on a Group scope) rather than as a
+    # formula zero compared against income. The facts path needs no
+    # equivalent for an all-blank split: the cascade writes no row for an
+    # all-blank computed total (reads as None). Company filings still check the
+    # owners leaf directly in ``run_facts``, so NCI cannot substitute for it.
     _attribution_leaf_labels: tuple = ()
 
     def applies_to(self, run_config: dict) -> bool:
@@ -204,7 +208,7 @@ class _AttributionFootingBase:
                 message=f"No {self._stmt.value} sheet found in workbook")
         sheet = ws.title
         evals = []
-        require_owners = self._stmt == StatementType.SOCI and filing_level == "company"
+        require_owners = filing_level == "company"
         for _scope, col, label, is_company, period in self._scopes(filing_level):
             income = find_value_by_label(
                 ws, self._income_label, col=col, wb=wb,
@@ -212,8 +216,8 @@ class _AttributionFootingBase:
             )
             inc_row = find_label_row(ws, self._income_label)
             attribution, attr_row = self._read_attribution_xlsx(ws, col, wb)
-            # Undisclosed splits drop the formula-zero total. Company SOCI
-            # specifically requires owners; NCI alone cannot satisfy it.
+            # Undisclosed splits drop the formula-zero total. Company filings
+            # specifically require owners; NCI alone cannot satisfy it.
             if attribution is not None and not self._attribution_present_xlsx(
                 ws, col, owners_only=require_owners,
             ):
@@ -233,7 +237,7 @@ class _AttributionFootingBase:
         non-zero is a real mismatch. Only a truly BLANK cell (None) is "not
         disclosed" — mirrors the facts path, where not_disclosed reads as None
         but an explicit_zero leaf makes the cascade write a real 0 total.
-        Company SOCI uses owners_only so NCI cannot substitute for owners.
+        Company filings use owners_only so NCI cannot substitute for owners.
         """
         targets = {lbl.strip().lstrip("*").strip().lower()
                    for lbl in self._attribution_leaf_labels
@@ -255,18 +259,17 @@ class _AttributionFootingBase:
                     continue
         return False
 
-    def _read_attribution_xlsx(self, ws, col, wb):
-        """Default: the attribution total has a DISTINCT label (SOPL)."""
-        val = find_value_by_label(ws, self._attribution_label, col=col, wb=wb)
-        row = find_label_row(ws, self._attribution_label)
-        return val, row
-
     # --- facts path --------------------------------------------------------
     def run_facts(self, ctx, tolerance: float) -> CrossCheckResult:
         from cross_checks.facts_util import LabelledValue, read_labelled_value, read_labelled_value_last
+        from concept_model.prior_year import is_preserved
         evals = []
-        require_owners = self._stmt == StatementType.SOCI and ctx.filing_level == "company"
+        company_filing = ctx.filing_level == "company"
+        # A rolled-forward PY is read-only, so nobody on this run can fill a
+        # blank owners leaf there. It then follows the ordinary disclosure gate.
+        py_preserved = company_filing and is_preserved(ctx.conn, ctx.run_id)
         for entity_scope, _col, label, is_company, period in self._scopes(ctx.filing_level):
+            require_owners = company_filing and not (period == "PY" and py_preserved)
             income = read_labelled_value(
                 ctx, self._stmt, self._income_label, period, entity_scope)
             attribution = self._read_attribution_facts(ctx, period, entity_scope)
@@ -283,16 +286,6 @@ class _AttributionFootingBase:
                 require_attribution=require_owners))
         return self._combine(evals, tolerance)
 
-    def _read_attribution_facts(self, ctx, period, scope):
-        # EXACT-match only (read_labelled_value_last), never the substring
-        # fallthrough of read_labelled_value: the attribution label "total
-        # profit (loss)" substring-matches the income row "profit (loss)", so a
-        # substring read would fall through to the income total when the real
-        # attribution total is absent and spuriously pass. Exact match binds
-        # only the attribution row (None when undisclosed → not_applicable).
-        from cross_checks.facts_util import read_labelled_value_last
-        return read_labelled_value_last(ctx, self._stmt, self._attribution_label, period, scope)
-
 
 class SOPLAttributionFootingCheck(_AttributionFootingBase):
     name = "sopl_attribution_footing"
@@ -307,6 +300,32 @@ class SOPLAttributionFootingCheck(_AttributionFootingBase):
         "profit (loss) attributable to equity other components",
         "profit (loss), attributable to non-controlling interests",
     )
+
+    # The attribution total is "*Total profit (loss)" on most templates, but
+    # MFRS SOPL-Nature labels it "Profit (loss)", the same as the income row.
+    # Both reads are EXACT-match, never the substring fallthrough of
+    # read_labelled_value / find_value_by_label: "total profit (loss)"
+    # substring-matches the income row, so a substring read would compare the
+    # income total with itself and spuriously pass.
+    def _read_attribution_xlsx(self, ws, col, wb):
+        val, row = _find_value_last_match(ws, self._attribution_label, col, wb)
+        if row is not None:
+            return val, row
+        val, row = _find_value_last_match(ws, self._income_label, col, wb)
+        if row == find_label_row(ws, self._income_label):
+            return None, row
+        return val, row
+
+    def _read_attribution_facts(self, ctx, period, scope):
+        from cross_checks.facts_util import LabelledValue, read_labelled_value, read_labelled_value_last
+        attr = read_labelled_value_last(ctx, self._stmt, self._attribution_label, period, scope)
+        if attr.row is not None:
+            return attr
+        attr = read_labelled_value_last(ctx, self._stmt, self._income_label, period, scope)
+        income = read_labelled_value(ctx, self._stmt, self._income_label, period, scope)
+        if attr.row is not None and attr.row == income.row:
+            return LabelledValue(None, attr.sheet, attr.row)
+        return attr
 
 
 class SOCIAttributionFootingCheck(_AttributionFootingBase):

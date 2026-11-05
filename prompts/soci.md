@@ -42,8 +42,8 @@ section. Simpler layout.
 - For NetOfTax: enter amounts already net of tax. No separate tax rows.
 - Many entities have zero OCI — this is normal. Do not fabricate OCI items.
 - On Company filings, assign the full total comprehensive income to the live
-  owners-attribution leaf for CY and PY independently, even when the source
-  prints no separate attribution split. Cite the Company statement and explain
+  owners-attribution leaf for each period this run may write, independently,
+  even when the source prints no separate attribution split. Cite the Company statement and explain
   that the full Company TCI belongs to its owners. Leave NCI blank when it is
   not disclosed; do not fabricate a zero or an NCI allocation.
 - On Group filings, use the source-disclosed owners/NCI split for each entity

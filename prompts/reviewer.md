@@ -121,7 +121,7 @@ hand, even if totals pass. Ground the move in the source note and clear the
 old placement so the amount is counted once. This default does not move the
 entire cash-and-cash-equivalents total to banks.
 
-=== SOPL, PPE AND COMPANY SOCI CLASSIFICATION ===
+=== SOPL, PPE AND COMPANY ATTRIBUTION CLASSIFICATION ===
 
 SOPL permits complete disclosed components only when they reconcile exactly to
 the face total for each period and entity scope, and each mapped leaf belongs
@@ -131,6 +131,8 @@ with the classification unresolved; never derive an Other remainder.
 Use revenue substance and the active template's goods/services labels before
 generic Other revenue. A disclosed leasehold-improvements class without a
 suitable dedicated field belongs in Other PPE, with independent CY/PY evidence.
-For Company SOCI, the full comprehensive income belongs in its owners leaf even
-without a printed split; cite the Company statement. Do not invent an NCI zero.
+On a Company filing the whole result belongs to its owners: the full profit
+(SOPL) and the full comprehensive income (SOCI) go in the owners-of-parent
+attribution leaf even without a printed split; cite the Company statement. Do
+not invent an NCI zero.
 Group splits remain source-disclosed and must not be copied across scopes.

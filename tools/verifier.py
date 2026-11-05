@@ -1517,30 +1517,28 @@ def _verify_sopl(
             feedback="SOPL verification failed: missing 'Profit (loss)' label",
         )
 
-    # Phase 2.1: SOPL Group attribution check — owners + NCI must sum to
-    # the Profit (loss) row. Only fires on group filings because standalone
-    # filings don't carry the attribution rows. We find the rows by label
-    # match so MFRS and MPERS (which use the identical `attributable to,
-    # owners of parent` / `non-controlling interests` wording) both work.
+    # Attribution rows. Group filings sum owners + NCI against Profit (loss);
+    # Company filings require the owners leaf to be filled. We find the rows
+    # by label match so MFRS and MPERS (which use the identical `attributable
+    # to, owners of parent` / `non-controlling interests` wording) both work.
     owners_profit_row = None
     nci_profit_row = None
-    if filing_level == "group":
-        for row in range(1, ws.max_row + 1):
-            val = ws.cell(row=row, column=1).value
-            if not val:
-                continue
-            norm = _normalize_label(str(val))
-            # Match the full SSM label "Profit (loss), attributable to,
-            # owners of parent" and also tolerate shorter variants that
-            # some agents may produce.
-            if "profit" in norm and "owners of parent" in norm and "attribut" in norm:
-                owners_profit_row = row
-            elif (
-                "profit" in norm
-                and "non-controlling interest" in norm
-                and "attribut" in norm
-            ):
-                nci_profit_row = row
+    for row in range(1, ws.max_row + 1):
+        val = ws.cell(row=row, column=1).value
+        if not val:
+            continue
+        norm = _normalize_label(str(val))
+        # Match the full SSM label "Profit (loss), attributable to,
+        # owners of parent" and also tolerate shorter variants that
+        # some agents may produce.
+        if "profit" in norm and "owners of parent" in norm and "attribut" in norm:
+            owners_profit_row = row
+        elif (
+            "profit" in norm
+            and "non-controlling interest" in norm
+            and "attribut" in norm
+        ):
+            nci_profit_row = row
 
     for cy_col, prefix in _cy_columns(filing_level):
         pfx = f"{prefix} " if prefix else ""
@@ -1583,6 +1581,22 @@ def _verify_sopl(
                 })
                 if hint:
                     diagnostics.append(hint)
+
+    # Company filings must carry the full profit in the owners-of-parent
+    # attribution leaf (same rule as Company SOCI): the mandatory attribution
+    # total is a formula over these leaves and stays blank otherwise.
+    if filing_level == "company":
+        from cross_checks.util import find_value_in_block
+        for period, col in (("CY", 2), ("PY", 3)):
+            if period == "PY" and find_value_in_block(
+                ws, "profit (loss)", col=col,
+                start_row=profit_loss_row, end_row=profit_loss_row, wb=wb,
+                blank_formula_as_none=True,
+            ) is None:
+                continue
+            if not owners_profit_row or ws.cell(owners_profit_row, col).value is None:
+                is_balanced = False
+                mismatches.append(f"{period}: Company profit owners attribution is missing.")
 
     for w in dict.fromkeys(formula_warnings):
         mismatches.append(f"Formula warning: {w}")

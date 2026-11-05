@@ -713,11 +713,14 @@ Each run has one `filing_level` (`"company"` or `"group"`, default
   (phrase-by-phrase assertions do not catch this — `test_socie_prompt_mpers.py`
   passed throughout).
 
-Company SOCI requires its complete CY/PY comprehensive income in the owners
-attribution leaf even when no split is printed. Undisclosed NCI stays blank.
-Both facts and workbook verification flag missing Company owners; attribution
-cross-checks also fail for a missing Company SOCI owners leaf; an NCI value
-does not satisfy that requirement. Group splits remain
+Company SOPL and SOCI require their complete CY/PY profit and comprehensive
+income in the owners attribution leaf even when no split is printed. Undisclosed
+NCI stays blank. Both facts and workbook verification flag missing Company owners;
+attribution cross-checks also fail for a missing Company owners leaf; an NCI value
+does not satisfy that requirement. On a rolled-forward run PY is read-only, so
+the facts paths ask for the owners leaf in CY only and a blank PY leaf reads as
+not disclosed; the workbook fallback has no run identity and stays strict. Group
+splits remain
 source-supported and scope-specific. Pinned by `tests/test_attribution_footing.py`,
 `tests/test_verifier.py` and `tests/test_verifier_shadow.py`.
 
@@ -3165,7 +3168,9 @@ primary input).
   Platform-native + lightweight, NOT the removed docling/torch stack (gotcha
   #26): **Word COM via `docx2pdf` on Windows** (Word is installed there),
   **LibreOffice `soffice --convert-to pdf` on Mac/Linux/cloud**. Override with
-  `XBRL_DOCX_CONVERTER` (`soffice`|`docx2pdf`) / `XBRL_SOFFICE_PATH`.
+  `XBRL_DOCX_CONVERTER` (`soffice`|`docx2pdf`). Neither command line carries a
+  file path: the Word helper reads paths from standard input, and LibreOffice runs
+  in a private temp folder on a fixed file name. Neither helper receives secrets.
   `_run_conversion` is the monkeypatch point in tests (no real converter in CI).
 - **Conversion failure is a 422, never a crash.** The upload endpoint tears down
   the whole session dir and returns `WordConversionError.user_message` verbatim
