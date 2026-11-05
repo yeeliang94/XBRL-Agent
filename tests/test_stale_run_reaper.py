@@ -13,6 +13,7 @@ recent restart, or a run started seconds ago) must NOT be reaped.
 from __future__ import annotations
 
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -223,5 +224,10 @@ def test_crashed_owner_releases_os_lock_for_immediate_recovery(conn):
     finally:
         process.kill()
         process.wait(timeout=10)
+    # Windows can release the lock shortly after wait() returns (lock cleanup,
+    # or the venv launcher's child Python exiting after the launcher).
+    deadline = time.monotonic() + 5
+    while is_live(conn, run_id) and time.monotonic() < deadline:
+        time.sleep(0.05)
     assert not is_live(conn, run_id)
     assert repo.reconcile_stale_runs(conn, max_age_hours=0) == 1

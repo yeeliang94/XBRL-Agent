@@ -8,18 +8,21 @@ setlocal enabledelayedexpansion
 ::
 ::  GitHub Actions CANNOT deploy here: that would require enterprise Azure
 ::  credentials inside a personal GitHub repo (policy violation). This script
-::  is the primary path; raw `az webapp deploy` is unguarded (no tests, stale
-::  dist) — always use this.
+::  is the primary path; raw `az webapp deploy` is unguarded (stale dist) —
+::  always use this.
+::
+::  Tests run during development, not here: this laptop runs Windows while the
+::  app runs on Linux, and the package carries no tests. Deploy a commit that
+::  has already passed them.
 ::
 ::  Steps (aborts on ANY failure):
 ::    1. warn if the working tree has uncommitted changes
 ::    2. npm ci + npm run build   (fresh web/dist -> repo-root/dist)
-::    3. backend pytest + frontend vitest
-::    4. stamp the commit hash into version.txt
-::    5. stage + zip (exclude output/, .env, node_modules, backup-originals/,
+::    3. stamp the commit hash into version.txt
+::    4. stage + zip (exclude output/, .env, node_modules, backup-originals/,
 ::       tests/, web/ source; include dist/, scripts/, and the XBRL-template-*
 ::       and SSMxT_2022v1.0 runtime data)
-::    6. az webapp deploy --type zip
+::    5. az webapp deploy --type zip
 :: ===========================================================================
 
 :: Force UTF-8 everywhere (gotcha #1) — PDFs carry Unicode that crashes the
@@ -77,7 +80,7 @@ if errorlevel 1 (
 
 :: ---- 2. Build the frontend (fresh dist) ----
 echo.
-echo [2/6] Building frontend...
+echo [2/5] Building frontend...
 pushd web
 call npm ci
 if errorlevel 1 ( echo ERROR: npm ci failed. & popd & exit /b 1 )
@@ -85,33 +88,16 @@ call npm run build
 if errorlevel 1 ( echo ERROR: frontend build failed. & popd & exit /b 1 )
 popd
 
-:: ---- 3. Run the test suites ----
+:: ---- 3. Stamp the commit hash so "what's live?" stays answerable ----
 echo.
-echo [3/6] Running tests...
-if not exist "venv" (
-    echo Creating virtual environment...
-    python -m venv venv || ( echo ERROR: venv creation failed. & exit /b 1 )
-)
-call venv\Scripts\activate.bat
-pip install -r requirements.txt -q
-if errorlevel 1 ( echo ERROR: installing Python packages failed. & exit /b 1 )
-python -m pytest tests\ -q
-if errorlevel 1 ( echo ERROR: backend tests failed. & exit /b 1 )
-pushd web
-call npx vitest run
-if errorlevel 1 ( echo ERROR: frontend tests failed. & popd & exit /b 1 )
-popd
-
-:: ---- 4. Stamp the commit hash so "what's live?" stays answerable ----
-echo.
-echo [4/6] Stamping version...
+echo [3/5] Stamping version...
 for /f %%H in ('git rev-parse --short HEAD') do set "GIT_HASH=%%H"
 echo %GIT_HASH%> version.txt
 echo Deploying commit %GIT_HASH%.
 
-:: ---- 5. Stage + zip ----
+:: ---- 4. Stage + zip ----
 echo.
-echo [5/6] Packaging...
+echo [4/5] Packaging...
 set "STAGE=%TEMP%\xbrl-deploy-stage"
 set "PKG=%TEMP%\xbrl-deploy.zip"
 if exist "%STAGE%" rmdir /s /q "%STAGE%"
@@ -133,13 +119,19 @@ if %ERRORLEVEL% GEQ 8 ( echo ERROR: staging copy failed. & exit /b 1 )
 :: Python's zipfile writes forward-slash entry names. Windows PowerShell 5.1
 :: Compress-Archive writes backslashes, which Linux App Service unpacks as
 :: flat files named "web\dist\index.html" instead of folders.
-python -c "import shutil, sys; shutil.make_archive(sys.argv[1][:-4], 'zip', sys.argv[2])" "%PKG%" "%STAGE%"
+:: The zip only needs the standard library, so any Python 3 will do.
+if exist "venv\Scripts\python.exe" (
+    set "PYTHON=venv\Scripts\python.exe"
+) else (
+    set "PYTHON=python"
+)
+"!PYTHON!" -c "import shutil, sys; shutil.make_archive(sys.argv[1][:-4], 'zip', sys.argv[2])" "%PKG%" "%STAGE%"
 if errorlevel 1 ( echo ERROR: zip failed. & exit /b 1 )
 echo Package: %PKG%
 
-:: ---- 6. Deploy ----
+:: ---- 5. Deploy ----
 echo.
-echo [6/6] Deploying to Azure...
+echo [5/5] Deploying to Azure...
 where az >nul 2>&1
 if errorlevel 1 (
     echo The Azure CLI ^(az^) is not installed on this laptop. The package is
