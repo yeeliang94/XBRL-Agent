@@ -395,8 +395,12 @@ async def test_partial_verification_saves_companion_before_cancellation_and_resu
     async def saved_companion():
         while True:
             files = list(tmp_path.glob("preparation-checkpoint-*.json"))
-            if files and json.loads(files[0].read_text()).get("pages", {}).get("1"):
-                return
+            try:
+                if files and json.loads(files[0].read_text()).get("pages", {}).get("1"):
+                    return
+            except PermissionError:
+                # Windows refuses a read while the worker is replacing the file.
+                pass
             await asyncio.sleep(0.01)
     await asyncio.wait_for(saved_companion(), 3)
     worker.cancel()
