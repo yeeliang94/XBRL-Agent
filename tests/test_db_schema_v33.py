@@ -6,10 +6,10 @@ rows) and eval_benchmarks.is_archived / source / scale_verified. All additive.
 """
 from __future__ import annotations
 
-import re
 import sqlite3
 
 from db.schema import CURRENT_SCHEMA_VERSION, init_db
+from tests._sqlite_drop import drop_columns
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -19,19 +19,6 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 def _schema_version(conn: sqlite3.Connection) -> int:
     row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
     return int(row[0]) if row else 0
-
-
-def _strip_table_comments(conn: sqlite3.Connection, table: str) -> None:
-    """Recreate an empty table without its SQL comments.
-
-    When dropping a table's last column, some SQLite builds (3.50.4 on the
-    Windows machine) cut back to the nearest comma, even one inside a comment.
-    """
-    sql = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE name = ?", (table,)
-    ).fetchone()[0]
-    conn.execute(f"DROP TABLE {table}")
-    conn.execute(re.sub(r"--[^\n]*", "", sql))
 
 
 def test_fresh_init_has_v33_columns(tmp_path):
@@ -53,11 +40,8 @@ def test_v32_db_walks_forward(tmp_path):
     init_db(db)
     conn = sqlite3.connect(str(db))
     try:
-        _strip_table_comments(conn, "eval_benchmarks")
-        _strip_table_comments(conn, "eval_scores")
-        for col in ("is_archived", "source", "scale_verified"):
-            conn.execute(f"ALTER TABLE eval_benchmarks DROP COLUMN {col}")
-        conn.execute("ALTER TABLE eval_scores DROP COLUMN gold_fingerprint")
+        drop_columns(conn, "eval_benchmarks", "is_archived", "source", "scale_verified")
+        drop_columns(conn, "eval_scores", "gold_fingerprint")
         conn.execute("UPDATE schema_version SET version = 32")
         conn.commit()
     finally:

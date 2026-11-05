@@ -15,10 +15,9 @@ from __future__ import annotations
 
 import sqlite3
 
-import pytest
-
 from db import repository as repo
 from db.schema import CURRENT_SCHEMA_VERSION, init_db
+from tests._sqlite_drop import drop_columns
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -61,11 +60,7 @@ def test_a_real_v36_database_migrates_forward(tmp_path):
     try:
         for t in ("notes_block_placements", "notes_integrity_tasks"):
             conn.execute(f"DROP TABLE IF EXISTS {t}")
-        for c in ("content_revision", "source_render_version"):
-            try:
-                conn.execute(f"ALTER TABLE notes_cells DROP COLUMN {c}")
-            except sqlite3.OperationalError as exc:  # pragma: no cover
-                pytest.skip(f"SQLite too old for DROP COLUMN: {exc}")
+        drop_columns(conn, "notes_cells", "content_revision", "source_render_version")
         conn.execute("UPDATE schema_version SET version = 36")
         conn.commit()
         assert "content_revision" not in _columns(conn, "notes_cells")

@@ -6,6 +6,7 @@ import sqlite3
 import pytest
 
 from db.schema import CURRENT_SCHEMA_VERSION, init_db
+from tests._sqlite_drop import drop_columns
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -77,12 +78,8 @@ def test_v40_upgrade_is_idempotent_and_preserves_existing_content(tmp_path):
                 "manifest_versions_json", "semantic_coverage_json",
             ),
         }
-        try:
-            for table, columns in migration_columns.items():
-                for column in columns:
-                    conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
-        except sqlite3.OperationalError as exc:  # pragma: no cover
-            pytest.skip(f"SQLite too old for DROP COLUMN: {exc}")
+        for table, columns in migration_columns.items():
+            drop_columns(conn, table, *columns)
         conn.commit()
     finally:
         conn.close()

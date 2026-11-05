@@ -4,10 +4,9 @@ from __future__ import annotations
 import json
 import sqlite3
 
-import pytest
-
 from db import repository as repo
 from db.schema import CURRENT_SCHEMA_VERSION, init_db
+from tests._sqlite_drop import drop_columns
 
 
 def _columns(path, table: str) -> set[str]:
@@ -42,13 +41,8 @@ def test_v43_walks_to_v44_without_losing_agent_rows(tmp_path):
         )
         conn.execute("DROP TABLE model_usage_calls")
         conn.execute("UPDATE schema_version SET version = 43")
-        try:
-            conn.execute("ALTER TABLE run_agents DROP COLUMN reasoning_tokens")
-            conn.execute("ALTER TABLE run_agents DROP COLUMN usage_status")
-            conn.execute("ALTER TABLE run_agent_turns DROP COLUMN reasoning_tokens")
-            conn.execute("ALTER TABLE run_agent_turns DROP COLUMN usage_status")
-        except sqlite3.OperationalError as exc:  # pragma: no cover
-            pytest.skip(f"SQLite too old for DROP COLUMN: {exc}")
+        drop_columns(conn, "run_agents", "reasoning_tokens", "usage_status")
+        drop_columns(conn, "run_agent_turns", "reasoning_tokens", "usage_status")
     init_db(db)
 
     with sqlite3.connect(db) as conn:
@@ -78,13 +72,8 @@ def test_v43_reasoning_fallback_survives_v44_migration(tmp_path):
         )
         conn.execute("DROP TABLE model_usage_calls")
         conn.execute("UPDATE schema_version SET version = 43")
-        try:
-            conn.execute("ALTER TABLE run_agents DROP COLUMN reasoning_tokens")
-            conn.execute("ALTER TABLE run_agents DROP COLUMN usage_status")
-            conn.execute("ALTER TABLE run_agent_turns DROP COLUMN reasoning_tokens")
-            conn.execute("ALTER TABLE run_agent_turns DROP COLUMN usage_status")
-        except sqlite3.OperationalError as exc:  # pragma: no cover
-            pytest.skip(f"SQLite too old for DROP COLUMN: {exc}")
+        drop_columns(conn, "run_agents", "reasoning_tokens", "usage_status")
+        drop_columns(conn, "run_agent_turns", "reasoning_tokens", "usage_status")
 
     init_db(db)
 

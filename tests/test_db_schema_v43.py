@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import sqlite3
 
-import pytest
-
 from db.schema import CURRENT_SCHEMA_VERSION, init_db
+from tests._sqlite_drop import drop_columns
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -42,10 +41,7 @@ def test_v42_upgrade_is_idempotent_and_preserves_agent_rows(tmp_path):
             (run_id,),
         ).lastrowid
         conn.execute("UPDATE schema_version SET version = 42")
-        try:
-            conn.execute("ALTER TABLE run_agents DROP COLUMN error_message")
-        except sqlite3.OperationalError as exc:  # pragma: no cover
-            pytest.skip(f"SQLite too old for DROP COLUMN: {exc}")
+        drop_columns(conn, "run_agents", "error_message")
         conn.commit()
     finally:
         conn.close()

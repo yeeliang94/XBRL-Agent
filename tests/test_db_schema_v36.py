@@ -13,6 +13,7 @@ import pytest
 
 from db import repository as repo
 from db.schema import CURRENT_SCHEMA_VERSION, init_db
+from tests._sqlite_drop import drop_columns
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -41,10 +42,7 @@ def test_a_real_v35_database_migrates_forward(tmp_path):
     init_db(db)
     conn = sqlite3.connect(db)
     try:
-        try:
-            conn.execute("ALTER TABLE runs DROP COLUMN notes_integrity_mode")
-        except sqlite3.OperationalError as exc:  # pragma: no cover
-            pytest.skip(f"SQLite too old for DROP COLUMN: {exc}")
+        drop_columns(conn, "runs", "notes_integrity_mode")
         conn.execute("UPDATE schema_version SET version = 35")
         conn.commit()
         assert "notes_integrity_mode" not in _columns(conn, "runs"), (
