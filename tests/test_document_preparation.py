@@ -1407,7 +1407,7 @@ def test_non_text_bbox_schema_rejects_pixel_coordinates_without_guessing_units()
 
 
 def test_structured_model_retries_invalid_bbox_with_feedback_preserving_html():
-    from pydantic_ai.messages import ModelResponse, ToolCallPart, RetryPromptPart
+    from pydantic_ai.messages import ModelResponse, ToolCallPart, ToolReturnPart
     from pydantic_ai.models.function import FunctionModel
     from ingest.document_preparation import _request_model
     calls = 0
@@ -1415,7 +1415,7 @@ def test_structured_model_retries_invalid_bbox_with_feedback_preserving_html():
         nonlocal calls
         calls += 1
         if calls == 2:
-            feedback = [part for message in messages for part in message.parts if isinstance(part, RetryPromptPart)]
+            feedback = [part for message in messages for part in message.parts if isinstance(part, ToolReturnPart) and part.outcome == "retried"]
             assert feedback
             assert "normalized fractions" in str(feedback[-1].content)
         output = {"complete": True, "readable": True, "html": "<p>Unchanged disclosure.</p>",

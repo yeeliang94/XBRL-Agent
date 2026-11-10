@@ -136,7 +136,7 @@ async def test_model_loop_returns_structured_assessment_and_saves_trace(tmp_path
     (op(cell='Notes:10', page=2), 'Source page does not support this block', [1, 2]),
 ])
 async def test_model_corrects_invalid_cleanup_with_validation_feedback(tmp_path, monkeypatch, bad, feedback, pages):
-    from pydantic_ai.messages import ModelResponse, RetryPromptPart, ToolCallPart
+    from pydantic_ai.messages import ModelResponse, ToolReturnPart, ToolCallPart
     from pydantic_ai.models.function import FunctionModel
     from pydantic_ai.usage import RunUsage
     from notes import cleanup_agent
@@ -151,7 +151,7 @@ async def test_model_corrects_invalid_cleanup_with_validation_feedback(tmp_path,
         if calls == 1:
             return ModelResponse(parts=[ToolCallPart('view_pdf_pages', {'pages': pages})])
         if calls == 3:
-            retries = [p for m in messages for p in m.parts if isinstance(p, RetryPromptPart)]
+            retries = [p for m in messages for p in m.parts if isinstance(p, ToolReturnPart) and p.outcome == "retried"]
             assert retries and feedback in str(retries[-1].content)
         removal = bad if calls == 2 else op(cell='Notes:10')
         return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name,
@@ -240,7 +240,7 @@ def test_one_unsafe_removal_does_not_discard_the_safe_ones():
 @pytest.mark.asyncio
 async def test_retry_carries_only_rejected_removals_and_drops_them_when_retries_run_out(tmp_path, monkeypatch):
     """Windows run: three rejected entries made the agent resubmit all 51."""
-    from pydantic_ai.messages import ModelResponse, RetryPromptPart, ToolCallPart
+    from pydantic_ai.messages import ModelResponse, ToolReturnPart, ToolCallPart
     from pydantic_ai.models.function import FunctionModel
     from pydantic_ai.usage import RunUsage
     from notes import cleanup_agent
@@ -257,7 +257,7 @@ async def test_retry_carries_only_rejected_removals_and_drops_them_when_retries_
         if calls == 1:
             return ModelResponse(parts=[ToolCallPart('view_pdf_pages', {'pages': [1]})])
         if calls > 2:
-            retry = [p for m in messages for p in m.parts if isinstance(p, RetryPromptPart)][-1]
+            retry = [p for m in messages for p in m.parts if isinstance(p, ToolReturnPart) and p.outcome == "retried"][-1]
             assert 'removal 1 ' in str(retry.content) and 'removal 0 ' not in str(retry.content)
         # Keeps citing a page it never viewed, so the removal can never pass.
         removals = [good, bad] if calls == 2 else [bad]

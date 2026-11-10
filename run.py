@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Set
 
+import pydantic_ai
+
+# pydantic-ai 2.6x prints a one-time Logfire banner on the first agent run.
+pydantic_ai.BANNER_ENABLED = False
+
 from dotenv import load_dotenv
 from runtime_settings import apply_settings as apply_runtime_settings
 

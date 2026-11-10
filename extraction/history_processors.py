@@ -107,12 +107,16 @@ _TEMPLATE_SUMMARY_MARKER = "=== Sheet:"
 
 
 def _tool_return_parts(messages: List[ModelMessage]):
-    """Yield (message_index, part_index, part) for every ToolReturnPart."""
+    """Yield (message_index, part_index, part) for every tool result.
+
+    From pydantic-ai 2.60 a retry request is a ``ToolReturnPart`` with
+    ``outcome="retried"``. It is feedback, not a result, so it is skipped.
+    """
     for mi, msg in enumerate(messages):
         if not isinstance(msg, ModelRequest):
             continue
         for pi, part in enumerate(msg.parts):
-            if isinstance(part, ToolReturnPart):
+            if isinstance(part, ToolReturnPart) and part.outcome != "retried":
                 yield mi, pi, part
 
 

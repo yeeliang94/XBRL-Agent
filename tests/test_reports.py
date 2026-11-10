@@ -767,7 +767,7 @@ async def test_report_provider_retry_retains_values_usage_and_cancellation(repor
 @pytest.mark.asyncio
 async def test_report_tool_rejects_unknown_batch_with_exact_catalogue_and_recovers(report_run):
     from pydantic_ai.models.function import FunctionModel
-    from pydantic_ai.messages import ModelResponse, RetryPromptPart, TextPart, ToolCallPart
+    from pydantic_ai.messages import ModelResponse, ToolReturnPart, TextPart, ToolCallPart
     from reports.agent import ReportDeps, create_report_agent
     from reports.repository import report_view
 
@@ -787,7 +787,7 @@ async def test_report_tool_rejects_unknown_batch_with_exact_catalogue_and_recove
         enum = tool.parameters_json_schema["$defs"]["CapturedField"]["properties"]["concept"]["enum"]
         assert enum == permitted
         if step in {1, 2}:
-            retry = next(p for p in messages[-1].parts if isinstance(p, RetryPromptPart))
+            retry = next(p for p in messages[-1].parts if isinstance(p, ToolReturnPart) and p.outcome == "retried")
             feedback = str(retry.content)
             for concept in invalid[step - 1:]:
                 assert concept in feedback

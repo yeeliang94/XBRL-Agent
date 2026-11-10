@@ -129,7 +129,9 @@ def test_pinned_library_sums_anthropic_cache_tokens_into_input_tokens():
     default = next(e for e in anthropic.extractors if e.api_flavor == "default")
     dests_by_path = {}
     for m in default.mappings:
-        dests_by_path.setdefault(m.path, set()).add(m.dest)
+        # Nested fields are list paths (genai-prices 0.2); only top-level names matter here.
+        if isinstance(m.path, str):
+            dests_by_path.setdefault(m.path, set()).add(m.dest)
     assert "input_tokens" in dests_by_path["cache_read_input_tokens"]
     assert "input_tokens" in dests_by_path["cache_creation_input_tokens"]
     assert "cache_read_tokens" in dests_by_path["cache_read_input_tokens"]

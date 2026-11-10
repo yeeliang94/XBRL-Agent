@@ -201,6 +201,19 @@ def test_openai_on_local_proxy_stays_on_proxy(monkeypatch):
     assert type(model).__module__ == "pydantic_ai.models.openai"
 
 
+def test_openai_on_proxy_keeps_registry_id_and_reasoning_support():
+    """The proxy routes by the registry id, but pydantic-ai only recognises a
+    reasoning model by its bare name. Without the bare-name profile, GPT
+    reasoning is replayed as plain text between tool turns on the proxy."""
+    model = server._create_proxy_model(
+        "openai.global.gpt-6-luna",
+        proxy_url="https://llm-proxy.example/v1",
+        api_key="sk-proxy",
+    )
+    assert model.model_name == "openai.global.gpt-6-luna"
+    assert model.profile.get("openai_supports_encrypted_reasoning_content") is True
+
+
 def test_create_proxy_model_strips_prefix_before_construction(monkeypatch):
     """The model constructor should receive a bare model name, not the
     prefixed registry form — otherwise the upstream API gets a string it

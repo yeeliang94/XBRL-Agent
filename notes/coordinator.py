@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+from pydantic_ai.usage import RunUsage
+
 from agent_tracing import (  # noqa: F401
     MAX_AGENT_ITERATIONS,
     agent_usage_limits,
@@ -69,7 +71,12 @@ def _backfill_token_report(token_report, usage_callable, template_label: str) ->
     strictly advisory.
     """
     try:
-        usage = usage_callable() if callable(usage_callable) else usage_callable
+        # RunUsage is itself callable from pydantic-ai 2.6x on (a deprecated
+        # V1 shim), so test the value's type before treating it as a callable.
+        if isinstance(usage_callable, RunUsage) or not callable(usage_callable):
+            usage = usage_callable
+        else:
+            usage = usage_callable()
         metrics = split_usage(usage)
         token_report.total_prompt_tokens += metrics.prompt_tokens
         token_report.total_completion_tokens += metrics.completion_tokens

@@ -35,7 +35,7 @@ it. Detailed explanations and pinning tests are in
 [`CLAUDE-REFERENCE.md`](CLAUDE-REFERENCE.md).
 
 1. [Windows requires `PYTHONUTF8=1`](CLAUDE-REFERENCE.md#1-pythonutf81-required-on-windows).
-2. [PydanticAI uses the V2-compatible API and model-specific transport](CLAUDE-REFERENCE.md#2-pydantic-ai-on-the-v2-line-floor-11071-pinned-by-constraintstxt).
+2. [PydanticAI uses the V2-compatible API and model-specific transport](CLAUDE-REFERENCE.md#2-pydantic-ai-on-the-v2-line-floor-2660-pinned-by-constraintstxt).
 2a. [Background agent threads must be safe across event loops](CLAUDE-REFERENCE.md#2a-cross-loop-safety-agents-on-background-threads).
 3. [Template formulas come from the SSM linkbase](CLAUDE-REFERENCE.md#3-xbrl-templates-derived-from-ssm-linkbase).
 4. [`compare_results.py` and current templates have known row offsets](CLAUDE-REFERENCE.md#4-compare_resultspy-vs-current-templates--row-numbering-differs).
