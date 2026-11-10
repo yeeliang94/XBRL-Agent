@@ -201,7 +201,7 @@ async def test_worker_prepares_before_scout_and_reconciles_before_ready(upload, 
 
 
 @pytest.mark.asyncio
-async def test_invalid_scout_map_keeps_actionable_failure_in_preparation_status(upload, monkeypatch):
+async def test_invalid_scout_map_keeps_actionable_failure_in_preparation_status(upload, monkeypatch, caplog):
     directory, db, run_id = upload
     import ingest.document_preparation as capture
     import scout.prepared_map
@@ -240,6 +240,10 @@ async def test_invalid_scout_map_keeps_actionable_failure_in_preparation_status(
     assert state["message"].startswith(
         "The AI service returned an invalid document map after 3 attempts."
     )
+    # The server log carries the traceback, not only the error's type name.
+    failure = next(r for r in caplog.records if r.getMessage().startswith("Preparation failed"))
+    assert failure.exc_info is not None
+    assert "invalid_map" in caplog.text
 
 
 @pytest.mark.asyncio

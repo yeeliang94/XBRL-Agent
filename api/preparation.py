@@ -460,7 +460,10 @@ async def _prepare(directory: Path, db_path: Path, run_id: int, attempt: str) ->
                 scout_status="cancelled",
                 message="Document preparation cancelled")
     except Exception as exc:
-        logger.warning("Preparation failed for run %s (%s)", run_id, type(exc).__name__)
+        # The traceback names the failing file or call; without it a bare
+        # "OSError" in the server log is undiagnosable.
+        logger.warning("Preparation failed for run %s (%s)", run_id, type(exc).__name__,
+                       exc_info=True)
         # Only approved user-facing errors are exposed, never raw provider payloads.
         from ingest.document_preparation import PreparationError
         message = str(exc) if isinstance(exc, PreparationError) else "Document preparation could not finish. Retry."
