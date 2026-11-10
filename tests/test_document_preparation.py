@@ -213,6 +213,32 @@ def test_repeated_reads_reuse_hashes_but_same_size_edits_invalidate(tmp_path, mo
     assert read_prepared_document(path) is None
 
 
+def test_settling_timestamps_pass_but_changed_content_fails_while_hashing(tmp_path, monkeypatch):
+    # Azure App Service /home moved a fresh file's timestamps mid-hash and
+    # every preparation failed although the content never changed.
+    import ingest.document_preparation as preparation
+
+    path = pdf(tmp_path, 1)
+    original_signature = preparation._file_signature
+    reads = []
+    def settling_signature(target):
+        reads.append(target)
+        return (*original_signature(target)[:-1], len(reads))
+    monkeypatch.setattr(preparation, "_file_signature", settling_signature)
+    call, _ = caller()
+    asyncio.run(prepare_document(path, None, model_name="fake", _caller=call))
+
+    target = tmp_path / "changing.bin"
+    writes = []
+    def changing_signature(target_path):
+        writes.append(target_path)
+        target_path.write_bytes(b"version %d" % len(writes))
+        return (*original_signature(target_path)[:-1], len(writes))
+    monkeypatch.setattr(preparation, "_file_signature", changing_signature)
+    with pytest.raises(OSError, match="changed while hashing"):
+        preparation._digest(target)
+
+
 def test_checkpoint_disk_writes_do_not_run_on_preparation_event_loop(tmp_path, monkeypatch):
     import ingest.document_preparation as preparation
     original_write = preparation._atomic_text

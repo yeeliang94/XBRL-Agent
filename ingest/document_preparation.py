@@ -580,7 +580,11 @@ def _digest(path: Path) -> str:
     # retain this entire signature. Rehash there so source reuse stays honest.
     digest = (_cached_digest.__wrapped__(path, before) if os.name == "nt"
               else _cached_digest(path, before))
-    if _file_signature(path) != before:
+    # Network shares such as Azure App Service /home can settle a new file's
+    # timestamps after the write. A moved signature fails only when a second
+    # read of the content disagrees.
+    if (_file_signature(path) != before
+            and _cached_digest.__wrapped__(path, before) != digest):
         raise OSError("Prepared source changed while hashing")
     return digest
 
