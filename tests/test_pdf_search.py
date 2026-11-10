@@ -416,8 +416,12 @@ def test_table_figures_are_added_from_the_transcript_without_retyping(monkeypatc
     assert "1 table(s)" in add(table=2, column=2, from_row="#1", to_row="#2")["error"]
     # A column that does not exist is an error, never a sum of zero.
     assert "3 column(s)" in add(column=9, from_row="#3", to_row="#4")["error"]
-    # A merged cell above a short row does not shift the rows below it.
-    assert add(column=3, from_row="#8", to_row="Prepayments")["sum"] == "21"
+    # A merged cell above a short row does not shift the rows below it, and
+    # the one amount it holds (9, spanning two rows) is counted once.
+    merged = add(column=3, from_row="#8", to_row="Prepayments")
+    assert merged["sum"] == "12"
+    assert [r["value"] for r in merged["rows"]] == ["9", "0", "0", "3"]
+    assert "counted once" in merged["rows"][1]["merged"]
     # Two figures in one cell are not read as one large number.
     assert "not a figure" in add(column=2, from_row="Prepayments", to_row="Prepayments")["error"]
 

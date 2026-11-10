@@ -242,3 +242,29 @@ def test_diff_does_not_attribute_formatter_only_style_to_reviewer(db_path: Path)
             label="Row 10", html='<p style="text-align: center">Unchanged disclosure.</p>',
             style_source="formatter")
     assert compute_notes_review_diff(str(db_path), run_id) == []
+
+
+def test_retried_sheet_reverts_to_its_retry_not_the_old_attempt(db_path: Path) -> None:
+    """PR review (2026-11-10): the prose analogue of the figures fix. A sheet
+    retried inside an already-reviewed run must revert to the retry."""
+    from notes.versioning import refresh_notes_snapshot_for_sheets
+
+    run_id = _seed_run(db_path)
+    other = "Notes-Other"
+    persist_notes_cells(db_path=str(db_path), run_id=run_id, sheet_name=_SHEET,
+                        cells_written=[_cell(10, "<p>old attempt</p>")])
+    persist_notes_cells(db_path=str(db_path), run_id=run_id, sheet_name=other,
+                        cells_written=[{**_cell(20, "<p>other orig</p>"), "sheet": other}])
+    # No restore point yet: nothing to refresh.
+    assert refresh_notes_snapshot_for_sheets(str(db_path), run_id, [_SHEET]) == 0
+    ensure_notes_snapshot(str(db_path), run_id)
+
+    persist_notes_cells(db_path=str(db_path), run_id=run_id, sheet_name=_SHEET,
+                        cells_written=[_cell(11, "<p>retry</p>")])
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=other, row=20,
+                               label="Row 20", html="<p>reviewer edit</p>")
+    assert refresh_notes_snapshot_for_sheets(str(db_path), run_id, [_SHEET]) == 1
+
+    revert_notes_to_original(str(db_path), run_id)
+    assert _live_rows(db_path, run_id) == {11: "<p>retry</p>", 20: "<p>other orig</p>"}

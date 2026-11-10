@@ -409,3 +409,45 @@ def test_diff_prefers_target_coord_over_render(tmp_path):
                if d["concept_uuid"] == LEAF1 and d["entity_scope"] == "Group")
     assert row["col"] == "D"        # target coord wins over render_col 'B'
     assert row["sheet"] == "SOFP" and row["row"] == 5
+
+
+def test_retried_statement_reverts_to_its_retry_not_the_old_attempt(tmp_path):
+    """PR review (2026-11-10): a statement retried inside an already-reviewed
+    run kept its old restore point, so "revert to original" put the superseded
+    attempt back over the retry's figures. Its part of the restore point is
+    re-copied; another template's part is left alone."""
+    from concept_model.facts_api import clear_facts_for_template
+    from concept_model.versioning import refresh_snapshot_for_templates
+
+    db, run_id = _seed(tmp_path)
+    other = "00000000-0000-0000-0000-0000000000c1"
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO concept_templates(template_id, source_path, shape) "
+            "VALUES ('mfrs-company-sopl-test-v1', 'y.xlsx', 'linear')")
+        conn.execute(
+            "INSERT INTO concept_nodes(concept_uuid, template_id, kind, "
+            "canonical_label, render_sheet, render_row, render_col) "
+            "VALUES (?, 'mfrs-company-sopl-test-v1', 'LEAF', 'Revenue', 'SOPL', 5, 'B')",
+            (other,))
+        conn.commit()
+    finally:
+        conn.close()
+    # No restore point yet: nothing to refresh.
+    assert refresh_snapshot_for_templates(db, run_id, [_TEMPLATE]) == 0
+
+    _write_fact(db, run_id, LEAF1, 100.0)   # first attempt, later superseded
+    _write_fact(db, run_id, other, 900.0)   # another statement
+    ensure_snapshot(db, run_id)
+    _write_fact(db, run_id, other, 950.0, source="reviewer", actor="reviewer")
+
+    # The retry: clear the statement's figures, then extract it afresh.
+    clear_facts_for_template(db, run_id, _TEMPLATE)
+    _write_fact(db, run_id, LEAF2, 70.0)
+    assert refresh_snapshot_for_templates(db, run_id, [_TEMPLATE]) == 1
+
+    revert_to_original(db, run_id)
+    assert _fact_value(db, run_id, LEAF2) == 70.0    # the retry's figure stays
+    assert _fact_value(db, run_id, LEAF1) is None    # the old attempt is gone
+    assert _fact_value(db, run_id, other) == 900.0   # untouched restore point

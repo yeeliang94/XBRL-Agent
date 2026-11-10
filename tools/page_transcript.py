@@ -178,14 +178,17 @@ def _cell_amount(text: str) -> Optional[Decimal]:
     return -value if negative else value
 
 
-def _table_grid(table) -> tuple[list[list[str]], int]:
-    """``(rows of cell text, number of header rows)`` for one table.
+def _table_grid(table) -> tuple[list[list[str]], int, set[tuple[int, int]]]:
+    """``(rows of cell text, number of header rows, repeated positions)``.
 
-    Merged cells repeat their text across every position they span. Header
-    rows are the leading rows made only of ``th`` cells. Raises ValueError for
-    a span too large to be a real table.
+    Merged cells repeat their text across every position they span, so labels
+    and headings read correctly on every row; ``repeated`` holds every
+    position after a merged cell's first, so its amount is counted once.
+    Header rows are the leading rows made only of ``th`` cells. Raises
+    ValueError for a span too large to be a real table.
     """
     cells: dict[tuple[int, int], str] = {}
+    repeated: set[tuple[int, int]] = set()
     header_rows = 0
     trs = [tr for tr in table.find_all("tr") if tr.find_parent("table") is table]
     for r, tr in enumerate(trs):
@@ -204,9 +207,12 @@ def _table_grid(table) -> tuple[list[list[str]], int]:
             for dr in range(rowspan):
                 for dc in range(colspan):
                     cells[(r + dr, col + dc)] = text
+                    if dr or dc:
+                        repeated.add((r + dr, col + dc))
             col += colspan
     width = max((c for _, c in cells), default=-1) + 1
-    return [[cells.get((r, c), "") for c in range(width)] for r in range(len(trs))], header_rows
+    grid = [[cells.get((r, c), "") for c in range(width)] for r in range(len(trs))]
+    return grid, header_rows, repeated
 
 
 def _span(cell, name: str) -> int:
@@ -278,7 +284,7 @@ def _add_one(transcript: dict[int, dict], item: TableSum) -> dict:
     if item.table > len(tables):
         return {**out, "error": f"Page {item.page} has {len(tables)} table(s) in its transcript."}
     try:
-        grid, header_rows = _table_grid(tables[item.table - 1])
+        grid, header_rows, repeated = _table_grid(tables[item.table - 1])
         first = _find_row(grid, item.from_row)
         last = _find_row(grid, item.to_row, start=first)
     except ValueError as exc:
@@ -298,9 +304,14 @@ def _add_one(transcript: dict[int, dict], item: TableSum) -> dict:
             return {**out, "error": f"Row #{index + 1} {_row_label(grid[index])!r} holds {text!r} "
                                     f"in column {item.column}, which is not a figure. Choose "
                                     "another column or row range."}
-        total += value
-        rows.append({"row": index + 1, "label": _row_label(grid[index]), "cell": text,
-                     "value": _format_decimal(value)})
+        entry = {"row": index + 1, "label": _row_label(grid[index]), "cell": text,
+                 "value": _format_decimal(value)}
+        if (index, column) in repeated:
+            # One printed amount spanning several rows: counted on its first row.
+            entry.update(value="0", merged="same merged cell as the row above; counted once")
+        else:
+            total += value
+        rows.append(entry)
     # Every header row, so stacked headings name the entity and the year.
     headings = dict.fromkeys(row[column] for row in grid[:header_rows or 1] if row[column])
     out.update(column_heading=" / ".join(headings), rows=rows, sum=_format_decimal(total))

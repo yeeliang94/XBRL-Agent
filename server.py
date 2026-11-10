@@ -3924,17 +3924,18 @@ def _carried_run_results(db_conn, run_id, *, retried_statements, retried_notes, 
     return list(face.values()), notes, reports, report_paths
 
 
-def _retry_notes_verdicts(db_conn, run_id, fresh: dict, *, notes_retried: bool,
+def _retry_notes_verdicts(db_conn, run_id, fresh: dict, *, repeated: frozenset,
                           run_has_notes: bool) -> tuple[dict, bool]:
     """A retry's notes-side verdicts, and whether the record was missing.
 
-    A verdict comes from the latest pass that covered its scope. The notes
-    reviewer, coverage and source-integrity passes cover the whole run, so a
-    retry that included a notes template takes their fresh verdicts. Cleanup
-    and formatting cover only the sheets just redone, and a statement or
-    report retry repeats no notes pass at all: those keep what the run last
-    recorded. A run with notes and no record (finished before the record
-    existed, or never reached a status) is unresolved, never clean.
+    A verdict comes from the latest pass that covered its scope. ``repeated``
+    names the verdicts whose whole-run pass actually ran in this retry (the
+    notes reviewer, coverage, source integrity); those take the fresh result.
+    Every other verdict keeps what the run last recorded: a pass that did not
+    run has no finding to offer, and cleanup and formatting cover only the
+    sheets just redone. A run with notes whose unrepeated verdicts have no
+    record (it finished before the record existed, or never reached a status)
+    is unresolved, never clean.
     """
     if not run_has_notes:
         return fresh, False
@@ -3945,16 +3946,51 @@ def _retry_notes_verdicts(db_conn, run_id, fresh: dict, *, notes_retried: bool,
         logger.warning("Could not read the recorded notes verdicts of run %s",
                        run_id, exc_info=True)
         recorded = None
-    whole_run = {"validator_failed", "notes_coverage_unresolved", "notes_integrity_unresolved"}
     if recorded is None:
-        if notes_retried:
+        whole_run = {"validator_failed", "notes_coverage_unresolved",
+                     "notes_integrity_unresolved"}
+        if whole_run <= repeated:
             return fresh, False
         return {**fresh, "notes_coverage_unresolved": True}, True
     return {
-        name: value if (notes_retried and name in whole_run)
-        else bool(value or recorded.get(name, True))
+        name: value if name in repeated else bool(value or recorded.get(name, True))
         for name, value in fresh.items()
     }, False
+
+
+def _refresh_retried_restore_points(run_id, face_results, notes_result, retried_notes,
+                                    filing_level: str, filing_standard: str) -> None:
+    """Point "revert to original" at the retry's extraction, not the old one.
+
+    The figures and prose restore points are taken once, before the first
+    review. A retried statement or notes sheet replaces what they captured, so
+    its part of each restore point is re-copied before any review runs; the
+    rest of the run keeps its own. Best-effort: a failure is logged and the
+    retry continues.
+    """
+    try:
+        from concept_model.parser import derive_template_id
+        from concept_model.versioning import refresh_snapshot_for_templates
+        from notes.versioning import refresh_notes_snapshot_for_sheets
+        from notes_types import NOTES_REGISTRY, notes_template_path
+
+        template_ids = list(_build_check_template_ids(
+            face_results, filing_level, filing_standard).values())
+        template_ids += [
+            derive_template_id(notes_template_path(
+                template, level=filing_level, standard=filing_standard))
+            for template in retried_notes if NOTES_REGISTRY[template].is_numeric
+        ]
+        refresh_snapshot_for_templates(AUDIT_DB_PATH, run_id, template_ids)
+        sheets = sorted({
+            str(cell.get("sheet"))
+            for result in (notes_result.agent_results if notes_result else [])
+            for cell in result.cells_written if cell.get("sheet")
+        })
+        refresh_notes_snapshot_for_sheets(AUDIT_DB_PATH, run_id, sheets)
+    except Exception:
+        logger.warning("Could not refresh the restore points of run %s after "
+                       "its retry", run_id, exc_info=True)
 
 
 def _settle_interrupted_retry(db_conn, run_id, prior_status: str) -> None:
@@ -6669,6 +6705,10 @@ async def run_multi_agent_stream(
         retry_other_reports: Dict[str, str] = {}
         retry_other_report_paths: Dict[str, str] = {}
         if retry_in_run:
+            _refresh_retried_restore_points(
+                run_id, coordinator_result.agent_results, notes_result, notes_to_run,
+                config.filing_level, config.filing_standard,
+            )
             (_carried, retry_other_notes, retry_other_reports,
              retry_other_report_paths) = _carried_run_results(
                 db_conn, run_id,
@@ -8508,8 +8548,15 @@ async def run_multi_agent_stream(
             "notes_cleanup_incomplete": bool(notes_cleanup_incomplete),
         }
         if retry_in_run:
+            _repeated = set()
+            if validator_outcome is not None:
+                _repeated.add("validator_failed")
+                if _coverage is not None:
+                    _repeated.add("notes_coverage_unresolved")
+            if notes_integrity_outcome is not None:
+                _repeated.add("notes_integrity_unresolved")
             _notes_verdicts, _no_record = _retry_notes_verdicts(
-                db_conn, run_id, _notes_verdicts, notes_retried=bool(notes_to_run),
+                db_conn, run_id, _notes_verdicts, repeated=frozenset(_repeated),
                 run_has_notes=bool(retry_other_notes or notes_to_run),
             )
             if _no_record:

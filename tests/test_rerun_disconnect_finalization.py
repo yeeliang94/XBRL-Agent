@@ -439,9 +439,8 @@ async def test_a_retry_that_stops_early_never_leaves_a_clean_or_running_run(sess
 
 
 def test_a_retry_takes_each_notes_verdict_from_the_pass_that_covered_it(tmp_path):
-    """A statement retry repeats no notes pass, so it keeps the recorded notes
-    verdicts; a notes retry repeats the whole-run passes, so their fresh
-    result wins and an earlier finding can clear. No record is never clean."""
+    """A verdict is replaced only by a pass that actually ran in the retry;
+    otherwise the recorded one stands. No record is never clean."""
     from db import repository as repo
     from db.schema import init_db
     from server import _retry_notes_verdicts
@@ -457,16 +456,23 @@ def test_a_retry_takes_each_notes_verdict_from_the_pass_that_covered_it(tmp_path
         def verdicts(**kwargs):
             return _retry_notes_verdicts(conn, run_id, dict(clean), **kwargs)
 
-        assert verdicts(notes_retried=False, run_has_notes=False) == (clean, False)
-        unknown, no_record = verdicts(notes_retried=False, run_has_notes=True)
+        whole_run = frozenset({"validator_failed", "notes_coverage_unresolved",
+                               "notes_integrity_unresolved"})
+        assert verdicts(repeated=frozenset(), run_has_notes=False) == (clean, False)
+        unknown, no_record = verdicts(repeated=frozenset(), run_has_notes=True)
         assert no_record and unknown["notes_coverage_unresolved"] is True
 
         repo.save_run_notes_verdicts(conn, run_id, {
             **clean, "validator_failed": True, "notes_formatting_incomplete": True})
-        kept, no_record = verdicts(notes_retried=False, run_has_notes=True)
+        kept, no_record = verdicts(repeated=frozenset(), run_has_notes=True)
         assert not no_record
         assert kept["validator_failed"] and kept["notes_formatting_incomplete"]
-        cleared, _ = verdicts(notes_retried=True, run_has_notes=True)
+        cleared, _ = verdicts(repeated=whole_run, run_has_notes=True)
         assert cleared["validator_failed"] is False
         # Formatting was redone only for the retried sheet, so it stays.
         assert cleared["notes_formatting_incomplete"] is True
+        # PR review: a numeric notes retry runs no prose review, so the
+        # earlier review finding must stand even though notes were retried.
+        numeric, _ = verdicts(repeated=frozenset({"notes_integrity_unresolved"}),
+                              run_has_notes=True)
+        assert numeric["validator_failed"] is True
