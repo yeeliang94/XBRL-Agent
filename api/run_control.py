@@ -591,16 +591,6 @@ async def rerun_agent(
                 yield frame
         finally:
             await frames.aclose()
-            if retry_run_id is not None:
-                from db.run_ownership import release
-                try:
-                    ownership_conn = server._open_audit_conn()
-                    try:
-                        release(ownership_conn, retry_run_id)
-                    finally:
-                        ownership_conn.close()
-                except Exception:
-                    logger.warning("Could not release run process ownership", exc_info=True)
 
     return StreamingResponse(
         event_stream(),

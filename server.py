@@ -3830,24 +3830,29 @@ def _notes_integrity_tips_status(outcome: Optional[dict]) -> bool:
     return bool(outcome and outcome.get("tips_status"))
 
 
-_NOTES_VERDICTS_NAME = "notes_status_inputs.json"
-_REPORT_AGENT_TYPES = frozenset({"DIRECTORS_REPORT", "STATEMENT_BY_DIRECTORS", "AUDITORS_REPORT"})
 
-
-def _clear_retried_statements(
-    db_conn, run_id: int, statements, variants, filing_level: str,
+def _clear_retried_figures(
+    db_conn, run_id: int, statements, variants, notes, filing_level: str,
     filing_standard: str, session_dir: Path,
 ) -> None:
-    """Remove a retried statement's earlier figures and scratch workbook.
+    """Remove a retried agent's earlier figures and statement scratch workbook.
 
     Fact writes are upserts, so a figure only the earlier attempt wrote would
-    otherwise survive into the retried statement. Both the variant the earlier
-    attempt resolved and the one now requested are cleared; other statements
-    and imported prior-year figures are untouched. Raises on failure.
+    otherwise survive into the retried statement or numeric notes sheet. Both
+    the variant the earlier attempt resolved and the one now requested are
+    cleared; other templates and imported prior-year figures are untouched.
+    Prose notes hold no figures and are replaced per sheet when saved.
+    Raises on failure.
     """
     from concept_model.facts_api import clear_facts_for_template
     from concept_model.parser import derive_template_id
+    from notes_types import NOTES_REGISTRY, notes_template_path
     from statement_types import template_path as _template_path
+
+    for template in notes:
+        if NOTES_REGISTRY[template].is_numeric:
+            master = notes_template_path(template, level=filing_level, standard=filing_standard)
+            clear_facts_for_template(AUDIT_DB_PATH, run_id, derive_template_id(master))
 
     for stmt in statements:
         row = db_conn.execute(
@@ -3876,6 +3881,7 @@ def _carried_run_results(db_conn, run_id, *, retried_statements, retried_notes, 
     from coordinator import AgentResult
     from db import repository as repo
     from notes_types import NotesTemplateType
+    from reports.registry import REPORTS
     from statement_types import StatementType
 
     face: dict = {}
@@ -3892,7 +3898,7 @@ def _carried_run_results(db_conn, run_id, *, retried_statements, retried_notes, 
         if kind.startswith("NOTES_") and kind[6:] in note_names:
             if kind[6:] not in retried_note_names:
                 notes[kind[6:]] = status
-        elif kind in _REPORT_AGENT_TYPES:
+        elif kind in REPORTS:
             if kind not in retried_reports:
                 reports[kind] = status
                 if row.status == "succeeded" and row.workbook_path:
@@ -3918,68 +3924,51 @@ def _carried_run_results(db_conn, run_id, *, retried_statements, retried_notes, 
     return list(face.values()), notes, reports, report_paths
 
 
-def _record_notes_verdicts(session_dir: Path, verdicts: dict) -> None:
-    """Keep the notes-side status verdicts beside the run's files.
+def _retry_notes_verdicts(db_conn, run_id, fresh: dict, *, notes_retried: bool,
+                          run_has_notes: bool) -> tuple[dict, bool]:
+    """A retry's notes-side verdicts, and whether the record was missing.
 
-    A later single-agent retry does not repeat the notes passes; it reads
-    these so it cannot report a clean run over an unresolved notes finding.
-    """
-    try:
-        safe_path(session_dir / _NOTES_VERDICTS_NAME).write_text(
-            json.dumps(verdicts), encoding="utf-8")
-    except Exception:
-        logger.warning("Could not record notes status verdicts in %s", session_dir,
-                       exc_info=True)
-
-
-def _merge_recorded_notes_verdicts(session_dir: Path, fresh: dict, *, run_has_notes: bool) -> dict:
-    """A retry's notes verdicts: this pass's findings plus what was recorded.
-
-    A verdict is unresolved if either says so. A run with notes and no
-    readable record (it predates the record, or the file is damaged) is
-    unresolved, never clean.
+    A verdict comes from the latest pass that covered its scope. The notes
+    reviewer, coverage and source-integrity passes cover the whole run, so a
+    retry that included a notes template takes their fresh verdicts. Cleanup
+    and formatting cover only the sheets just redone, and a statement or
+    report retry repeats no notes pass at all: those keep what the run last
+    recorded. A run with notes and no record (finished before the record
+    existed, or never reached a status) is unresolved, never clean.
     """
     if not run_has_notes:
-        return fresh
+        return fresh, False
+    from db import repository as repo
     try:
-        recorded = json.loads(
-            safe_path(session_dir / _NOTES_VERDICTS_NAME).read_text(encoding="utf-8"))
-        return {name: bool(value or recorded[name]) for name, value in fresh.items()}
+        recorded = repo.fetch_run_notes_verdicts(db_conn, run_id)
     except Exception:
-        logger.info("No recorded notes status verdicts in %s; treating the "
-                    "notes checks as unresolved", session_dir)
-        return {**fresh, "notes_coverage_unresolved": True}
+        logger.warning("Could not read the recorded notes verdicts of run %s",
+                       run_id, exc_info=True)
+        recorded = None
+    whole_run = {"validator_failed", "notes_coverage_unresolved", "notes_integrity_unresolved"}
+    if recorded is None:
+        if notes_retried:
+            return fresh, False
+        return {**fresh, "notes_coverage_unresolved": True}, True
+    return {
+        name: value if (notes_retried and name in whole_run)
+        else bool(value or recorded.get(name, True))
+        for name, value in fresh.items()
+    }, False
 
 
-def _settle_retried_run(db_conn, run_id, saved_config, undecided_prior_status) -> None:
-    """Leave a retried run with its own setup and an honest status.
+def _settle_interrupted_retry(db_conn, run_id, prior_status: str) -> None:
+    """Give a retry that stopped before the whole-run status an honest one.
 
-    The retry request named one agent, so the run's saved setup is put back.
-    When the retry stopped before the whole-run status was decided, the run
-    returns to the status it had. A run that had been clean becomes failed,
-    the status any run gets when one of its agents did not finish: its other
-    results are intact, but the retried agent's no longer are.
-    Never raises (invariant 10).
+    The retried agent's earlier figures were cleared and it did not finish,
+    so the run is not better than failed: it keeps a failed or aborted status
+    it already had, and any other status becomes failed. Its other results
+    are untouched. Never raises (invariant 10).
     """
-    if db_conn is None or run_id is None:
-        return
-    try:
-        if saved_config is not None:
-            db_conn.execute(
-                "UPDATE runs SET run_config_json = ?, scout_enabled = ?, "
-                "orchestration = ? WHERE id = ?", (*saved_config, run_id),
-            )
-            db_conn.commit()
-    except Exception:
-        logger.warning("Could not restore the saved setup of run %s after its "
-                       "retry", run_id, exc_info=True)
-    if undecided_prior_status is not None:
-        _safe_mark_finished(
-            db_conn, run_id,
-            "failed" if undecided_prior_status == "completed"
-            else undecided_prior_status,
-        )
-
+    _safe_mark_finished(
+        db_conn, run_id,
+        prior_status if prior_status in ("failed", "aborted") else "failed",
+    )
 
 
 def _resolve_run_status(
@@ -5431,10 +5420,12 @@ async def run_multi_agent_stream(
     # row. Prevents the finally block from clobbering an earlier-set state.
     terminal_status: Optional[str] = None
     retry_in_run = existing_run_id is not None and retry_prior_status is not None
-    # The run's own saved setup; a retry request names one agent only and must
-    # not replace it. Restored on every exit path.
-    retry_saved_config: Optional[tuple] = None
     retry_status_decided = False
+
+    def _new_review_row(conn, run_id_, **fields) -> int:
+        """A retry reuses the run's review card; a normal run opens one."""
+        make = repo.reset_or_create_agent_row_for_retry if retry_in_run else repo.create_run_agent
+        return make(conn, run_id_, **fields)
     notes_review_finalize_gate: Optional[asyncio.Event] = None
     try:
         db_conn = sqlite3.connect(safe_db_target(str(AUDIT_DB_PATH)))
@@ -5479,19 +5470,9 @@ async def run_multi_agent_stream(
             # no-ops and the row stays 'running' forever, violating
             # gotcha #10 (every exit path reaches a terminal status).
             run_id = existing_run_id
-            from db.run_ownership import claim
-            claim(db_conn, run_id)
-            if retry_in_run:
-                try:
-                    _saved = db_conn.execute(
-                        "SELECT run_config_json, scout_enabled, orchestration "
-                        "FROM runs WHERE id = ?", (run_id,),
-                    ).fetchone()
-                    retry_saved_config = tuple(_saved) if _saved is not None else None
-                except Exception:
-                    logger.warning("Could not read the saved setup of run %s "
-                                   "before its retry", run_id, exc_info=True)
             try:
+                from db.run_ownership import claim
+                claim(db_conn, run_id)
                 # Also refresh the canonical `runs.orchestration` column
                 # — list/detail read the column, not the JSON (peer-
                 # review HIGH #1, 2026-05-28). Otherwise the started
@@ -5499,23 +5480,26 @@ async def run_multi_agent_stream(
                 # draft creation, which is stale if the user toggled
                 # the orchestration in the pre-run panel mid-draft and
                 # the PATCH side leaked it to JSON only.
-                db_conn.execute(
-                    "UPDATE runs SET run_config_json = ?, "
-                    "scout_enabled = ?, orchestration = ? "
-                    "WHERE id = ?",
-                    (
-                        json.dumps(run_config.model_dump()),
-                        1 if run_config.use_scout else 0,
-                        getattr(run_config, "orchestration", "split")
-                        or "split",
-                        existing_run_id,
-                    ),
-                )
-                db_conn.commit()
+                # A retry request names one agent; the run keeps its own
+                # saved setup (here and at every later config write).
+                if not retry_in_run:
+                    db_conn.execute(
+                        "UPDATE runs SET run_config_json = ?, "
+                        "scout_enabled = ?, orchestration = ? "
+                        "WHERE id = ?",
+                        (
+                            json.dumps(run_config.model_dump()),
+                            1 if run_config.use_scout else 0,
+                            getattr(run_config, "orchestration", "split")
+                            or "split",
+                            existing_run_id,
+                        ),
+                    )
+                    db_conn.commit()
             except Exception:
                 logger.warning(
-                    "Failed to refresh run_config_json on existing draft %s "
-                    "— continuing with stale persisted config; terminal "
+                    "Failed to claim or refresh the config of existing run %s "
+                    "— continuing with the persisted config; terminal "
                     "status will still be written.",
                     existing_run_id, exc_info=True,
                 )
@@ -5699,8 +5683,8 @@ async def run_multi_agent_stream(
         )
         if retry_in_run and db_conn is not None and run_id is not None:
             try:
-                _clear_retried_statements(
-                    db_conn, run_id, statements_to_run, variants,
+                _clear_retried_figures(
+                    db_conn, run_id, statements_to_run, variants, notes_to_run,
                     config.filing_level, config.filing_standard, session_dir,
                 )
             except Exception as exc:
@@ -6118,7 +6102,7 @@ async def run_multi_agent_stream(
                 # Keep the durable draft/run config aligned with what the
                 # downstream agents actually received. This also lets notes
                 # regeneration reuse the latest inventory without re-scouting.
-                if db_conn is not None and run_id is not None:
+                if db_conn is not None and run_id is not None and not retry_in_run:
                     stored_config = run_config.model_dump()
                     stored_config["infopack"] = json.loads(infopack.to_json())
                     db_conn.execute(
@@ -6294,7 +6278,7 @@ async def run_multi_agent_stream(
 
         run_config.denomination = resolved_denomination
         config.denomination = resolved_denomination
-        if db_conn is not None and run_id is not None:
+        if db_conn is not None and run_id is not None and not retry_in_run:
             try:
                 stored_config = run_config.model_dump()
                 if infopack is not None:
@@ -6343,26 +6327,27 @@ async def run_multi_agent_stream(
         # settings. Environment settings are mutable, and GPT-5.6 reasoning is
         # transport-sensitive, so the configured value alone is insufficient
         # to attribute a past run's quality or cost.
-        try:
-            _levels = _thinking_levels()
-            _runtime = _model_runtime_snapshot(
-                model, statements_to_run, models, notes_to_run, notes_models,
-            )
-            _lvl_conn = _open_audit_conn()
+        if not retry_in_run:
             try:
-                _lvl_conn.execute(
-                    "UPDATE runs SET run_config_json = json_set("
-                    "  COALESCE(run_config_json, '{}'), "
-                    "  '$.thinking_levels', json(?), "
-                    "  '$.model_runtime', json(?)) WHERE id = ?",
-                    (json.dumps(_levels), json.dumps(_runtime), run_id),
+                _levels = _thinking_levels()
+                _runtime = _model_runtime_snapshot(
+                    model, statements_to_run, models, notes_to_run, notes_models,
                 )
-                _lvl_conn.commit()
-            finally:
-                _lvl_conn.close()
-        except Exception:  # noqa: BLE001 — telemetry, never fatal
-            logger.warning("Could not record the run's model runtime settings",
-                           exc_info=True)
+                _lvl_conn = _open_audit_conn()
+                try:
+                    _lvl_conn.execute(
+                        "UPDATE runs SET run_config_json = json_set("
+                        "  COALESCE(run_config_json, '{}'), "
+                        "  '$.thinking_levels', json(?), "
+                        "  '$.model_runtime', json(?)) WHERE id = ?",
+                        (json.dumps(_levels), json.dumps(_runtime), run_id),
+                    )
+                    _lvl_conn.commit()
+                finally:
+                    _lvl_conn.close()
+            except Exception:  # noqa: BLE001 — telemetry, never fatal
+                logger.warning("Could not record the run's model runtime settings",
+                               exc_info=True)
 
         notes_integrity_mode = _notes_integrity_mode()
         if prepared_snapshot is not None:
@@ -6379,12 +6364,22 @@ async def run_multi_agent_stream(
                 )
             finally:
                 _mode_conn.close()
+            # A retry keeps the run's source record. A new one would retire the
+            # placements and a person's source decisions for every sheet the
+            # retry does not redo, and the integrity check would read them as
+            # gaps. Only a changed notes list still needs a new record.
+            _kept_generation = None
+            if retry_in_run:
+                from notes import source_repository as _source_repo
+                _active = _source_repo.active_generation(db_conn, run_id)
+                _kept_generation = _active["id"] if _active is not None else None
             if prepared_snapshot is not None and notes_to_run:
                 current_infopack = json.loads(infopack.to_json())
                 original_inventory = prepared_snapshot["infopack"].get("notes_inventory") or []
                 current_inventory = current_infopack.get("notes_inventory") or []
                 from api.preparation import inventory_requires_remap, remap_prepared_inventory
                 if inventory_requires_remap(original_inventory, current_inventory):
+                    _kept_generation = None
                     prepared_document = await remap_prepared_inventory(
                         prepared_document, current_infopack, run_id=run_id,
                         session_id=session_id,
@@ -6397,7 +6392,12 @@ async def run_multi_agent_stream(
                     prepared_document.metadata_path,
                     scout_note_nums=[e.note_num for e in getattr(infopack, "notes_inventory", []) or []],
                 )
-                notes_source_generation_id = freeze_manifest(db_conn, run_id, manifest)
+                notes_source_generation_id = (
+                    _kept_generation if _kept_generation is not None
+                    else freeze_manifest(db_conn, run_id, manifest)
+                )
+            elif notes_integrity_mode.computes and _kept_generation is not None and not notes_to_run:
+                notes_source_generation_id = _kept_generation
             elif notes_integrity_mode.computes:
                 _emit_stage("reading_source")
                 notes_source_generation_id, notes_boundary_report = (
@@ -7283,7 +7283,7 @@ async def run_multi_agent_stream(
 
             if db_conn is not None and run_id is not None:
                 try:
-                    validator_run_agent_id = repo.create_run_agent(
+                    validator_run_agent_id = _new_review_row(
                         db_conn,
                         run_id,
                         statement_type=NOTES_VALIDATOR_AGENT_ID,
@@ -7475,6 +7475,11 @@ async def run_multi_agent_stream(
             return validator_outcome, validator_cancelled_without_outcome
 
         def _record_review_not_applicable(role: str, message: str) -> None:
+            if retry_in_run and db_conn is not None and db_conn.execute(
+                "SELECT 1 FROM run_agents WHERE run_id = ? AND statement_type = ?",
+                (run_id, role),
+            ).fetchone():
+                return  # the run's earlier review card stands
             if db_conn is not None and run_id is not None:
                 review_id = repo.create_run_agent(db_conn, run_id, statement_type=role)
                 repo.finish_run_agent(db_conn, review_id, status="skipped")
@@ -7504,7 +7509,7 @@ async def run_multi_agent_stream(
                     _run_auto_notes_review(notes_outputs),
                 )
 
-        if notes_review_lifecycle_task is None and not (retry_in_run and not notes_to_run):
+        if notes_review_lifecycle_task is None:
             _record_review_not_applicable(NOTES_VALIDATOR_AGENT_ID,
                 "No extracted prose disclosures are available for notes review.")
 
@@ -7543,7 +7548,7 @@ async def run_multi_agent_stream(
                 # Inapplicable reviews receive a separate terminal skipped row.
                 if db_conn is not None and run_id is not None:
                     try:
-                        correction_run_agent_id = repo.create_run_agent(
+                        correction_run_agent_id = _new_review_row(
                             db_conn, run_id,
                             statement_type=CORRECTION_AGENT_ID,
                             variant=None,
@@ -8503,15 +8508,32 @@ async def run_multi_agent_stream(
             "notes_cleanup_incomplete": bool(notes_cleanup_incomplete),
         }
         if retry_in_run:
-            _notes_verdicts = _merge_recorded_notes_verdicts(
-                session_dir, _notes_verdicts, run_has_notes=bool(retry_other_notes or notes_to_run),
+            _notes_verdicts, _no_record = _retry_notes_verdicts(
+                db_conn, run_id, _notes_verdicts, notes_retried=bool(notes_to_run),
+                run_has_notes=bool(retry_other_notes or notes_to_run),
             )
+            if _no_record:
+                # Say why a clean retry still needs review (invariant 20).
+                _enqueue_system_error({
+                    "type": "notes_checks_not_recorded",
+                    "message": (
+                        "This run's notes were checked before those results "
+                        "were recorded, so the retry cannot confirm them. "
+                        "Run the notes review again to clear this."
+                    ),
+                })
             validator_failed = _notes_verdicts["validator_failed"]
             notes_coverage_unresolved = _notes_verdicts["notes_coverage_unresolved"]
             notes_integrity_unresolved = _notes_verdicts["notes_integrity_unresolved"]
             notes_formatting_incomplete = _notes_verdicts["notes_formatting_incomplete"]
             notes_cleanup_incomplete = _notes_verdicts["notes_cleanup_incomplete"]
-        _record_notes_verdicts(session_dir, _notes_verdicts)
+        if db_conn is not None and run_id is not None:
+            try:
+                repo.save_run_notes_verdicts(db_conn, run_id, _notes_verdicts)
+                db_conn.commit()
+            except Exception:
+                logger.warning("Could not record the notes verdicts of run %s",
+                               run_id, exc_info=True)
         overall_status = _resolve_run_status(
             all_agents_ok=all_agents_ok,
             merge_success=merge_result.success,
@@ -8681,11 +8703,8 @@ async def run_multi_agent_stream(
         # call it aborted. Idempotent for rows that were already finalized.
         if terminal_status is None:
             _safe_mark_finished(db_conn, run_id, "aborted")
-        if retry_in_run:
-            _settle_retried_run(
-                db_conn, run_id, retry_saved_config,
-                None if retry_status_decided else retry_prior_status,
-            )
+        if retry_in_run and not retry_status_decided:
+            _settle_interrupted_retry(db_conn, run_id, retry_prior_status)
         # Session-wide task_registry cleanup used to live in coordinator.py's
         # finally block, but that erased notes tasks mid-flight whenever face
         # finished before notes. Now the outer orchestrator owns it — one

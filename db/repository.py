@@ -525,6 +525,22 @@ def mark_run_retrying(conn: sqlite3.Connection, run_id: int) -> Optional[str]:
     return row[0] if cur.rowcount > 0 else None
 
 
+def save_run_notes_verdicts(conn: sqlite3.Connection, run_id: int, verdicts: dict) -> None:
+    """Record the notes-side verdicts that went into a run's status."""
+    conn.execute(
+        "UPDATE runs SET notes_verdicts_json = ? WHERE id = ?",
+        (json.dumps(verdicts), run_id),
+    )
+
+
+def fetch_run_notes_verdicts(conn: sqlite3.Connection, run_id: int) -> Optional[dict]:
+    """The run's recorded notes-side verdicts, or None when none were recorded."""
+    row = conn.execute(
+        "SELECT notes_verdicts_json FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    return _parse_json_object(row[0]) if row is not None else None
+
+
 def reset_or_create_agent_row_for_retry(
     conn: sqlite3.Connection,
     run_id: int,
@@ -538,8 +554,8 @@ def reset_or_create_agent_row_for_retry(
     same statement would show History two cards and keep the failed attempt
     counting against the run. The latest row is reset to ``running`` and its
     recorded activity, turns and field projection are removed so the new
-    attempt writes a clean record. ``model_usage_calls`` is kept: the failed
-    attempt's cost was really spent.
+    attempt writes a clean record. Its usage rows are replaced when the new
+    attempt's turns are saved, so the row reports the latest attempt's cost.
     """
     row = conn.execute(
         "SELECT id FROM run_agents WHERE run_id = ? AND statement_type = ? "

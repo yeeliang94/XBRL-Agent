@@ -410,16 +410,17 @@ async def test_a_retry_cannot_hide_another_statement_that_failed(session_env):
 
 
 @pytest.mark.asyncio
-async def test_a_retry_that_stops_early_leaves_the_run_as_it_was(session_env):
-    """A retry that never reaches the whole-run status must not turn a run
-    with good results into a failed or aborted one (invariant 10: it still
-    ends in a terminal status)."""
+async def test_a_retry_that_stops_early_never_leaves_a_clean_or_running_run(session_env):
+    """The retried statement's earlier figures are cleared before the retry
+    runs. If the retry then stops, the run cannot keep a clean status, and it
+    must still end in a terminal one (invariant 10)."""
     from api.run_control import _reopen_run_for_retry
     from fastapi import HTTPException
 
     session_id, _ = session_env
-    await _run_statements(session_env, {"SOFP": "failed", "SOPL": "succeeded"},
+    await _run_statements(session_env, {"SOFP": "succeeded", "SOPL": "succeeded"},
                           statements=["SOFP", "SOPL"])
+    assert _run_state(session_env)[0][0]["status"] == "completed"
     retry = _reopen_run_for_retry(session_id, None)
     # A run that is already reopened cannot be retried a second time at once.
     with pytest.raises(HTTPException) as busy:
@@ -431,6 +432,41 @@ async def test_a_retry_that_stops_early_leaves_the_run_as_it_was(session_env):
 
     runs, agents, config = _run_state(session_env)
     assert len(runs) == 1 and runs[0]["status"] == "failed"
+    # The run's own setup was never replaced by the one-statement request.
     assert config["statements"] == ["SOFP", "SOPL"]
     assert ("SOPL", "succeeded") in agents
     assert all(status != "running" for _, status in agents)
+
+
+def test_a_retry_takes_each_notes_verdict_from_the_pass_that_covered_it(tmp_path):
+    """A statement retry repeats no notes pass, so it keeps the recorded notes
+    verdicts; a notes retry repeats the whole-run passes, so their fresh
+    result wins and an earlier finding can clear. No record is never clean."""
+    from db import repository as repo
+    from db.schema import init_db
+    from server import _retry_notes_verdicts
+
+    db = tmp_path / "audit.db"
+    init_db(db)
+    clean = {"validator_failed": False, "notes_coverage_unresolved": False,
+             "notes_integrity_unresolved": False, "notes_formatting_incomplete": False,
+             "notes_cleanup_incomplete": False}
+    with repo.db_session(db) as conn:
+        run_id = repo.create_run(conn, pdf_filename="a.pdf", session_id="s", output_dir="/o")
+
+        def verdicts(**kwargs):
+            return _retry_notes_verdicts(conn, run_id, dict(clean), **kwargs)
+
+        assert verdicts(notes_retried=False, run_has_notes=False) == (clean, False)
+        unknown, no_record = verdicts(notes_retried=False, run_has_notes=True)
+        assert no_record and unknown["notes_coverage_unresolved"] is True
+
+        repo.save_run_notes_verdicts(conn, run_id, {
+            **clean, "validator_failed": True, "notes_formatting_incomplete": True})
+        kept, no_record = verdicts(notes_retried=False, run_has_notes=True)
+        assert not no_record
+        assert kept["validator_failed"] and kept["notes_formatting_incomplete"]
+        cleared, _ = verdicts(notes_retried=True, run_has_notes=True)
+        assert cleared["validator_failed"] is False
+        # Formatting was redone only for the retried sheet, so it stays.
+        assert cleared["notes_formatting_incomplete"] is True
