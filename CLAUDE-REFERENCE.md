@@ -2516,8 +2516,7 @@ gotcha #11 (v18 `auth_users` / `auth_sessions`); the operational invariants:
   409 last-admin guard; `/api/auth/change-password` is self-service (re-auths
   with the current password). Frontend: the gear opens a consolidated **`/settings`
   page** (`SettingsPage.tsx`, `AppView "settings"`) with **General**
-  (the model/proxy/run-defaults form, extracted into `GeneralSettingsForm`;
-  `SettingsModal` is a thin wrapper around it),
+  (the model/proxy/run-defaults form, in `GeneralSettingsForm`),
   **Agent instructions** (shared content guidance; readable by all signed-in users,
   writable by administrators; captured at run start),
   **Account** (change password),

@@ -30,7 +30,6 @@ FIXTURE = REPO / "XBRL-template-MFRS" / "Company" / "01-SOFP-CuNonCu.xlsx"
 def canonical_env(tmp_path: Path, monkeypatch) -> dict:
     """Spin up a sandboxed canonical-mode server with the SOFP template
     pre-imported and a single empty run row ready to receive facts."""
-    monkeypatch.setenv("XBRL_CANONICAL_MODE", "1")
     monkeypatch.setenv("XBRL_OUTPUT_DIR", str(tmp_path))
 
     import importlib

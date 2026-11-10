@@ -123,9 +123,3 @@ export function deleteHumanFile(runId: number): Promise<{ deleted: boolean }> {
 export function getHumanComparison(runId: number): Promise<HumanComparison> {
   return apiFetch(`/api/runs/${runId}/human-comparison`);
 }
-
-/** A share as "45 of 50 (90%)"; "0 of 0" when nothing was filled. */
-export function formatShare(part: number, whole: number): string {
-  if (whole === 0) return "0 of 0";
-  return `${part} of ${whole} (${Math.round((part / whole) * 100)}%)`;
-}

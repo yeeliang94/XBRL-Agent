@@ -211,23 +211,6 @@ export async function fetchNotesFormatStatus(
   );
 }
 
-/** Restore the sheet's pre-format HTML from the formatter snapshot. Rows
- *  whose CONTENT was edited after the pass are kept (listed in
- *  skipped_rows) — revert only undoes styling. */
-export async function revertNotesFormatter(
-  runId: number,
-  sheet: string,
-): Promise<{ ok: boolean; restored_rows: number; skipped_rows: number[] }> {
-  return apiFetch<{ ok: boolean; restored_rows: number; skipped_rows: number[] }>(
-    `/api/runs/${runId}/notes-format/revert`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sheet }),
-    },
-  );
-}
-
 /** PATCH one cell's HTML. Returns the updated cell shape (includes the
  *  server-side sanitised HTML and refreshed `updated_at`). The caller
  *  should reconcile the returned row into local state so an editor

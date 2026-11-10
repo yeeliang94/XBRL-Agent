@@ -225,94 +225,6 @@ def test_group_export_populates_all_6_columns(
     assert ws[f"E{row_num}"].value == 4444.0, "Company PY at col E"
 
 
-# -- Step 4.4: cross-checks run twice per gotcha #12 -------------------
-
-
-def test_group_cross_checks_run_once_per_scope() -> None:
-    """A Group filing's cross-checks fire twice — once labelled
-    ``Group`` and once labelled ``Company`` — so the Validator tab
-    surfaces both result sets distinctly (gotcha #12).
-
-    We pin this by driving ``run_cross_checks_per_scope`` against a
-    stub check that records every (filing_level) it was called with.
-    """
-    from cross_checks.framework import CrossCheck, CrossCheckResult
-    from concept_model.group_checks import run_cross_checks_per_scope
-    from statement_types import StatementType
-
-    calls: list[str] = []
-
-    class _StubCheck:
-        name = "stub_check"
-        required_statements: set = set()
-        applies_to_standard = {"mfrs", "mpers"}
-
-        def applies_to(self, run_config: dict) -> bool:
-            return True
-
-        def run(self, workbook_paths, tolerance, filing_level="company",
-                filing_standard="mfrs"):
-            calls.append(filing_level)
-            return CrossCheckResult(
-                name=self.name, status="passed",
-                message=f"ran with filing_level={filing_level}",
-            )
-
-    results = run_cross_checks_per_scope(
-        checks=[_StubCheck()],
-        workbook_paths={},
-        run_config={
-            "statements_to_run": set(),
-            "filing_level": "group",
-            "filing_standard": "mfrs",
-        },
-        tolerance=1.0,
-    )
-    # Stub called twice — once per scope.
-    assert sorted(calls) == ["company", "group"]
-    # And the results carry a scope label so the UI can render two
-    # result sets without conflating them.
-    scopes_in_results = sorted({r.message.split("=")[-1] for r in results})
-    assert scopes_in_results == ["company", "group"]
-
-
-def test_company_cross_checks_run_once_only() -> None:
-    """Company filings retain the legacy single-pass behaviour — the
-    helper short-circuits when ``filing_level != 'group'``."""
-    from cross_checks.framework import CrossCheckResult
-    from concept_model.group_checks import run_cross_checks_per_scope
-
-    calls: list[str] = []
-
-    class _StubCheck:
-        name = "stub"
-        required_statements: set = set()
-        applies_to_standard = {"mfrs", "mpers"}
-
-        def applies_to(self, run_config: dict) -> bool:
-            return True
-
-        def run(self, workbook_paths, tolerance, filing_level="company",
-                filing_standard="mfrs"):
-            calls.append(filing_level)
-            return CrossCheckResult(
-                name=self.name, status="passed",
-                message=f"ran with filing_level={filing_level}",
-            )
-
-    run_cross_checks_per_scope(
-        checks=[_StubCheck()],
-        workbook_paths={},
-        run_config={
-            "statements_to_run": set(),
-            "filing_level": "company",
-            "filing_standard": "mfrs",
-        },
-        tolerance=1.0,
-    )
-    assert calls == ["company"]
-
-
 # -- Steps 4.5-4.10: per-Group-template import + E2E ------------------
 
 
@@ -452,7 +364,6 @@ def test_e2e_canonical_group_filing_4_statements(
     from concept_model.importer import import_group_targets
     from fastapi.testclient import TestClient
 
-    monkeypatch.setenv("XBRL_CANONICAL_MODE", "1")
     monkeypatch.setenv("XBRL_OUTPUT_DIR", str(tmp_path))
     import importlib
     import server as srv

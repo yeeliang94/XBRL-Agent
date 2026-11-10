@@ -5,9 +5,7 @@ import pytest
 
 from ingest.pdf_sidecar import TRANSCRIBE_PROMPT
 from scout.agent import _SYSTEM_PROMPT
-from scout.calibrator import _VALIDATION_PROMPT
 from scout.notes_discoverer_vision import _VISION_SYSTEM_PROMPT
-from scout.vision import _TOC_EXTRACTION_PROMPT
 
 
 REPO = Path(__file__).resolve().parent.parent
@@ -17,8 +15,6 @@ REPO = Path(__file__).resolve().parent.parent
     "prompt",
     [
         _SYSTEM_PROMPT,
-        _TOC_EXTRACTION_PROMPT,
-        _VALIDATION_PROMPT,
         _VISION_SYSTEM_PROMPT,
         TRANSCRIBE_PROMPT,
     ],

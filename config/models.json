@@ -4,7 +4,7 @@
     "display_name": "GPT-6 Astra",
     "provider": "openai",
     "supports_vision": true,
-    "notes": "OpenAI flagship. Tool calls require the Responses API; enable XBRL_OPENAI_RESPONSES=1 only after confirming proxy support. OpenAI list price checked 2026-09-25; the proxy may bill at its own rate card.",
+    "notes": "OpenAI flagship. Tool calls use the Responses API. OpenAI list price checked 2026-09-25; the proxy may bill at its own rate card.",
     "input_price_per_mtok": 10.0,
     "output_price_per_mtok": 50.0,
     "cached_input_price_per_mtok": 1.0,
