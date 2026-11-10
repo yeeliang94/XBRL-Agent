@@ -194,12 +194,37 @@ wrap their shared buffers again: module reload can close the previous wrapper
 and invalidate both logging and pytest capture. Pinned by
 `tests/test_server_windows_streams.py`.
 
-### 2. pydantic-ai on the V2 line (floor `>=1.107.1`, pinned by `constraints.txt`)
+### 2. pydantic-ai on the V2 line (floor `>=2.66.0`, pinned by `constraints.txt`)
 
 Upgraded 2026-07-12 (docs/PLAN-pydantic-ai-v2.md; V1→V2 flip verified by
 the full suite + a live SOFP run). `constraints.txt` is the reproducible
-pin (`pip install -r requirements.txt -c constraints.txt`); the code runs
-on 1.107.1 and 2.x — both expose the same post-deprecation API surface.
+pin (`pip install -r requirements.txt -c constraints.txt`). Raised from
+2.9.0 to 2.66.0 on 2026-11-10 (full suite + two live Doc 1 A/B pairs on
+direct GPT-6 Luna; Anthropic, Gemini and the enterprise proxy were not run
+live). That step also moved the openai (3.x), anthropic (2.x) and
+google-genai (3.x) SDKs up a major version.
+
+- Retry feedback reaches the model as `ToolReturnPart(outcome="retried")`
+  from 2.60 on; `RetryPromptPart` is deprecated. Test fakes that look for
+  the retry message must match the new part.
+- `RunUsage` is itself callable from 2.6x on (a deprecated V1 shim), so
+  `callable(usage)` no longer tells a value from a factory. Check the type
+  first (`notes/coordinator.py::_backfill_token_report`).
+- `AnthropicModel`'s default `max_tokens` is now the model's maximum output
+  (128,000 for Sonnet 4.6 and Opus 4.6/4.7, 64,000 for Haiku 4.5), and a
+  request above about 21,000 is streamed behind the scenes. This repo sets no
+  `max_tokens` of its own.
+- A model's profile (reasoning support, encrypted reasoning replay) is
+  resolved from its bare name. The proxy path keeps the registry id for
+  routing, so `server._create_proxy_model` passes the bare-name profile
+  explicitly. Without it, GPT reasoning is replayed as `<think>` text on the
+  proxy (pinned by `tests/test_provider_routing.py`). On the direct path the
+  bare name now gets GPT-6 reasoning support, which 2.9.0 did not recognise,
+  and Responses requests send `reasoning.context: "all_turns"`.
+- Native Gemini transport failures arrive as `ModelTimeoutError` /
+  `ModelConnectionError` (every SDK is on `httpx2`), not raw `httpx` errors.
+  The face retry predicates in `coordinator.py` classify both shapes
+  (pinned by `tests/test_face_transient_retry.py`).
 
 - `Agent._function_tools` does not exist — cannot monkey-patch tools.
 - Use `OpenAIChatModel(name, provider=OpenAIProvider(...))`; `OpenAIModel`
@@ -260,8 +285,9 @@ vendor rules make "one OpenAI-compatible client for everything" wrong:
   Reusing one constant for both sends `ttl: "24h"`, which is a 400 on every
   request. Hence `CACHE_RETENTION` and `CACHE_OPTIONS_TTL` are separate. The
   new shape stays **opt-in** for GPT-5.6 via `XBRL_OPENAI_CACHE_OPTIONS=1`;
-  GPT-6 Astra, Sol, and Luna use it by default (through `extra_body`, since
-  pydantic-ai 2.9.0 has no typed field for it).
+  GPT-6 Astra, Sol, and Luna use it by default (through `extra_body`, a
+  route kept from 2.9.0; 2.66.0 has a typed `openai_prompt_cache_options`
+  that this code does not use yet).
 - **An unsupported level is substituted loudly, and never inverted.**
   `supported_thinking_levels(model)` is the per-model vocabulary and is
   surfaced to the Settings picker as `thinking_level_choices_by_model`, so the

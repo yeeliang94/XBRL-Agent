@@ -124,6 +124,37 @@ def test_response_timeout_classifier_covers_native_provider_shapes():
     )
 
 
+@pytest.mark.parametrize("transport_error, lane", [
+    ("read_timeout", "timeout"),
+    ("connect_error", "connection"),
+])
+def test_native_google_transport_errors_reach_their_retry_lane(transport_error, lane):
+    """pydantic-ai 2.6x maps a native Gemini transport failure to its own
+    error types, not raw httpx ones. Drive the real Google mapping so a
+    stalled or unreachable Gemini still gets its retries."""
+    import httpx2
+    from pydantic_ai import Agent
+    from pydantic_ai.models.google import GoogleModel
+    from pydantic_ai.providers.google import GoogleProvider
+    from coordinator import (
+        _is_connection_error, _is_provider_response_timeout, _is_transient_error,
+    )
+
+    def fail(request):
+        if transport_error == "read_timeout":
+            raise httpx2.ReadTimeout("Gemini response stalled", request=request)
+        raise httpx2.ConnectError("Gemini unreachable", request=request)
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(fail))
+    model = GoogleModel("gemini-3.6-flash", provider=GoogleProvider(api_key="x", http_client=client))
+    with pytest.raises(Exception) as caught:
+        Agent(model).run_sync("hi")
+
+    assert _is_transient_error(caught.value)
+    assert _is_provider_response_timeout(caught.value) == (lane == "timeout")
+    assert _is_connection_error(caught.value) == (lane == "connection")
+
+
 def _factory_failing_then_ok(exc: BaseException, wb: str, fail_times: int = 1):
     """create_extraction_agent stub: raises ``exc`` for the first
     ``fail_times`` calls, then returns a working agent. The raise inside

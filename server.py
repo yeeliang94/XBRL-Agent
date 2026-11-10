@@ -50,6 +50,12 @@ from typing import (
     AsyncIterator, Callable, Dict, List, Literal, NamedTuple, Optional, Set, Any,
 )
 
+import pydantic_ai
+
+# pydantic-ai 2.6x prints a one-time Logfire banner to the console on the
+# first agent run; the operator console is not the place for it.
+pydantic_ai.BANNER_ENABLED = False
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse, Response
@@ -1202,7 +1208,14 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str, *, use_gi
         if _detect_provider(model_name) == "openai":
             from pydantic_ai.models.openai import OpenAIResponsesModel
 
-            return OpenAIResponsesModel(model_name, provider=provider)
+            # The proxy needs the registry id, but pydantic-ai recognises a
+            # model's reasoning support only from its bare name (2.6x); the
+            # prefixed id gets a no-reasoning profile.
+            return OpenAIResponsesModel(
+                model_name,
+                provider=provider,
+                profile=provider.model_profile(_strip_provider_prefix(model_name)),
+            )
         return OpenAIChatModel(model_name, provider=provider)
 
     # Direct API paths — route by provider.

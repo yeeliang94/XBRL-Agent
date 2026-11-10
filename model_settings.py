@@ -339,8 +339,9 @@ def _openai_cache_settings(model_name: str) -> dict[str, Any]:
     """Prompt-cache parameters in the shape THIS model expects.
 
     GPT-5.6 deprecates the flat `prompt_cache_retention` field in favour of a
-    `prompt_cache_options` object carrying a `ttl`. pydantic-ai 2.9.0 has no
-    typed field for the new shape, so it goes through `extra_body`.
+    `prompt_cache_options` object carrying a `ttl`. pydantic-ai 2.9.0 had no
+    typed field for the new shape, so it goes through `extra_body` (2.66.0
+    adds `openai_prompt_cache_options`; not adopted yet).
 
     OpenAI's own migration note says to "verify the live docs before rewriting
     it", and the deprecated field still works, so the new shape is OPT-IN:

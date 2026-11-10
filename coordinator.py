@@ -108,11 +108,13 @@ def _is_provider_response_timeout(e: BaseException) -> bool:
     exceptions are not ``httpx.TimeoutException`` instances, and PydanticAI
     wraps both as ``ModelAPIError``. Walk the explicit exception chain so the
     production SDK shape is classified, not only a top-level test double.
-    Native Google uses PydanticAI's injected HTTPX client and therefore reaches
-    this predicate as an ``httpx.ReadTimeout`` (possibly through a wrapper).
+    From pydantic-ai 2.6x every provider, native Google included, maps a
+    transport timeout to ``ModelTimeoutError``; one raised while connecting
+    belongs to the connection lane (``_is_connection_error``).
     """
     import httpx
     from openai import APITimeoutError
+    from pydantic_ai.exceptions import ModelTimeoutError
 
     timeout_types: tuple[type[BaseException], ...] = (APITimeoutError,)
     try:
@@ -130,6 +132,11 @@ def _is_provider_response_timeout(e: BaseException) -> bool:
         if isinstance(current, timeout_types):
             return True
         if (
+            isinstance(current, ModelTimeoutError)
+            and current.phase not in _UNSENT_PHASES
+        ):
+            return True
+        if (
             isinstance(current, httpx.TimeoutException)
             and not isinstance(current, httpx.ConnectTimeout)
         ):
@@ -141,6 +148,24 @@ def _is_provider_response_timeout(e: BaseException) -> bool:
     return False
 
 
+# Transport phases at which the request never left this machine.
+_UNSENT_PHASES = ("pool", "connect")
+
+
+def _is_connection_error(e: BaseException) -> bool:
+    """True when the request could not reach the provider at all.
+
+    Native Google raised raw ``httpx`` errors before pydantic-ai 2.6x; every
+    provider now raises ``ModelConnectionError`` with the failing phase.
+    """
+    import httpx
+    from pydantic_ai.exceptions import ModelConnectionError
+
+    if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout)):
+        return True
+    return isinstance(e, ModelConnectionError) and e.phase in _UNSENT_PHASES
+
+
 def _is_transient_error(e: BaseException) -> bool:
     """Shared transient-error predicate for the face retry path (item 10).
 
@@ -149,13 +174,12 @@ def _is_transient_error(e: BaseException) -> bool:
     ``_run_single_agent`` retries. One definition for both sites (code-review
     fix, 2026-06-13) so the classifications can't drift apart.
     """
-    import httpx
     from notes._rate_limit import is_rate_limit_error
 
     return bool(
         is_rate_limit_error(e)
         or _is_provider_response_timeout(e)
-        or isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout))
+        or _is_connection_error(e)
     )
 
 
@@ -780,7 +804,6 @@ async def _run_single_agent(
     The DB fact projection is idempotent per write-batch (gotcha #21
     Phase B), so a retried attempt re-projecting is safe.
     """
-    import httpx
     from notes._rate_limit import (
         RATE_LIMIT_MAX_RETRIES,
         compute_backoff_delay,
@@ -947,9 +970,7 @@ async def _run_single_agent(
         timeout_retries=FACE_RESPONSE_TIMEOUT_RETRIES,
         generic_retries=0,
         is_rate_limit=is_rate_limit_error,
-        is_connection=lambda e: isinstance(
-            e, (httpx.ConnectError, httpx.ConnectTimeout)
-        ),
+        is_connection=_is_connection_error,
         is_timeout=_is_provider_response_timeout,
         compute_backoff=compute_backoff_delay,
         compute_timeout_backoff=compute_backoff_delay,
