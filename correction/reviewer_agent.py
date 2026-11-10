@@ -46,6 +46,7 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
 
 from tools.calculator import calculator_batch_json as _calculator_impl
+from tools.page_transcript import register_add_table_figures
 from concept_model.definitions import lookup_as_json as _lookup_definitions_impl
 from prompts import sanitize_source_scalar
 
@@ -64,30 +65,8 @@ _SCOPED_INVESTIGATION_PROMPT_PATH = (
 )
 
 
-_THINKING_WARNED: set[str] = set()
-
-
-def _thinking_level_for(role: str):
-    """Per-role thinking level, or None. Lazy import + swallow: `server`
-    imports this module, and a settings lookup must never fail a run."""
-    try:
-        import server
-
-        return server.thinking_level_for(role)
-    except Exception:  # noqa: BLE001 — a settings lookup must never fail a run
-        # ...but it must not fail SILENTLY either. Swallowing everything meant
-        # a rename or an import regression would leave the Settings control
-        # looking active while doing nothing, with no diagnostic anywhere
-        # (peer review, 2026-08-01). Once per role per process.
-        global _THINKING_WARNED
-        if role not in _THINKING_WARNED:
-            _THINKING_WARNED.add(role)
-            logging.getLogger("server").warning(
-                "Could not resolve the thinking level for %r; that agent will "
-                "use the provider default. The Settings control will appear "
-                "to have no effect.", role, exc_info=True,
-            )
-        return None
+# One shared resolver (model_settings); the alias keeps each factory's call site.
+from model_settings import configured_role_thinking_level as _thinking_level_for  # noqa: E402
 
 def _now() -> str:
     return (
@@ -2235,6 +2214,20 @@ def create_reviewer_agent(
         if not ctx.deps.pdf_path:
             return '{"error": "Source PDF is not available for this run.", "results": []}'
         return search_pdf_text_json(ctx.deps.pdf_path, queries)
+
+    @agent.tool
+    def read_page_text(ctx: RunContext[ReviewerDeps], pages: list[int]) -> str:
+        """Read the transcribed text of PDF pages, e.g. [8, 19]. Up to ten per call.
+
+        Returns each page's tables and text as HTML from the transcript made
+        during document preparation — far cheaper than page images. Each page
+        is labelled with its capture status; confirm a BEST-EFFORT page, or any
+        figure you are about to change, with view_pdf_pages before apply_fixes.
+        """
+        from tools.page_transcript import read_page_text as _read_page_text
+        return _read_page_text(ctx.deps.pdf_path, pages)
+
+    register_add_table_figures(agent)
 
     if _bundle_on:
         @agent.tool

@@ -81,9 +81,10 @@ def configured_role_thinking_level(
 ) -> str | None:
     """Return the operator's role setting, with a bounded-stage default.
 
-    Helper agents use this instead of silently falling back to the provider's
-    default. The lazy import avoids a module cycle because ``server`` imports
-    this settings module during startup.
+    Every agent factory resolves its thinking level here. The lazy import
+    avoids a module cycle because ``server`` imports this settings module
+    during startup. A settings lookup must never fail a run, but it warns once
+    per role so the Settings control cannot silently stop having an effect.
     """
     try:
         import server
@@ -93,8 +94,9 @@ def configured_role_thinking_level(
         if role not in _ROLE_LEVEL_WARNED:
             _ROLE_LEVEL_WARNED.add(role)
             logger.warning(
-                "Could not resolve thinking level for helper role %r; using "
-                "default %r.", role, default, exc_info=True,
+                "Could not resolve the thinking level for %r; using default "
+                "%r. The Settings control will appear to have no effect.",
+                role, default, exc_info=True,
             )
         return default
 

@@ -14,6 +14,7 @@ export const TOOL_LABELS: Record<string, string> = {
   read_template: "Reading template",
   view_pdf_pages: "Checking PDF pages",
   read_page_text: "Reading page text",
+  add_table_figures: "Adding up table figures",
   // write_facts is the current tool name (rewrite Phase 3). fill_workbook is
   // kept as a back-compat alias so runs recorded before the rename still
   // render a friendly label in History replay.

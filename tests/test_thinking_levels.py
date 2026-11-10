@@ -369,13 +369,14 @@ def test_a_failed_resolution_warns_once_instead_of_failing_silently(monkeypatch,
     import logging
 
     import extraction.agent as ea
+    import model_settings
 
-    ea._THINKING_WARNED.clear()
+    model_settings._ROLE_LEVEL_WARNED.clear()
     monkeypatch.setattr(
         server, "thinking_level_for",
         lambda _r: (_ for _ in ()).throw(RuntimeError("boom")),
     )
-    with caplog.at_level(logging.WARNING, logger="server"):
+    with caplog.at_level(logging.WARNING):
         assert ea._thinking_level_for("SOFP") is None
         assert ea._thinking_level_for("SOFP") is None
     assert sum("thinking level" in r.message for r in caplog.records) == 1
