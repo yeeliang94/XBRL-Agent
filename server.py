@@ -2993,19 +2993,6 @@ async def _run_notes_reviewer_pass(
 # Conversation trace saving
 # ---------------------------------------------------------------------------
 
-def _strip_binary(obj):
-    """Recursively strip binary/image data from message dicts to keep traces readable."""
-    if isinstance(obj, dict):
-        for key in list(obj.keys()):
-            if key == "data" and isinstance(obj.get("media_type"), str) and "image" in obj["media_type"]:
-                obj[key] = f"[{obj['media_type']} image data stripped]"
-            else:
-                _strip_binary(obj[key])
-    elif isinstance(obj, list):
-        for item in obj:
-            _strip_binary(item)
-
-
 # ---------------------------------------------------------------------------
 # Async streaming agent runner — replaces the old thread + EventQueue pattern.
 # Uses PydanticAI's agent.iter() to get granular streaming events.

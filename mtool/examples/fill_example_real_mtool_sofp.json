@@ -1,0 +1,16 @@
+{
+  "_comment": "Column map observed on a real mTool SOFP-Sub-CuNonCu sheet (labels in col D, value cols E/F) — Windows agent, 2026-07-04. ALWAYS re-confirm with `inspect` per generated template; mTool addresses shift with version + scoping answers.",
+  "sheets": {
+    "SOFP-Sub-CuNonCu": {
+      "label_column": "D",
+      "columns": {
+        "current_year": "E",
+        "prior_year": "F"
+      }
+    }
+  },
+  "writes": [
+    {"sheet": "SOFP-Sub-CuNonCu", "label": "Freehold land", "column_role": "current_year", "value": 1500000},
+    {"sheet": "SOFP-Sub-CuNonCu", "label": "Freehold land", "column_role": "prior_year", "value": 1500000}
+  ]
+}

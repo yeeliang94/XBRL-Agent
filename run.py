@@ -245,19 +245,6 @@ def run_agent(
     )
 
 
-def _strip_binary(obj):
-    """Recursively strip binary/image data from message dicts to keep traces readable."""
-    if isinstance(obj, dict):
-        for key in list(obj.keys()):
-            if key == "data" and isinstance(obj.get("media_type"), str) and "image" in obj["media_type"]:
-                obj[key] = f"[{obj['media_type']} image data stripped]"
-            else:
-                _strip_binary(obj[key])
-    elif isinstance(obj, list):
-        for item in obj:
-            _strip_binary(item)
-
-
 # CLI accepts notes by lowercase CLI names that match the spec (PLAN §4).
 _NOTES_CLI_MAP: dict[str, NotesTemplateType] = {
     "corporate_info": NotesTemplateType.CORP_INFO,
