@@ -1,6 +1,6 @@
 import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { SettingsModal } from "../components/SettingsModal";
+import { GeneralSettingsForm } from "../components/GeneralSettingsForm";
 
 const defaultSettings = {
   model: "vertex_ai.gemini-3-flash-preview",
@@ -16,9 +16,8 @@ function renderModal(overrides: Record<string, unknown> = {}) {
   const onClose = vi.fn();
 
   const result = render(
-    <SettingsModal
-      isOpen={true}
-      onClose={onClose}
+    <GeneralSettingsForm
+      onCancel={onClose}
       getSettings={getSettings}
       saveSettings={saveSettings}
       testConnection={testConnection}
@@ -28,7 +27,7 @@ function renderModal(overrides: Record<string, unknown> = {}) {
   return { ...result, getSettings, saveSettings, testConnection, onClose };
 }
 
-describe("SettingsModal — P3 enhancements", () => {
+describe("GeneralSettingsForm — connection settings", () => {
   test("validates proxy URL starts with https:// on blur", async () => {
     renderModal();
     await waitFor(() => expect(screen.getByDisplayValue(defaultSettings.proxy_url)).toBeInTheDocument());
@@ -142,9 +141,8 @@ describe("SettingsModal — P3 enhancements", () => {
     const testConnection = vi.fn().mockRejectedValue(new Error("Connection refused"));
 
     render(
-      <SettingsModal
-        isOpen={true}
-        onClose={() => {}}
+      <GeneralSettingsForm
+        onCancel={() => {}}
         getSettings={getSettings}
         saveSettings={saveSettings}
         testConnection={testConnection}

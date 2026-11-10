@@ -2993,47 +2993,6 @@ async def _run_notes_reviewer_pass(
 # Conversation trace saving
 # ---------------------------------------------------------------------------
 
-def _save_trace(result, output_dir: str):
-    """Save conversation trace (minus binary image data) for debugging."""
-    import dataclasses
-
-    trace_path = Path(output_dir) / "conversation_trace.json"
-    messages = []
-    for msg in result.all_messages():
-        if hasattr(msg, "model_dump"):
-            msg_dict = msg.model_dump(mode="json")
-        elif dataclasses.is_dataclass(msg):
-            msg_dict = dataclasses.asdict(msg)
-        else:
-            msg_dict = {"raw": str(msg)}
-        _strip_binary(msg_dict)
-        messages.append(msg_dict)
-
-    usage_data = None
-    if result.usage:
-        usage_data = result.usage.model_dump(mode="json") if hasattr(result.usage, "model_dump") else str(result.usage)
-
-    trace = {
-        "messages": messages,
-        "usage": usage_data,
-        "output": result.output if isinstance(result.output, str) else str(result.output),
-    }
-    safe_path(trace_path).write_text(json.dumps(trace, indent=2, default=str), encoding="utf-8")
-
-
-def _strip_binary(obj):
-    """Recursively strip binary/image data from message dicts to keep traces readable."""
-    if isinstance(obj, dict):
-        for key in list(obj.keys()):
-            if key == "data" and isinstance(obj.get("media_type"), str) and "image" in obj["media_type"]:
-                obj[key] = f"[{obj['media_type']} image data stripped]"
-            else:
-                _strip_binary(obj[key])
-    elif isinstance(obj, list):
-        for item in obj:
-            _strip_binary(item)
-
-
 # ---------------------------------------------------------------------------
 # Async streaming agent runner — replaces the old thread + EventQueue pattern.
 # Uses PydanticAI's agent.iter() to get granular streaming events.

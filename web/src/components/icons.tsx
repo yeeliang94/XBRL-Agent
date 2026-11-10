@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import type { Glyph } from "./iconGlyphs";
-import { ChevronRight, Close, Refresh, Settings } from "./iconGlyphs";
+import { ChevronRight, Close, Settings } from "./iconGlyphs";
 import { tokens } from "../lib/theme";
 
 // Shared icon components. One icon family (the vendored Material Symbols
@@ -36,10 +36,6 @@ export function CloseIcon({ size = 1 }: { size?: number }) {
   // `size` is a unitless scale of the current font-size (legacy API) so
   // callers keep the visual weight they had with the text glyph.
   return <Icon glyph={Close} size={`${size * 1.25}em`} />;
-}
-
-export function RerunIcon({ size = 1 }: { size?: number }) {
-  return <Icon glyph={Refresh} size={`${size * 1.25}em`} />;
 }
 
 export function SettingsIcon({ size = 20 }: { size?: number }) {

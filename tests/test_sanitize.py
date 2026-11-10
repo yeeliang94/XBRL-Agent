@@ -1,30 +1,16 @@
-"""Peer-review I-4: ANSI / C0 control-char sanitisation in SSEEventRecorder.
+"""ANSI and control-character sanitising of model-written strings.
 
-LLM-authored strings (tool results, chosen_row_label, evidence, content)
-land in SSE payloads and get persisted verbatim to SQLite + side-logs.
-If the model emits terminal escape sequences (\\x1b[31m to color output
-red, for instance), operators tailing the server log see their terminal
-reshaped. React auto-escapes in the UI, so XSS isn't exploitable today —
-this is defence-in-depth for operator tooling.
-
-These tests pin the sanitiser's contract:
-  - ANSI CSI sequences (colors, cursor moves) are stripped entirely.
-  - ANSI OSC sequences (title, hyperlinks) are stripped entirely.
+Model-written strings (tool results, evidence, notes content) reach server
+logs and saved records. A terminal escape sequence in one would reshape an
+operator's terminal. These tests pin ``utils.sanitize``:
+  - ANSI CSI and OSC sequences are stripped entirely.
   - Standalone C0 controls (NUL, BEL, form-feed) are stripped.
-  - Tab, newline, carriage-return are PRESERVED — they're load-bearing
-    in multi-line notes content.
-  - Nested structures (lists, dicts) are sanitised recursively.
-  - Non-strings (ints, None, bools) pass through untouched.
+  - Tab, newline and carriage-return are kept; multi-line notes need them.
+  - Lists and dicts are sanitised recursively; non-strings pass through.
 """
 from __future__ import annotations
 
-import json
-import sqlite3
-from pathlib import Path
-
-import pytest
-
-from db.recorder import SSEEventRecorder, _sanitize, _sanitize_str
+from utils.sanitize import sanitize as _sanitize, sanitize_str as _sanitize_str
 
 
 def test_strips_ansi_color_csi_sequences():
@@ -99,35 +85,3 @@ def test_sanitize_passes_through_non_strings():
     # Ints / None / bools must not be mutated.
     payload = {"count": 42, "missing": None, "flag": True, "ratio": 1.5}
     assert _sanitize(payload) == payload
-
-
-def test_end_to_end_persisted_payload_is_sanitised(tmp_path: Path):
-    """Record an event with an ANSI escape in the payload and verify the
-    row written to SQLite is clean. This is the contract that actually
-    matters: a log-tailing operator reading the DB must not see raw
-    escape sequences."""
-    rec = SSEEventRecorder(tmp_path / "audit.db", pdf_filename="x.pdf")
-    rec.start()
-    assert rec.run_agent_id is not None
-
-    rec.record({
-        "event": "tool_result",
-        "data": {
-            "tool_name": "view_pdf_pages",
-            "result_summary": "\x1b[31mError\x1b[0m: could not render",
-        },
-    })
-
-    conn = sqlite3.connect(str(tmp_path / "audit.db"))
-    try:
-        rows = conn.execute(
-            "SELECT payload_json FROM agent_events WHERE run_agent_id = ?",
-            (rec.run_agent_id,),
-        ).fetchall()
-    finally:
-        conn.close()
-    assert len(rows) == 1
-    payload = json.loads(rows[0][0])
-    # The ANSI markers must be gone from what's persisted.
-    assert "\x1b" not in rows[0][0]
-    assert payload["result_summary"] == "Error: could not render"

@@ -1,7 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, afterEach, expect, test, vi } from "vitest";
 import { NotesReviewTab } from "../components/NotesReviewTab";
-import { NotesDestinationCompare } from "../components/NotesDestinationCompare";
 import { ConceptsPage } from "../pages/ConceptsPage";
 import type { NotesSheet } from "../lib/notesCells";
 
@@ -168,19 +167,6 @@ test("discard retains an earlier successful save when a newer draft fails", asyn
   expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Saved draft");
   await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
   expect(patch).toHaveBeenCalledTimes(2);
-});
-
-test("successful move with a failed refresh reports the move truthfully and cannot be repeated", async () => {
-  const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => json({ sheet: "Notes-CI", row: 7 })); vi.stubGlobal("fetch", fetch);
-  render(<NotesDestinationCompare runId={42} sourceSheet="Notes-CI" source={sheets[0].rows[0]} sheets={sheets} disabled={false} onMoved={async () => { throw new Error("offline"); }} />);
-  fireEvent.click(screen.getByText("Compare destination"));
-  const picker = await screen.findByRole("combobox", { name: "Destination field" });
-  fireEvent.change(picker, { target: { value: "Notes-CI:7" } });
-  fireEvent.click(screen.getByRole("button", { name: "Move to this empty field" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent("The note was moved");
-  expect(screen.getByRole("button", { name: "Moved" })).toBeDisabled();
-  expect(fetch).toHaveBeenCalledTimes(1);
-  expect(JSON.parse(fetch.mock.calls[0][1]?.body as string)).toMatchObject({ expected_revision: 1, destination_revision: null });
 });
 
 test("all fields is default and entity filters update with stable cross-check props", async () => {

@@ -186,18 +186,6 @@ def socie_total_column(filing_standard: str = "mfrs") -> int:
     return _MPERS_SOCIE_TOTAL_COL if filing_standard == "mpers" else _SOCIE_TOTAL_COL
 
 
-def socie_py_column(filing_standard: str = "mfrs") -> int:
-    """Legacy helper; current SOCIE comparative reads use separate row blocks."""
-    if filing_standard == "mpers":
-        return _MPERS_SOCIE_TOTAL_COL
-    # MFRS doesn't have a "PY column" on the same row — blocks are
-    # row-range-separated. Returning col 25 is technically meaningless
-    # but keeps the symmetric helper shape; callers on MFRS should
-    # pass block ranges via find_value_in_block instead of reading
-    # this column directly.
-    return _SOCIE_TOTAL_COL + 1
-
-
 def find_value_in_block(
     ws,
     label_substr: Union[str, Sequence[str]],

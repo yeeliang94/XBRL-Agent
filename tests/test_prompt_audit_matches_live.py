@@ -131,9 +131,7 @@ def test_the_role_map_covers_every_live_role():
 
 
 @pytest.mark.parametrize("source", [
-    "scout/vision.py",
     "scout/notes_discoverer_vision.py",
-    "scout/calibrator.py",
     "ingest/pdf_sidecar.py",
     "notes_visual_review.md",
 ])

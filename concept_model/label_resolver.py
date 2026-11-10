@@ -110,20 +110,6 @@ def resolve_label_candidates(
     return [(cu, sheet, row, col) for cu, _kind, sheet, row, col in candidates]
 
 
-def resolve_matrix_cell(
-    conn: sqlite3.Connection,
-    template_id: str,
-    row_label,
-    matrix_col: str,
-) -> Optional[tuple[str, str, int]]:
-    """Best single SOCIE matrix cell for ``(row_label, matrix_col)`` as
-    ``(concept_uuid, render_sheet, render_row)`` — see
-    :func:`resolve_matrix_cell_candidates`."""
-    candidates = resolve_matrix_cell_candidates(
-        conn, template_id, row_label, matrix_col)
-    return candidates[0] if candidates else None
-
-
 def resolve_matrix_cell_candidates(
     conn: sqlite3.Connection,
     template_id: str,

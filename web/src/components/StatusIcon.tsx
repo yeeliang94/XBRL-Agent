@@ -45,16 +45,6 @@ const STATUS_ICONS: Record<StatusSymbol, StatusIconDef> = {
   [STATUS_SYMBOLS.derived]: { Icon: Functions, name: "derived", color: tokens.color.icon.rest },
 };
 
-/** Machine names per family, exported for the design-system parity test. */
-export const STATUS_ICON_NAMES: Record<keyof typeof STATUS_SYMBOLS, string> = {
-  inProgress: STATUS_ICONS[STATUS_SYMBOLS.inProgress].name,
-  success: STATUS_ICONS[STATUS_SYMBOLS.success].name,
-  attention: STATUS_ICONS[STATUS_SYMBOLS.attention].name,
-  failure: STATUS_ICONS[STATUS_SYMBOLS.failure].name,
-  inactive: STATUS_ICONS[STATUS_SYMBOLS.inactive].name,
-  derived: STATUS_ICONS[STATUS_SYMBOLS.derived].name,
-};
-
 /** Default icon box in px — sits beside 13–14px status text. */
 export const STATUS_ICON_SIZE = 16;
 

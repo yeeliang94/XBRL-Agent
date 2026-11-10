@@ -43,7 +43,6 @@ STATEMENTS = [
 
 
 def test_canonical_e2e_company_4_statements(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("XBRL_CANONICAL_MODE", "1")
     monkeypatch.setenv("XBRL_OUTPUT_DIR", str(tmp_path))
     import importlib
     import server as srv

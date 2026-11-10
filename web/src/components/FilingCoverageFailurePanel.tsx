@@ -62,28 +62,6 @@ export function normaliseFilingCoverage(body: unknown): FilingCoverage | null {
   };
 }
 
-export function filingCoverageFallbackMessage(
-  body: unknown,
-  fallback: string,
-): string {
-  if (!body || typeof body !== "object") return fallback;
-  const raw = body as {
-    unresolved_writes?: unknown;
-    ambiguous_writes?: unknown;
-  };
-  const issues = [raw.unresolved_writes, raw.ambiguous_writes]
-    .filter(Array.isArray)
-    .flat() as unknown[];
-  const details = issues
-    .map((issue) => (
-      issue && typeof issue === "object"
-        ? (issue as { detail?: unknown }).detail
-        : null
-    ))
-    .filter((detail): detail is string => typeof detail === "string" && detail.length > 0);
-  return details.length > 0 ? [...new Set(details)].join(" ") : fallback;
-}
-
 export function FilingCoverageFailurePanel({ coverage, selections = {}, onSelect }: {
   coverage: FilingCoverage;
   selections?: Record<string, string>;
