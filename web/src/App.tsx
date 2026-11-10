@@ -707,8 +707,10 @@ export default function App() {
         notes_models: prevNotesModel ? { [nt]: prevNotesModel } : {},
       };
     }
-    // Use the rerun endpoint so it doesn't conflict with active_runs guard
-    sseControllerRef.current = startSSERun(s.sessionId, config, `/api/rerun/${s.sessionId}`);
+    // Use the rerun endpoint so it doesn't conflict with active_runs guard.
+    // Naming the run keeps the retry inside it, beside its other results.
+    const runQuery = s.currentRunId != null ? `?run_id=${s.currentRunId}` : "";
+    sseControllerRef.current = startSSERun(s.sessionId, config, `/api/rerun/${s.sessionId}${runQuery}`);
   }, [startSSERun]);
 
   useEffect(() => {

@@ -3830,6 +3830,158 @@ def _notes_integrity_tips_status(outcome: Optional[dict]) -> bool:
     return bool(outcome and outcome.get("tips_status"))
 
 
+_NOTES_VERDICTS_NAME = "notes_status_inputs.json"
+_REPORT_AGENT_TYPES = frozenset({"DIRECTORS_REPORT", "STATEMENT_BY_DIRECTORS", "AUDITORS_REPORT"})
+
+
+def _clear_retried_statements(
+    db_conn, run_id: int, statements, variants, filing_level: str,
+    filing_standard: str, session_dir: Path,
+) -> None:
+    """Remove a retried statement's earlier figures and scratch workbook.
+
+    Fact writes are upserts, so a figure only the earlier attempt wrote would
+    otherwise survive into the retried statement. Both the variant the earlier
+    attempt resolved and the one now requested are cleared; other statements
+    and imported prior-year figures are untouched. Raises on failure.
+    """
+    from concept_model.facts_api import clear_facts_for_template
+    from concept_model.parser import derive_template_id
+    from statement_types import template_path as _template_path
+
+    for stmt in statements:
+        row = db_conn.execute(
+            "SELECT variant FROM run_agents WHERE run_id = ? AND statement_type = ? "
+            "ORDER BY id DESC LIMIT 1", (run_id, stmt.value),
+        ).fetchone()
+        for variant in {row[0] if row else None, variants.get(stmt)} - {None}:
+            try:
+                master = _template_path(stmt, variant, level=filing_level, standard=filing_standard)
+            except (KeyError, TypeError, ValueError):
+                continue  # a variant with no template holds no figures
+            clear_facts_for_template(AUDIT_DB_PATH, run_id, derive_template_id(master))
+        scratch = safe_entry_path(session_dir / f"{stmt.value}_filled.xlsx")
+        if scratch.exists():
+            scratch.unlink()
+
+
+def _carried_run_results(db_conn, run_id, *, retried_statements, retried_notes, retried_reports):
+    """What the run already holds, apart from the agents being retried.
+
+    Returns ``(face results, {notes template: status}, {report: status},
+    {report: workbook path})`` from each agent's latest saved record. A face
+    statement saved with a flagged gap comes back as succeeded-with-a-flag,
+    the shape the live run gave it.
+    """
+    from coordinator import AgentResult
+    from db import repository as repo
+    from notes_types import NotesTemplateType
+    from statement_types import StatementType
+
+    face: dict = {}
+    notes: Dict[str, str] = {}
+    reports: Dict[str, str] = {}
+    report_paths: Dict[str, str] = {}
+    if db_conn is None or run_id is None:
+        return [], notes, reports, report_paths
+    retried_note_names = {n.value for n in retried_notes}
+    note_names = {n.value for n in NotesTemplateType}
+    for row in repo.fetch_run_agents(db_conn, run_id):  # ordered by id: latest wins
+        kind = row.statement_type
+        status = row.status if row.status in ("succeeded", "skipped", "cancelled") else "failed"
+        if kind.startswith("NOTES_") and kind[6:] in note_names:
+            if kind[6:] not in retried_note_names:
+                notes[kind[6:]] = status
+        elif kind in _REPORT_AGENT_TYPES:
+            if kind not in retried_reports:
+                reports[kind] = status
+                if row.status == "succeeded" and row.workbook_path:
+                    report_paths[kind] = row.workbook_path
+                else:
+                    report_paths.pop(kind, None)
+        else:
+            try:
+                stmt = StatementType(kind)
+            except ValueError:
+                continue
+            if stmt in retried_statements:
+                continue
+            flagged = row.status == "completed_with_errors"
+            face[stmt] = AgentResult(
+                statement_type=stmt, variant=row.variant,
+                status="succeeded" if flagged else status,
+                workbook_path=row.workbook_path, error=row.error_message,
+                error_type=row.error_type,
+                flag=(row.error_message or "Saved with an unresolved gap.") if flagged else None,
+                carried=True,
+            )
+    return list(face.values()), notes, reports, report_paths
+
+
+def _record_notes_verdicts(session_dir: Path, verdicts: dict) -> None:
+    """Keep the notes-side status verdicts beside the run's files.
+
+    A later single-agent retry does not repeat the notes passes; it reads
+    these so it cannot report a clean run over an unresolved notes finding.
+    """
+    try:
+        safe_path(session_dir / _NOTES_VERDICTS_NAME).write_text(
+            json.dumps(verdicts), encoding="utf-8")
+    except Exception:
+        logger.warning("Could not record notes status verdicts in %s", session_dir,
+                       exc_info=True)
+
+
+def _merge_recorded_notes_verdicts(session_dir: Path, fresh: dict, *, run_has_notes: bool) -> dict:
+    """A retry's notes verdicts: this pass's findings plus what was recorded.
+
+    A verdict is unresolved if either says so. A run with notes and no
+    readable record (it predates the record, or the file is damaged) is
+    unresolved, never clean.
+    """
+    if not run_has_notes:
+        return fresh
+    try:
+        recorded = json.loads(
+            safe_path(session_dir / _NOTES_VERDICTS_NAME).read_text(encoding="utf-8"))
+        return {name: bool(value or recorded[name]) for name, value in fresh.items()}
+    except Exception:
+        logger.info("No recorded notes status verdicts in %s; treating the "
+                    "notes checks as unresolved", session_dir)
+        return {**fresh, "notes_coverage_unresolved": True}
+
+
+def _settle_retried_run(db_conn, run_id, saved_config, undecided_prior_status) -> None:
+    """Leave a retried run with its own setup and an honest status.
+
+    The retry request named one agent, so the run's saved setup is put back.
+    When the retry stopped before the whole-run status was decided, the run
+    returns to the status it had. A run that had been clean becomes failed,
+    the status any run gets when one of its agents did not finish: its other
+    results are intact, but the retried agent's no longer are.
+    Never raises (invariant 10).
+    """
+    if db_conn is None or run_id is None:
+        return
+    try:
+        if saved_config is not None:
+            db_conn.execute(
+                "UPDATE runs SET run_config_json = ?, scout_enabled = ?, "
+                "orchestration = ? WHERE id = ?", (*saved_config, run_id),
+            )
+            db_conn.commit()
+    except Exception:
+        logger.warning("Could not restore the saved setup of run %s after its "
+                       "retry", run_id, exc_info=True)
+    if undecided_prior_status is not None:
+        _safe_mark_finished(
+            db_conn, run_id,
+            "failed" if undecided_prior_status == "completed"
+            else undecided_prior_status,
+        )
+
+
+
 def _resolve_run_status(
     *,
     all_agents_ok: bool,
@@ -5193,8 +5345,15 @@ async def run_multi_agent_stream(
     *,
     existing_run_id: Optional[int] = None,
     require_preparation: bool = False,
+    retry_prior_status: Optional[str] = None,
 ) -> AsyncIterator[dict]:
     """Orchestrates multi-agent extraction with SSE event multiplexing.
+
+    ``retry_prior_status`` marks a single-agent retry INSIDE ``existing_run_id``
+    (the status that run had before the retry reopened it). The requested
+    agent is extracted again; everything after extraction — export, merge,
+    cross-checks, figures review, final status and the completion event —
+    covers every statement and note the run already holds.
 
     Runs the coordinator with per-agent event tagging, then merges workbooks,
     runs cross-checks, and persists everything to the audit DB.
@@ -5271,6 +5430,11 @@ async def run_multi_agent_stream(
     # Tracks whether we've already written a terminal status to the runs
     # row. Prevents the finally block from clobbering an earlier-set state.
     terminal_status: Optional[str] = None
+    retry_in_run = existing_run_id is not None and retry_prior_status is not None
+    # The run's own saved setup; a retry request names one agent only and must
+    # not replace it. Restored on every exit path.
+    retry_saved_config: Optional[tuple] = None
+    retry_status_decided = False
     notes_review_finalize_gate: Optional[asyncio.Event] = None
     try:
         db_conn = sqlite3.connect(safe_db_target(str(AUDIT_DB_PATH)))
@@ -5317,6 +5481,16 @@ async def run_multi_agent_stream(
             run_id = existing_run_id
             from db.run_ownership import claim
             claim(db_conn, run_id)
+            if retry_in_run:
+                try:
+                    _saved = db_conn.execute(
+                        "SELECT run_config_json, scout_enabled, orchestration "
+                        "FROM runs WHERE id = ?", (run_id,),
+                    ).fetchone()
+                    retry_saved_config = tuple(_saved) if _saved is not None else None
+                except Exception:
+                    logger.warning("Could not read the saved setup of run %s "
+                                   "before its retry", run_id, exc_info=True)
             try:
                 # Also refresh the canonical `runs.orchestration` column
                 # — list/detail read the column, not the JSON (peer-
@@ -5523,6 +5697,28 @@ async def run_multi_agent_stream(
             or os.environ.get("SCOUT_MODEL", "").strip()
             or model_name
         )
+        if retry_in_run and db_conn is not None and run_id is not None:
+            try:
+                _clear_retried_statements(
+                    db_conn, run_id, statements_to_run, variants,
+                    config.filing_level, config.filing_standard, session_dir,
+                )
+            except Exception as exc:
+                # The earlier attempt's figures would survive beside the new
+                # ones (writes are upserts); stop rather than mix the two.
+                fail_events, fail_status = _fail_run(
+                    db_conn, run_id,
+                    "The earlier attempt's figures could not be cleared, so the retry did not start.",
+                    error_code="retry_clear_failed", exception=exc,
+                )
+                terminal_status = fail_status or terminal_status
+                for event in fail_events:
+                    if client_connected:
+                        try:
+                            yield event
+                        except (asyncio.CancelledError, GeneratorExit):
+                            client_connected = False
+                return
         if db_conn is not None and run_id is not None:
             try:
                 if run_config.use_scout:
@@ -5533,9 +5729,16 @@ async def run_multi_agent_stream(
                 # Iterate in sorted order so run_agents row IDs are
                 # deterministic across test runs (statements_to_run is a
                 # Set; its iteration order is hash-based and unstable).
+                # A retry replaces the agent's earlier attempt, so it reuses
+                # that attempt's row; a second row would show History two
+                # cards and keep the failed one counting against the run.
+                _new_agent_row = (
+                    repo.reset_or_create_agent_row_for_retry if retry_in_run
+                    else repo.create_run_agent
+                )
                 for stmt in sorted(statements_to_run, key=lambda s: s.value):
                     agent_model = config.models.get(stmt, config.model)
-                    rai = repo.create_run_agent(
+                    rai = _new_agent_row(
                         db_conn, run_id,
                         statement_type=stmt.value,
                         variant=variants.get(stmt),
@@ -5552,7 +5755,7 @@ async def run_multi_agent_stream(
                     # actually use so History shows the right model id for
                     # each notes agent (falls back to the run-wide default).
                     nt_model = notes_models.get(nt, config.model)
-                    rai = repo.create_run_agent(
+                    rai = _new_agent_row(
                         db_conn, run_id,
                         statement_type=f"NOTES_{nt.value}",
                         variant=None,
@@ -5561,8 +5764,8 @@ async def run_multi_agent_stream(
                     run_agent_ids_by_agent_id[f"notes:{nt.value}".lower()] = rai
                     run_agent_ids_by_notes[nt] = rai
                 for report in sorted(config.reports_to_run):
-                    rai = repo.create_run_agent(db_conn, run_id, statement_type=report,
-                                                model=_model_id(config.reports_models.get(report, config.model)))
+                    rai = _new_agent_row(db_conn, run_id, statement_type=report,
+                                         model=_model_id(config.reports_models.get(report, config.model)))
                     run_agent_ids_by_report[report] = rai
                     run_agent_ids_by_agent_id[f"report:{report}".lower()] = rai
                 db_conn.commit()
@@ -6108,7 +6311,7 @@ async def run_multi_agent_stream(
                     exc_info=True,
                 )
 
-        if run_config.prior_year_workbook:
+        if run_config.prior_year_workbook and not retry_in_run:
             from concept_model.prior_year import import_workbook
             try:
                 await asyncio.to_thread(import_workbook, str(AUDIT_DB_PATH), run_id,
@@ -6460,6 +6663,22 @@ async def run_multi_agent_stream(
                     ) for nt in sorted(notes_to_run, key=lambda n: n.value)
                 ])
 
+        # A retry extracted one agent. From here on the run is judged as a
+        # whole, so the statements it already holds join the results.
+        retry_other_notes: Dict[str, str] = {}
+        retry_other_reports: Dict[str, str] = {}
+        retry_other_report_paths: Dict[str, str] = {}
+        if retry_in_run:
+            (_carried, retry_other_notes, retry_other_reports,
+             retry_other_report_paths) = _carried_run_results(
+                db_conn, run_id,
+                retried_statements=statements_to_run,
+                retried_notes=notes_to_run,
+                retried_reports=set(config.reports_to_run),
+            )
+            coordinator_result.agent_results.extend(_carried)
+            statements_to_run = statements_to_run | {r.statement_type for r in _carried}
+
         # Data Preview is a projection of the canonical fact store. The old
         # per-statement JSON files are completion markers and intentionally no
         # longer carry field payloads, so merging them produced an empty tab.
@@ -6592,7 +6811,8 @@ async def run_multi_agent_stream(
             all_workbook_paths,
             merged_path,
             notes_workbook_paths=all_notes_workbook_paths,
-            report_workbook_paths={r.report: r.workbook_path for r in report_results if r.workbook_path},
+            report_workbook_paths={**retry_other_report_paths,
+                                   **{r.report: r.workbook_path for r in report_results if r.workbook_path}},
             skip_recalc=True,
         )
 
@@ -6655,6 +6875,8 @@ async def run_multi_agent_stream(
                 # resolved layouts belong on the agent rows below, which also
                 # supply comparison/download routing after the run finishes.
                 for agent_result in coordinator_result.agent_results:
+                    if agent_result.carried:
+                        continue  # its record is the earlier attempt's own
                     run_agent_id = run_agent_ids_by_stmt.get(agent_result.statement_type)
                     if run_agent_id is None:
                         # Pre-create didn't happen (DB was unhappy earlier);
@@ -7282,7 +7504,7 @@ async def run_multi_agent_stream(
                     _run_auto_notes_review(notes_outputs),
                 )
 
-        if notes_review_lifecycle_task is None:
+        if notes_review_lifecycle_task is None and not (retry_in_run and not notes_to_run):
             _record_review_not_applicable(NOTES_VALIDATOR_AGENT_ID,
                 "No extracted prose disclosures are available for notes review.")
 
@@ -7543,7 +7765,8 @@ async def run_multi_agent_stream(
                         remerge = merge_workbooks(
                             all_workbook_paths, merged_path,
                             notes_workbook_paths=all_notes_workbook_paths,
-                            report_workbook_paths={r.report: r.workbook_path for r in report_results if r.workbook_path},
+                            report_workbook_paths={**retry_other_report_paths,
+                                                   **{r.report: r.workbook_path for r in report_results if r.workbook_path}},
                             skip_recalc=True,
                         )
                         if remerge.success:
@@ -8168,7 +8391,9 @@ async def run_multi_agent_stream(
         any_check_failed = any(cr.status == "failed" for cr in cross_check_results)
         notes_all_succeeded = notes_result is None or notes_result.all_succeeded
         all_agents_ok = (coordinator_result.all_succeeded and notes_all_succeeded
-                         and all(r.status == "succeeded" for r in report_results))
+                         and all(r.status == "succeeded" for r in report_results)
+                         and all(status == "succeeded" for status in (
+                             *retry_other_notes.values(), *retry_other_reports.values())))
         # RUN-REVIEW P0-1: a CORRECTION pass that hit its turn budget
         # without converging is a distinct outcome — agents/merge ran
         # fine and checks may even all be green now, but the corrector
@@ -8267,6 +8492,26 @@ async def run_multi_agent_stream(
                 exc_info=True,
             )
             open_notes_placement_conflicts = True
+        # The notes-side verdicts are produced by passes that run with the
+        # notes. A retry that did not repeat them must not read "no verdict"
+        # as "clean": it keeps what the run last recorded.
+        _notes_verdicts = {
+            "validator_failed": validator_failed,
+            "notes_coverage_unresolved": bool(notes_coverage_unresolved),
+            "notes_integrity_unresolved": bool(notes_integrity_unresolved),
+            "notes_formatting_incomplete": bool(notes_formatting_incomplete),
+            "notes_cleanup_incomplete": bool(notes_cleanup_incomplete),
+        }
+        if retry_in_run:
+            _notes_verdicts = _merge_recorded_notes_verdicts(
+                session_dir, _notes_verdicts, run_has_notes=bool(retry_other_notes or notes_to_run),
+            )
+            validator_failed = _notes_verdicts["validator_failed"]
+            notes_coverage_unresolved = _notes_verdicts["notes_coverage_unresolved"]
+            notes_integrity_unresolved = _notes_verdicts["notes_integrity_unresolved"]
+            notes_formatting_incomplete = _notes_verdicts["notes_formatting_incomplete"]
+            notes_cleanup_incomplete = _notes_verdicts["notes_cleanup_incomplete"]
+        _record_notes_verdicts(session_dir, _notes_verdicts)
         overall_status = _resolve_run_status(
             all_agents_ok=all_agents_ok,
             merge_success=merge_result.success,
@@ -8287,6 +8532,7 @@ async def run_multi_agent_stream(
         )
         if _safe_mark_finished(db_conn, run_id, overall_status):
             terminal_status = overall_status
+            retry_status_decided = True
 
         # Emit cross-check results as SSE events
         checks_data = []
@@ -8314,6 +8560,8 @@ async def run_multi_agent_stream(
             [r.template_type.value for r in notes_result.agent_results if r.status == "failed"]
             if notes_result is not None else []
         )
+        notes_completed += [n for n, status in retry_other_notes.items() if status == "succeeded"]
+        notes_failed += [n for n, status in retry_other_notes.items() if status == "failed"]
         # If the client disconnected mid-stream we cannot yield anymore —
         # a generator that caught GeneratorExit is allowed to run to
         # completion, but any further ``yield`` raises RuntimeError. The
@@ -8433,6 +8681,11 @@ async def run_multi_agent_stream(
         # call it aborted. Idempotent for rows that were already finalized.
         if terminal_status is None:
             _safe_mark_finished(db_conn, run_id, "aborted")
+        if retry_in_run:
+            _settle_retried_run(
+                db_conn, run_id, retry_saved_config,
+                None if retry_status_decided else retry_prior_status,
+            )
         # Session-wide task_registry cleanup used to live in coordinator.py's
         # finally block, but that erased notes tasks mid-flight whenever face
         # finished before notes. Now the outer orchestrator owns it — one

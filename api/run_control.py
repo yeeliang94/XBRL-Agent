@@ -488,15 +488,50 @@ async def force_abort_run(run_id: int):
 # Rerun endpoint — re-extract a single statement in an existing session
 # ---------------------------------------------------------------------------
 
+def _reopen_run_for_retry(session_id: str, run_id: int | None) -> tuple[int | None, str | None]:
+    """Flip the run a retry belongs to back to ``running``.
+
+    Returns ``(run id, the status it had)``. A session with no recorded run
+    (the audit row was never written) returns ``(None, None)`` and the retry
+    records a run of its own, as before.
+    """
+    from db import repository as repo
+
+    conn = server._open_audit_conn()
+    try:
+        if run_id is None:
+            run_id = repo.latest_started_run_for_session(conn, session_id)
+            if run_id is None:
+                return None, None
+        run = repo.fetch_run(conn, run_id)
+        if run is None or run.session_id != session_id:
+            raise HTTPException(status_code=404, detail="Run not found for this session.")
+        prior_status = repo.mark_run_retrying(conn, run_id)
+        if prior_status is None:
+            raise HTTPException(
+                status_code=409,
+                detail="This run is still in progress. Wait for it to finish before retrying.",
+            )
+        conn.commit()
+        return run_id, prior_status
+    finally:
+        conn.close()
+
+
 @router.post("/api/rerun/{session_id}")
-async def rerun_agent(session_id: str, body: RunConfigRequest, request: Request):
-    """Re-run extraction for a single agent within an existing session.
+async def rerun_agent(
+    session_id: str, body: RunConfigRequest, request: Request,
+    run_id: int | None = None,
+):
+    """Retry one agent INSIDE the run it belongs to.
 
     Accepts either exactly one face statement OR exactly one notes template,
     never both — rerun is a targeted retry for one failed/cancelled agent.
-    Reuses the same output directory so the new workbook overwrites the old
-    one. After the agent finishes, merge + cross-checks run against all
-    workbooks in the session (both old successful ones and the new one).
+    The retry reopens the original run (``run_id``, or the session's latest
+    run when the caller does not name one), replaces only that agent's
+    results, then merges, cross-checks and decides the status across every
+    statement and note the run already holds. A retry that started its own
+    run showed the user one statement and hid the rest.
     """
     try:
         validate_session_id(session_id)
@@ -530,6 +565,11 @@ async def rerun_agent(session_id: str, body: RunConfigRequest, request: Request)
         raise HTTPException(status_code=400, detail="API key not set. Check Settings.")
 
     server.active_runs.add(session_id)
+    try:
+        retry_run_id, prior_status = _reopen_run_for_retry(session_id, run_id)
+    except BaseException:
+        server.active_runs.discard(session_id)
+        raise
     auth_session_id = server._auth_session_id_from_request(request)
 
     async def event_stream():
@@ -540,6 +580,8 @@ async def rerun_agent(session_id: str, body: RunConfigRequest, request: Request)
             api_key=api_key,
             proxy_url=proxy_url,
             model_name=model_name,
+            existing_run_id=retry_run_id,
+            retry_prior_status=prior_status,
         )
         frames = server.sse_stream_with_keepalive(
             _reserved_run_stream(session_id, agen), auth_session_id=auth_session_id
@@ -549,6 +591,16 @@ async def rerun_agent(session_id: str, body: RunConfigRequest, request: Request)
                 yield frame
         finally:
             await frames.aclose()
+            if retry_run_id is not None:
+                from db.run_ownership import release
+                try:
+                    ownership_conn = server._open_audit_conn()
+                    try:
+                        release(ownership_conn, retry_run_id)
+                    finally:
+                        ownership_conn.close()
+                except Exception:
+                    logger.warning("Could not release run process ownership", exc_info=True)
 
     return StreamingResponse(
         event_stream(),

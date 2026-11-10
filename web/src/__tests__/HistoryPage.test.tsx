@@ -77,15 +77,20 @@ describe("HistoryPage", () => {
       variants: { SOFP: "CuNonCu" }, models: { SOFP: "saved-model" },
       notes_models: { ACC_POLICIES: "saved-notes-model" }, infopack: { source: "saved" },
     });
-    expect(call[5]).toBe("/api/rerun/sess-77");
+    expect(call[5]).toBe("/api/rerun/sess-77?run_id=77");
     expect(screen.getByRole("button", { name: /^Retry / })).toBeDisabled();
     await act(async () => { call[4]("Extraction still running.", "request"); });
     expect(screen.getByText("Extraction still running.")).toHaveAttribute("role", "alert");
     fireEvent.click(screen.getByRole("button", { name: /^Retry / }));
     fireEvent.click(screen.getByRole("button", { name: "Retry extraction" }));
     const retry = calls[calls.length - 1];
-    await act(async () => { retry[2]({ event: "status", data: { run_id: 78, phase: "starting", message: "Starting" }, timestamp: 1 }); });
-    expect(onSelectRun).toHaveBeenCalledWith(78);
+    // The retry runs inside the same run: History stays on it and reloads,
+    // so the run's other results remain in view.
+    const loads = vi.mocked(api.fetchRunDetail).mock.calls.length;
+    await act(async () => { retry[2]({ event: "status", data: { run_id: 77, phase: "starting", message: "Starting" }, timestamp: 1 }); });
+    expect(onSelectRun).toHaveBeenCalledWith(77);
+    expect(onSelectRun).not.toHaveBeenCalledWith(78);
+    expect(vi.mocked(api.fetchRunDetail).mock.calls.length).toBeGreaterThan(loads);
     expect(abort).toHaveBeenCalled();
     window.history.replaceState({}, "", "/");
   });
