@@ -613,6 +613,22 @@ unknown, not proof of zero facts: the export is attempted so a real failure
 emits degradation and tips status. Pinned by
 `tests/test_silent_exception_surfacing.py::test_canonical_export_degradation_prevents_clean_run_status`.
 
+**A single-agent retry runs inside its run.** `POST /api/rerun/{session_id}`
+reopens the run it is given (`run_id`, else the session's latest run) with
+`mark_run_retrying` and passes `retry_prior_status` to
+`run_multi_agent_stream`. The retry reuses the agent's `run_agents` row,
+clears that agent's earlier figures, and never writes the run's saved setup.
+After extraction the run's other statements join the results as `carried`
+`AgentResult`s, so the export, merge, cross-checks, figures review, final
+status and `run_complete` cover the whole run. Notes-side verdicts come from
+the latest pass that covered their scope: a statement or report retry keeps
+the verdicts recorded in `runs.notes_verdicts_json` (schema v56); a run with
+notes and no record is unresolved, never clean. The run keeps its frozen
+source generation. A retry that stops before the whole-run status ends
+`failed`, or keeps a `failed`/`aborted` status it already had. A session with
+no recorded run still records one of its own. Pinned by
+`tests/test_rerun_disconnect_finalization.py` and `tests/test_db_schema_v56.py`.
+
 ### 11. DB schema — version-stepped auto-migration on startup
 
 `db/schema.py::CURRENT_SCHEMA_VERSION` is authoritative; inspect it instead of

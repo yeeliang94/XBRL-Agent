@@ -245,7 +245,9 @@ from pathlib import Path
 # v53 tracks saved document activity for History and Recent.
 # v55 adds account provisioning (temporary passwords, last sign-in), the
 # administrator audit log, and reported issues with their attached files.
-CURRENT_SCHEMA_VERSION = 55
+# v56 keeps a run's notes-side status verdicts, so a retry of one agent that
+# does not repeat the notes passes cannot report a clean run over them.
+CURRENT_SCHEMA_VERSION = 56
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -327,6 +329,9 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         -- (review happens after extraction), hence its own column, not the
         -- draft-only run_config_json path.
         notes_table_style     TEXT,
+        -- v56: the notes-side verdicts behind the run's status (JSON); NULL
+        -- on runs finished before v56 and on runs that never reached a status.
+        notes_verdicts_json   TEXT,
         -- v30 columns. app_version stamps the build; repeat links remain
         -- nullable for historical data from the retired repeat-run feature.
         -- The REFERENCES points forward to repeat_groups (created later in this
@@ -3913,6 +3918,21 @@ def init_db(path: str | Path) -> None:
                     if "last_sign_in_at" not in columns:
                         conn.execute("ALTER TABLE auth_users ADD COLUMN last_sign_in_at TEXT")
                     conn.execute("UPDATE schema_version SET version = 55")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v55 -> v56: a run's recorded notes-side status verdicts.
+        if current_version is not None and current_version < 56:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                latest = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+                if latest < 56:
+                    columns = {r[1] for r in conn.execute("PRAGMA table_info(runs)")}
+                    if "notes_verdicts_json" not in columns:
+                        conn.execute("ALTER TABLE runs ADD COLUMN notes_verdicts_json TEXT")
+                    conn.execute("UPDATE schema_version SET version = 56")
                 conn.commit()
             except Exception:
                 conn.rollback()

@@ -369,6 +369,10 @@ class AgentResult:
     # cost accounting sees the (Anthropic-priced) write side too.
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    # True for a result rebuilt from an earlier attempt's saved record when
+    # one agent is retried inside its run: it scopes the whole-run export,
+    # checks and status, and is never written back as a fresh attempt.
+    carried: bool = False
     # Item 23: advisory warnings — currently the face-coverage receipts
     # (scout-observed face lines the agent left unaccounted). Surfaced on the
     # live `complete` SSE event (the UI records it) AND attached here on the

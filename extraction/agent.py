@@ -22,39 +22,13 @@ from pydantic_ai.messages import BinaryContent
 from model_settings import DEFAULT_MODEL_ID, build_model_settings
 
 
-_THINKING_WARNED: set[str] = set()
-
-
-def _thinking_level_for(role: str):
-    """Per-role thinking level, or None to send nothing.
-
-    Imported lazily because `server` imports this module, so a module-level
-    import would be circular. Any failure degrades to None — the behaviour
-    every agent had before this setting existed. A settings lookup must never
-    fail a run.
-    """
-    try:
-        import server
-
-        return server.thinking_level_for(role)
-    except Exception:  # noqa: BLE001 — a settings lookup must never fail a run
-        # ...but it must not fail SILENTLY either. Swallowing everything meant
-        # a rename or an import regression would leave the Settings control
-        # looking active while doing nothing, with no diagnostic anywhere
-        # (peer review, 2026-08-01). Once per role per process.
-        global _THINKING_WARNED
-        if role not in _THINKING_WARNED:
-            _THINKING_WARNED.add(role)
-            logging.getLogger("server").warning(
-                "Could not resolve the thinking level for %r; that agent will "
-                "use the provider default. The Settings control will appear "
-                "to have no effect.", role, exc_info=True,
-            )
-        return None
+# One shared resolver (model_settings); the alias keeps each factory's call site.
+from model_settings import configured_role_thinking_level as _thinking_level_for  # noqa: E402
 
 from statement_types import StatementType
 from token_tracker import TokenReport
 from tools.calculator import calculator_batch_json as _calculator_impl
+from tools.page_transcript import register_add_table_figures
 from concept_model.definitions import lookup_as_json as _lookup_definitions_impl
 from tools.template_reader import read_template as _read_template_impl, TemplateField
 from tools.pdf_viewer import render_pages_to_png_bytes, count_pdf_pages
@@ -1312,6 +1286,8 @@ def create_extraction_agent(
         """
         from tools.page_transcript import read_page_text as _read_page_text
         return _read_page_text(ctx.deps.pdf_path, pages)
+
+    register_add_table_figures(agent)
 
     @agent.tool
     def search_pdf_text(ctx: RunContext[ExtractionDeps], queries: List[str]) -> str:

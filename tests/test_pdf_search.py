@@ -373,6 +373,59 @@ def test_scanned_pdf_searches_and_reads_the_preparation_transcript(monkeypatch, 
     assert "read_page_text" not in scanned_pdf_advisory(pdf)
 
 
+def test_table_figures_are_added_from_the_transcript_without_retyping(monkeypatch, tmp_path):
+    """2026-11-10: agents retyped every figure into the calculator. The table
+    tool reads the figures itself and echoes each one with its row label."""
+    import json
+    from tools.page_transcript import TableSum, add_table_figures_json
+
+    table = (
+        "<table>"
+        "<tr><th rowspan='2'>Item</th><th colspan='2'>Group</th></tr>"
+        "<tr><th>2024</th><th>2023</th></tr>"
+        "<tr><td>Trade receivables</td><td>1,454</td><td>1,200</td></tr>"
+        "<tr><td>Less: allowance</td><td>(54)</td><td>-</td></tr>"
+        "<tr><td>Other receivables</td><td>100.50</td><td>n/a</td></tr>"
+        "<tr><td>Total</td><td>1,500.50</td><td>1,300</td></tr>"
+        "<tr><td>Other receivables</td><td>7</td><td>7</td></tr>"
+        "<tr><td rowspan='2'>Deposits</td><td>5</td><td rowspan='2'>9</td></tr>"
+        "<tr><td>6</td></tr>"
+        "<tr><td>Section</td></tr>"
+        "<tr><td>Prepayments</td><td>1 000<br/>2 000</td><td>3</td></tr>"
+        "</table>"
+    )
+    pdf = _with_transcript(monkeypatch, tmp_path, {1: ("<p>Note 9</p>" + table, False)})
+
+    def add(**kwargs):
+        return json.loads(add_table_figures_json(pdf, [TableSum(page=1, **kwargs)]))[0]
+
+    # Merged header cells do not shift the columns; brackets are negatives.
+    done = add(column=2, from_row="Trade receivables", to_row="other receivables")
+    assert done["sum"] == "1500.5"
+    assert [(r["label"], r["value"]) for r in done["rows"]] == [
+        ("Trade receivables", "1454"), ("Less: allowance", "-54"), ("Other receivables", "100.5")]
+    assert done["next_row"] == {"row": 6, "label": "Total", "cell": "1,500.50"}
+    # Stacked headings name both the entity and the year that were added.
+    assert done["column_heading"] == "Group / 2024"
+    assert "BEST-EFFORT" in done["warning"]
+    # A dash is zero; a cell that is not a figure stops the sum and is named.
+    assert add(column=3, from_row="#3", to_row="#4")["sum"] == "1200"
+    assert "'n/a'" in add(column=3, from_row="#3", to_row="#5")["error"]
+    # A label on two rows cannot start a range; the reply lists the choices.
+    assert "#5" in add(column=2, from_row="Other receivables", to_row="Total")["error"]
+    assert "1 table(s)" in add(table=2, column=2, from_row="#1", to_row="#2")["error"]
+    # A column that does not exist is an error, never a sum of zero.
+    assert "3 column(s)" in add(column=9, from_row="#3", to_row="#4")["error"]
+    # A merged cell above a short row does not shift the rows below it, and
+    # the one amount it holds (9, spanning two rows) is counted once.
+    merged = add(column=3, from_row="#8", to_row="Prepayments")
+    assert merged["sum"] == "12"
+    assert [r["value"] for r in merged["rows"]] == ["9", "0", "0", "3"]
+    assert "counted once" in merged["rows"][1]["merged"]
+    # Two figures in one cell are not read as one large number.
+    assert "not a figure" in add(column=2, from_row="Prepayments", to_row="Prepayments")["error"]
+
+
 def test_replaced_upload_revalidates_instead_of_serving_cached_transcript(monkeypatch, tmp_path):
     """Review finding (2026-09-25): the transcript cache keyed only on the
     metadata file could serve the previous document's text after the upload

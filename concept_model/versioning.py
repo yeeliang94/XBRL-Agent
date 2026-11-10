@@ -91,6 +91,61 @@ def snapshot_facts(db_path: str | Path, run_id: int) -> int:
         conn.close()
 
 
+def refresh_snapshot_for_templates(
+    db_path: str | Path, run_id: int, template_ids: list[str],
+) -> int:
+    """Re-copy the original-extraction snapshot for re-extracted templates.
+
+    When one statement is retried inside a run that was already reviewed, the
+    snapshot still holds the superseded attempt for that statement: the next
+    review would count the fresh extraction as reviewer changes, and "revert
+    to original" would restore the old attempt over the retry's figures. The
+    retried templates' snapshot rows are replaced from the live facts; every
+    other template keeps its restore point. A run with no snapshot is left
+    alone (``ensure_snapshot`` creates it whole before the first review).
+
+    Returns the number of snapshot rows written.
+    """
+    if not template_ids:
+        return 0
+    marks = ",".join("?" for _ in template_ids)
+    in_templates = (
+        f"concept_uuid IN (SELECT concept_uuid FROM concept_nodes "
+        f"WHERE template_id IN ({marks}))"
+    )
+    conn = _open_conn(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if not conn.execute(
+            "SELECT 1 FROM run_fact_snapshots WHERE run_id = ? LIMIT 1", (run_id,)
+        ).fetchone():
+            conn.rollback()
+            return 0
+        conn.execute(
+            f"DELETE FROM run_fact_snapshots WHERE run_id = ? AND {in_templates}",
+            (run_id, *template_ids),
+        )
+        cur = conn.execute(
+            f"""
+            INSERT INTO run_fact_snapshots(
+                run_id, concept_uuid, period, entity_scope, dimension_key, value,
+                value_status, children_status, source, evidence, snapshot_at
+            )
+            SELECT run_id, concept_uuid, period, entity_scope, dimension_key, value,
+                   value_status, children_status, source, evidence, ?
+            FROM run_concept_facts WHERE run_id = ? AND {in_templates}
+            """,
+            (_now(), run_id, *template_ids),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def ensure_snapshot(db_path: str | Path, run_id: int) -> bool:
     """Create the original-extraction snapshot if absent — atomically.
 

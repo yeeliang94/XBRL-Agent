@@ -107,6 +107,8 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
   const handleFormattingStarted = useCallback((runId: number, sheet: string) => {
     refreshDetailRef.current?.(runId, sheet);
   }, []);
+  // Bumped when a retry starts inside the selected run, to reload its detail.
+  const [detailReload, setDetailReload] = useState(0);
   const retryController = useRef<AbortController | null>(null);
   useEffect(() => () => retryController.current?.abort(), []);
 
@@ -131,14 +133,17 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
         if (event.event === "status" && typeof event.data.run_id === "number") {
           acknowledged = true;
           retryController.current?.abort();
+          // The retry runs inside this run, so the id is normally unchanged;
+          // reload to follow its progress with every earlier result in view.
           setSelectedId(event.data.run_id);
+          setDetailReload((n) => n + 1);
           resolve();
         } else if (event.event === "error" && !acknowledged) {
           reject(new Error(String(event.data.message || "Retry could not start.")));
         }
       }, () => {
         if (!acknowledged) reject(new Error("Retry ended before its saved run was available."));
-      }, (message) => reject(new Error(message)), `/api/rerun/${detail.session_id}`);
+      }, (message) => reject(new Error(message)), `/api/rerun/${detail.session_id}?run_id=${detail.id}`);
     });
   };
 
@@ -349,7 +354,7 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
       refreshDetailRef.current = null;
       if (pollTimer !== null) clearTimeout(pollTimer);
     };
-  }, [selectedId]);
+  }, [selectedId, detailReload]);
 
   const handleRunSelected = useCallback((id: number) => {
     setSelectedId(id);

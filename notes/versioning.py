@@ -152,6 +152,54 @@ def ensure_notes_snapshot(db_path: str | Path, run_id: int) -> bool:
         conn.close()
 
 
+def refresh_notes_snapshot_for_sheets(
+    db_path: str | Path, run_id: int, sheets: list[str],
+) -> int:
+    """Re-copy the original-extraction prose snapshot for re-extracted sheets.
+
+    The prose analogue of
+    ``concept_model.versioning.refresh_snapshot_for_templates``: a sheet
+    retried inside an already-reviewed run would otherwise revert to its
+    superseded attempt. Other sheets keep their restore point, and a run whose
+    snapshot was never taken is left alone.
+
+    Returns the number of snapshot rows written.
+    """
+    if not sheets:
+        return 0
+    marks = ",".join("?" for _ in sheets)
+    conn = _open_conn(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if not conn.execute(
+            "SELECT 1 FROM run_notes_review_state WHERE run_id = ?", (run_id,)
+        ).fetchone():
+            conn.rollback()
+            return 0
+        conn.execute(
+            f"DELETE FROM run_notes_cell_snapshots WHERE run_id = ? AND sheet IN ({marks})",
+            (run_id, *sheets),
+        )
+        cur = conn.execute(
+            f"""
+            INSERT INTO run_notes_cell_snapshots(
+                run_id, {_SNAPSHOT_COLS}, snapshot_at
+            )
+            SELECT run_id, {_SNAPSHOT_COLS}, ?
+            FROM notes_cells WHERE run_id = ? AND {_FINANCIAL_NOTES}
+            AND sheet IN ({marks})
+            """,
+            (_now(), run_id, *sheets),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def has_notes_snapshot(db_path: str | Path, run_id: int) -> bool:
     """True when a notes-reviewer prose snapshot exists for the run."""
     conn = _open_conn(db_path)

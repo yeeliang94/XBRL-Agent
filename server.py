@@ -3830,6 +3830,183 @@ def _notes_integrity_tips_status(outcome: Optional[dict]) -> bool:
     return bool(outcome and outcome.get("tips_status"))
 
 
+
+def _clear_retried_figures(
+    db_conn, run_id: int, statements, variants, notes, filing_level: str,
+    filing_standard: str, session_dir: Path,
+) -> None:
+    """Remove a retried agent's earlier figures and statement scratch workbook.
+
+    Fact writes are upserts, so a figure only the earlier attempt wrote would
+    otherwise survive into the retried statement or numeric notes sheet. Both
+    the variant the earlier attempt resolved and the one now requested are
+    cleared; other templates and imported prior-year figures are untouched.
+    Prose notes hold no figures and are replaced per sheet when saved.
+    Raises on failure.
+    """
+    from concept_model.facts_api import clear_facts_for_template
+    from concept_model.parser import derive_template_id
+    from notes_types import NOTES_REGISTRY, notes_template_path
+    from statement_types import template_path as _template_path
+
+    for template in notes:
+        if NOTES_REGISTRY[template].is_numeric:
+            master = notes_template_path(template, level=filing_level, standard=filing_standard)
+            clear_facts_for_template(AUDIT_DB_PATH, run_id, derive_template_id(master))
+
+    for stmt in statements:
+        row = db_conn.execute(
+            "SELECT variant FROM run_agents WHERE run_id = ? AND statement_type = ? "
+            "ORDER BY id DESC LIMIT 1", (run_id, stmt.value),
+        ).fetchone()
+        for variant in {row[0] if row else None, variants.get(stmt)} - {None}:
+            try:
+                master = _template_path(stmt, variant, level=filing_level, standard=filing_standard)
+            except (KeyError, TypeError, ValueError):
+                continue  # a variant with no template holds no figures
+            clear_facts_for_template(AUDIT_DB_PATH, run_id, derive_template_id(master))
+        scratch = safe_entry_path(session_dir / f"{stmt.value}_filled.xlsx")
+        if scratch.exists():
+            scratch.unlink()
+
+
+def _carried_run_results(db_conn, run_id, *, retried_statements, retried_notes, retried_reports):
+    """What the run already holds, apart from the agents being retried.
+
+    Returns ``(face results, {notes template: status}, {report: status},
+    {report: workbook path})`` from each agent's latest saved record. A face
+    statement saved with a flagged gap comes back as succeeded-with-a-flag,
+    the shape the live run gave it.
+    """
+    from coordinator import AgentResult
+    from db import repository as repo
+    from notes_types import NotesTemplateType
+    from reports.registry import REPORTS
+    from statement_types import StatementType
+
+    face: dict = {}
+    notes: Dict[str, str] = {}
+    reports: Dict[str, str] = {}
+    report_paths: Dict[str, str] = {}
+    if db_conn is None or run_id is None:
+        return [], notes, reports, report_paths
+    retried_note_names = {n.value for n in retried_notes}
+    note_names = {n.value for n in NotesTemplateType}
+    for row in repo.fetch_run_agents(db_conn, run_id):  # ordered by id: latest wins
+        kind = row.statement_type
+        status = row.status if row.status in ("succeeded", "skipped", "cancelled") else "failed"
+        if kind.startswith("NOTES_") and kind[6:] in note_names:
+            if kind[6:] not in retried_note_names:
+                notes[kind[6:]] = status
+        elif kind in REPORTS:
+            if kind not in retried_reports:
+                reports[kind] = status
+                if row.status == "succeeded" and row.workbook_path:
+                    report_paths[kind] = row.workbook_path
+                else:
+                    report_paths.pop(kind, None)
+        else:
+            try:
+                stmt = StatementType(kind)
+            except ValueError:
+                continue
+            if stmt in retried_statements:
+                continue
+            flagged = row.status == "completed_with_errors"
+            face[stmt] = AgentResult(
+                statement_type=stmt, variant=row.variant,
+                status="succeeded" if flagged else status,
+                workbook_path=row.workbook_path, error=row.error_message,
+                error_type=row.error_type,
+                flag=(row.error_message or "Saved with an unresolved gap.") if flagged else None,
+                carried=True,
+            )
+    return list(face.values()), notes, reports, report_paths
+
+
+def _retry_notes_verdicts(db_conn, run_id, fresh: dict, *, repeated: frozenset,
+                          run_has_notes: bool) -> tuple[dict, bool]:
+    """A retry's notes-side verdicts, and whether the record was missing.
+
+    A verdict comes from the latest pass that covered its scope. ``repeated``
+    names the verdicts whose whole-run pass actually ran in this retry (the
+    notes reviewer, coverage, source integrity); those take the fresh result.
+    Every other verdict keeps what the run last recorded: a pass that did not
+    run has no finding to offer, and cleanup and formatting cover only the
+    sheets just redone. A run with notes whose unrepeated verdicts have no
+    record (it finished before the record existed, or never reached a status)
+    is unresolved, never clean.
+    """
+    if not run_has_notes:
+        return fresh, False
+    from db import repository as repo
+    try:
+        recorded = repo.fetch_run_notes_verdicts(db_conn, run_id)
+    except Exception:
+        logger.warning("Could not read the recorded notes verdicts of run %s",
+                       run_id, exc_info=True)
+        recorded = None
+    if recorded is None:
+        whole_run = {"validator_failed", "notes_coverage_unresolved",
+                     "notes_integrity_unresolved"}
+        if whole_run <= repeated:
+            return fresh, False
+        return {**fresh, "notes_coverage_unresolved": True}, True
+    return {
+        name: value if name in repeated else bool(value or recorded.get(name, True))
+        for name, value in fresh.items()
+    }, False
+
+
+def _refresh_retried_restore_points(run_id, face_results, notes_result, retried_notes,
+                                    filing_level: str, filing_standard: str) -> None:
+    """Point "revert to original" at the retry's extraction, not the old one.
+
+    The figures and prose restore points are taken once, before the first
+    review. A retried statement or notes sheet replaces what they captured, so
+    its part of each restore point is re-copied before any review runs; the
+    rest of the run keeps its own. Best-effort: a failure is logged and the
+    retry continues.
+    """
+    try:
+        from concept_model.parser import derive_template_id
+        from concept_model.versioning import refresh_snapshot_for_templates
+        from notes.versioning import refresh_notes_snapshot_for_sheets
+        from notes_types import NOTES_REGISTRY, notes_template_path
+
+        template_ids = list(_build_check_template_ids(
+            face_results, filing_level, filing_standard).values())
+        template_ids += [
+            derive_template_id(notes_template_path(
+                template, level=filing_level, standard=filing_standard))
+            for template in retried_notes if NOTES_REGISTRY[template].is_numeric
+        ]
+        refresh_snapshot_for_templates(AUDIT_DB_PATH, run_id, template_ids)
+        sheets = sorted({
+            str(cell.get("sheet"))
+            for result in (notes_result.agent_results if notes_result else [])
+            for cell in result.cells_written if cell.get("sheet")
+        })
+        refresh_notes_snapshot_for_sheets(AUDIT_DB_PATH, run_id, sheets)
+    except Exception:
+        logger.warning("Could not refresh the restore points of run %s after "
+                       "its retry", run_id, exc_info=True)
+
+
+def _settle_interrupted_retry(db_conn, run_id, prior_status: str) -> None:
+    """Give a retry that stopped before the whole-run status an honest one.
+
+    The retried agent's earlier figures were cleared and it did not finish,
+    so the run is not better than failed: it keeps a failed or aborted status
+    it already had, and any other status becomes failed. Its other results
+    are untouched. Never raises (invariant 10).
+    """
+    _safe_mark_finished(
+        db_conn, run_id,
+        prior_status if prior_status in ("failed", "aborted") else "failed",
+    )
+
+
 def _resolve_run_status(
     *,
     all_agents_ok: bool,
@@ -5193,8 +5370,15 @@ async def run_multi_agent_stream(
     *,
     existing_run_id: Optional[int] = None,
     require_preparation: bool = False,
+    retry_prior_status: Optional[str] = None,
 ) -> AsyncIterator[dict]:
     """Orchestrates multi-agent extraction with SSE event multiplexing.
+
+    ``retry_prior_status`` marks a single-agent retry INSIDE ``existing_run_id``
+    (the status that run had before the retry reopened it). The requested
+    agent is extracted again; everything after extraction — export, merge,
+    cross-checks, figures review, final status and the completion event —
+    covers every statement and note the run already holds.
 
     Runs the coordinator with per-agent event tagging, then merges workbooks,
     runs cross-checks, and persists everything to the audit DB.
@@ -5271,6 +5455,13 @@ async def run_multi_agent_stream(
     # Tracks whether we've already written a terminal status to the runs
     # row. Prevents the finally block from clobbering an earlier-set state.
     terminal_status: Optional[str] = None
+    retry_in_run = existing_run_id is not None and retry_prior_status is not None
+    retry_status_decided = False
+
+    def _new_review_row(conn, run_id_, **fields) -> int:
+        """A retry reuses the run's review card; a normal run opens one."""
+        make = repo.reset_or_create_agent_row_for_retry if retry_in_run else repo.create_run_agent
+        return make(conn, run_id_, **fields)
     notes_review_finalize_gate: Optional[asyncio.Event] = None
     try:
         db_conn = sqlite3.connect(safe_db_target(str(AUDIT_DB_PATH)))
@@ -5315,9 +5506,9 @@ async def run_multi_agent_stream(
             # no-ops and the row stays 'running' forever, violating
             # gotcha #10 (every exit path reaches a terminal status).
             run_id = existing_run_id
-            from db.run_ownership import claim
-            claim(db_conn, run_id)
             try:
+                from db.run_ownership import claim
+                claim(db_conn, run_id)
                 # Also refresh the canonical `runs.orchestration` column
                 # — list/detail read the column, not the JSON (peer-
                 # review HIGH #1, 2026-05-28). Otherwise the started
@@ -5325,23 +5516,26 @@ async def run_multi_agent_stream(
                 # draft creation, which is stale if the user toggled
                 # the orchestration in the pre-run panel mid-draft and
                 # the PATCH side leaked it to JSON only.
-                db_conn.execute(
-                    "UPDATE runs SET run_config_json = ?, "
-                    "scout_enabled = ?, orchestration = ? "
-                    "WHERE id = ?",
-                    (
-                        json.dumps(run_config.model_dump()),
-                        1 if run_config.use_scout else 0,
-                        getattr(run_config, "orchestration", "split")
-                        or "split",
-                        existing_run_id,
-                    ),
-                )
-                db_conn.commit()
+                # A retry request names one agent; the run keeps its own
+                # saved setup (here and at every later config write).
+                if not retry_in_run:
+                    db_conn.execute(
+                        "UPDATE runs SET run_config_json = ?, "
+                        "scout_enabled = ?, orchestration = ? "
+                        "WHERE id = ?",
+                        (
+                            json.dumps(run_config.model_dump()),
+                            1 if run_config.use_scout else 0,
+                            getattr(run_config, "orchestration", "split")
+                            or "split",
+                            existing_run_id,
+                        ),
+                    )
+                    db_conn.commit()
             except Exception:
                 logger.warning(
-                    "Failed to refresh run_config_json on existing draft %s "
-                    "— continuing with stale persisted config; terminal "
+                    "Failed to claim or refresh the config of existing run %s "
+                    "— continuing with the persisted config; terminal "
                     "status will still be written.",
                     existing_run_id, exc_info=True,
                 )
@@ -5523,6 +5717,28 @@ async def run_multi_agent_stream(
             or os.environ.get("SCOUT_MODEL", "").strip()
             or model_name
         )
+        if retry_in_run and db_conn is not None and run_id is not None:
+            try:
+                _clear_retried_figures(
+                    db_conn, run_id, statements_to_run, variants, notes_to_run,
+                    config.filing_level, config.filing_standard, session_dir,
+                )
+            except Exception as exc:
+                # The earlier attempt's figures would survive beside the new
+                # ones (writes are upserts); stop rather than mix the two.
+                fail_events, fail_status = _fail_run(
+                    db_conn, run_id,
+                    "The earlier attempt's figures could not be cleared, so the retry did not start.",
+                    error_code="retry_clear_failed", exception=exc,
+                )
+                terminal_status = fail_status or terminal_status
+                for event in fail_events:
+                    if client_connected:
+                        try:
+                            yield event
+                        except (asyncio.CancelledError, GeneratorExit):
+                            client_connected = False
+                return
         if db_conn is not None and run_id is not None:
             try:
                 if run_config.use_scout:
@@ -5533,9 +5749,16 @@ async def run_multi_agent_stream(
                 # Iterate in sorted order so run_agents row IDs are
                 # deterministic across test runs (statements_to_run is a
                 # Set; its iteration order is hash-based and unstable).
+                # A retry replaces the agent's earlier attempt, so it reuses
+                # that attempt's row; a second row would show History two
+                # cards and keep the failed one counting against the run.
+                _new_agent_row = (
+                    repo.reset_or_create_agent_row_for_retry if retry_in_run
+                    else repo.create_run_agent
+                )
                 for stmt in sorted(statements_to_run, key=lambda s: s.value):
                     agent_model = config.models.get(stmt, config.model)
-                    rai = repo.create_run_agent(
+                    rai = _new_agent_row(
                         db_conn, run_id,
                         statement_type=stmt.value,
                         variant=variants.get(stmt),
@@ -5552,7 +5775,7 @@ async def run_multi_agent_stream(
                     # actually use so History shows the right model id for
                     # each notes agent (falls back to the run-wide default).
                     nt_model = notes_models.get(nt, config.model)
-                    rai = repo.create_run_agent(
+                    rai = _new_agent_row(
                         db_conn, run_id,
                         statement_type=f"NOTES_{nt.value}",
                         variant=None,
@@ -5561,8 +5784,8 @@ async def run_multi_agent_stream(
                     run_agent_ids_by_agent_id[f"notes:{nt.value}".lower()] = rai
                     run_agent_ids_by_notes[nt] = rai
                 for report in sorted(config.reports_to_run):
-                    rai = repo.create_run_agent(db_conn, run_id, statement_type=report,
-                                                model=_model_id(config.reports_models.get(report, config.model)))
+                    rai = _new_agent_row(db_conn, run_id, statement_type=report,
+                                         model=_model_id(config.reports_models.get(report, config.model)))
                     run_agent_ids_by_report[report] = rai
                     run_agent_ids_by_agent_id[f"report:{report}".lower()] = rai
                 db_conn.commit()
@@ -5915,7 +6138,7 @@ async def run_multi_agent_stream(
                 # Keep the durable draft/run config aligned with what the
                 # downstream agents actually received. This also lets notes
                 # regeneration reuse the latest inventory without re-scouting.
-                if db_conn is not None and run_id is not None:
+                if db_conn is not None and run_id is not None and not retry_in_run:
                     stored_config = run_config.model_dump()
                     stored_config["infopack"] = json.loads(infopack.to_json())
                     db_conn.execute(
@@ -6091,7 +6314,7 @@ async def run_multi_agent_stream(
 
         run_config.denomination = resolved_denomination
         config.denomination = resolved_denomination
-        if db_conn is not None and run_id is not None:
+        if db_conn is not None and run_id is not None and not retry_in_run:
             try:
                 stored_config = run_config.model_dump()
                 if infopack is not None:
@@ -6108,7 +6331,7 @@ async def run_multi_agent_stream(
                     exc_info=True,
                 )
 
-        if run_config.prior_year_workbook:
+        if run_config.prior_year_workbook and not retry_in_run:
             from concept_model.prior_year import import_workbook
             try:
                 await asyncio.to_thread(import_workbook, str(AUDIT_DB_PATH), run_id,
@@ -6140,26 +6363,27 @@ async def run_multi_agent_stream(
         # settings. Environment settings are mutable, and GPT-5.6 reasoning is
         # transport-sensitive, so the configured value alone is insufficient
         # to attribute a past run's quality or cost.
-        try:
-            _levels = _thinking_levels()
-            _runtime = _model_runtime_snapshot(
-                model, statements_to_run, models, notes_to_run, notes_models,
-            )
-            _lvl_conn = _open_audit_conn()
+        if not retry_in_run:
             try:
-                _lvl_conn.execute(
-                    "UPDATE runs SET run_config_json = json_set("
-                    "  COALESCE(run_config_json, '{}'), "
-                    "  '$.thinking_levels', json(?), "
-                    "  '$.model_runtime', json(?)) WHERE id = ?",
-                    (json.dumps(_levels), json.dumps(_runtime), run_id),
+                _levels = _thinking_levels()
+                _runtime = _model_runtime_snapshot(
+                    model, statements_to_run, models, notes_to_run, notes_models,
                 )
-                _lvl_conn.commit()
-            finally:
-                _lvl_conn.close()
-        except Exception:  # noqa: BLE001 — telemetry, never fatal
-            logger.warning("Could not record the run's model runtime settings",
-                           exc_info=True)
+                _lvl_conn = _open_audit_conn()
+                try:
+                    _lvl_conn.execute(
+                        "UPDATE runs SET run_config_json = json_set("
+                        "  COALESCE(run_config_json, '{}'), "
+                        "  '$.thinking_levels', json(?), "
+                        "  '$.model_runtime', json(?)) WHERE id = ?",
+                        (json.dumps(_levels), json.dumps(_runtime), run_id),
+                    )
+                    _lvl_conn.commit()
+                finally:
+                    _lvl_conn.close()
+            except Exception:  # noqa: BLE001 — telemetry, never fatal
+                logger.warning("Could not record the run's model runtime settings",
+                               exc_info=True)
 
         notes_integrity_mode = _notes_integrity_mode()
         if prepared_snapshot is not None:
@@ -6176,12 +6400,22 @@ async def run_multi_agent_stream(
                 )
             finally:
                 _mode_conn.close()
+            # A retry keeps the run's source record. A new one would retire the
+            # placements and a person's source decisions for every sheet the
+            # retry does not redo, and the integrity check would read them as
+            # gaps. Only a changed notes list still needs a new record.
+            _kept_generation = None
+            if retry_in_run:
+                from notes import source_repository as _source_repo
+                _active = _source_repo.active_generation(db_conn, run_id)
+                _kept_generation = _active["id"] if _active is not None else None
             if prepared_snapshot is not None and notes_to_run:
                 current_infopack = json.loads(infopack.to_json())
                 original_inventory = prepared_snapshot["infopack"].get("notes_inventory") or []
                 current_inventory = current_infopack.get("notes_inventory") or []
                 from api.preparation import inventory_requires_remap, remap_prepared_inventory
                 if inventory_requires_remap(original_inventory, current_inventory):
+                    _kept_generation = None
                     prepared_document = await remap_prepared_inventory(
                         prepared_document, current_infopack, run_id=run_id,
                         session_id=session_id,
@@ -6194,7 +6428,12 @@ async def run_multi_agent_stream(
                     prepared_document.metadata_path,
                     scout_note_nums=[e.note_num for e in getattr(infopack, "notes_inventory", []) or []],
                 )
-                notes_source_generation_id = freeze_manifest(db_conn, run_id, manifest)
+                notes_source_generation_id = (
+                    _kept_generation if _kept_generation is not None
+                    else freeze_manifest(db_conn, run_id, manifest)
+                )
+            elif notes_integrity_mode.computes and _kept_generation is not None and not notes_to_run:
+                notes_source_generation_id = _kept_generation
             elif notes_integrity_mode.computes:
                 _emit_stage("reading_source")
                 notes_source_generation_id, notes_boundary_report = (
@@ -6460,6 +6699,26 @@ async def run_multi_agent_stream(
                     ) for nt in sorted(notes_to_run, key=lambda n: n.value)
                 ])
 
+        # A retry extracted one agent. From here on the run is judged as a
+        # whole, so the statements it already holds join the results.
+        retry_other_notes: Dict[str, str] = {}
+        retry_other_reports: Dict[str, str] = {}
+        retry_other_report_paths: Dict[str, str] = {}
+        if retry_in_run:
+            _refresh_retried_restore_points(
+                run_id, coordinator_result.agent_results, notes_result, notes_to_run,
+                config.filing_level, config.filing_standard,
+            )
+            (_carried, retry_other_notes, retry_other_reports,
+             retry_other_report_paths) = _carried_run_results(
+                db_conn, run_id,
+                retried_statements=statements_to_run,
+                retried_notes=notes_to_run,
+                retried_reports=set(config.reports_to_run),
+            )
+            coordinator_result.agent_results.extend(_carried)
+            statements_to_run = statements_to_run | {r.statement_type for r in _carried}
+
         # Data Preview is a projection of the canonical fact store. The old
         # per-statement JSON files are completion markers and intentionally no
         # longer carry field payloads, so merging them produced an empty tab.
@@ -6592,7 +6851,8 @@ async def run_multi_agent_stream(
             all_workbook_paths,
             merged_path,
             notes_workbook_paths=all_notes_workbook_paths,
-            report_workbook_paths={r.report: r.workbook_path for r in report_results if r.workbook_path},
+            report_workbook_paths={**retry_other_report_paths,
+                                   **{r.report: r.workbook_path for r in report_results if r.workbook_path}},
             skip_recalc=True,
         )
 
@@ -6655,6 +6915,8 @@ async def run_multi_agent_stream(
                 # resolved layouts belong on the agent rows below, which also
                 # supply comparison/download routing after the run finishes.
                 for agent_result in coordinator_result.agent_results:
+                    if agent_result.carried:
+                        continue  # its record is the earlier attempt's own
                     run_agent_id = run_agent_ids_by_stmt.get(agent_result.statement_type)
                     if run_agent_id is None:
                         # Pre-create didn't happen (DB was unhappy earlier);
@@ -7061,7 +7323,7 @@ async def run_multi_agent_stream(
 
             if db_conn is not None and run_id is not None:
                 try:
-                    validator_run_agent_id = repo.create_run_agent(
+                    validator_run_agent_id = _new_review_row(
                         db_conn,
                         run_id,
                         statement_type=NOTES_VALIDATOR_AGENT_ID,
@@ -7253,6 +7515,11 @@ async def run_multi_agent_stream(
             return validator_outcome, validator_cancelled_without_outcome
 
         def _record_review_not_applicable(role: str, message: str) -> None:
+            if retry_in_run and db_conn is not None and db_conn.execute(
+                "SELECT 1 FROM run_agents WHERE run_id = ? AND statement_type = ?",
+                (run_id, role),
+            ).fetchone():
+                return  # the run's earlier review card stands
             if db_conn is not None and run_id is not None:
                 review_id = repo.create_run_agent(db_conn, run_id, statement_type=role)
                 repo.finish_run_agent(db_conn, review_id, status="skipped")
@@ -7321,7 +7588,7 @@ async def run_multi_agent_stream(
                 # Inapplicable reviews receive a separate terminal skipped row.
                 if db_conn is not None and run_id is not None:
                     try:
-                        correction_run_agent_id = repo.create_run_agent(
+                        correction_run_agent_id = _new_review_row(
                             db_conn, run_id,
                             statement_type=CORRECTION_AGENT_ID,
                             variant=None,
@@ -7543,7 +7810,8 @@ async def run_multi_agent_stream(
                         remerge = merge_workbooks(
                             all_workbook_paths, merged_path,
                             notes_workbook_paths=all_notes_workbook_paths,
-                            report_workbook_paths={r.report: r.workbook_path for r in report_results if r.workbook_path},
+                            report_workbook_paths={**retry_other_report_paths,
+                                                   **{r.report: r.workbook_path for r in report_results if r.workbook_path}},
                             skip_recalc=True,
                         )
                         if remerge.success:
@@ -8168,7 +8436,9 @@ async def run_multi_agent_stream(
         any_check_failed = any(cr.status == "failed" for cr in cross_check_results)
         notes_all_succeeded = notes_result is None or notes_result.all_succeeded
         all_agents_ok = (coordinator_result.all_succeeded and notes_all_succeeded
-                         and all(r.status == "succeeded" for r in report_results))
+                         and all(r.status == "succeeded" for r in report_results)
+                         and all(status == "succeeded" for status in (
+                             *retry_other_notes.values(), *retry_other_reports.values())))
         # RUN-REVIEW P0-1: a CORRECTION pass that hit its turn budget
         # without converging is a distinct outcome — agents/merge ran
         # fine and checks may even all be green now, but the corrector
@@ -8267,6 +8537,50 @@ async def run_multi_agent_stream(
                 exc_info=True,
             )
             open_notes_placement_conflicts = True
+        # The notes-side verdicts are produced by passes that run with the
+        # notes. A retry that did not repeat them must not read "no verdict"
+        # as "clean": it keeps what the run last recorded.
+        _notes_verdicts = {
+            "validator_failed": validator_failed,
+            "notes_coverage_unresolved": bool(notes_coverage_unresolved),
+            "notes_integrity_unresolved": bool(notes_integrity_unresolved),
+            "notes_formatting_incomplete": bool(notes_formatting_incomplete),
+            "notes_cleanup_incomplete": bool(notes_cleanup_incomplete),
+        }
+        if retry_in_run:
+            _repeated = set()
+            if validator_outcome is not None:
+                _repeated.add("validator_failed")
+                if _coverage is not None:
+                    _repeated.add("notes_coverage_unresolved")
+            if notes_integrity_outcome is not None:
+                _repeated.add("notes_integrity_unresolved")
+            _notes_verdicts, _no_record = _retry_notes_verdicts(
+                db_conn, run_id, _notes_verdicts, repeated=frozenset(_repeated),
+                run_has_notes=bool(retry_other_notes or notes_to_run),
+            )
+            if _no_record:
+                # Say why a clean retry still needs review (invariant 20).
+                _enqueue_system_error({
+                    "type": "notes_checks_not_recorded",
+                    "message": (
+                        "This run's notes were checked before those results "
+                        "were recorded, so the retry cannot confirm them. "
+                        "Run the notes review again to clear this."
+                    ),
+                })
+            validator_failed = _notes_verdicts["validator_failed"]
+            notes_coverage_unresolved = _notes_verdicts["notes_coverage_unresolved"]
+            notes_integrity_unresolved = _notes_verdicts["notes_integrity_unresolved"]
+            notes_formatting_incomplete = _notes_verdicts["notes_formatting_incomplete"]
+            notes_cleanup_incomplete = _notes_verdicts["notes_cleanup_incomplete"]
+        if db_conn is not None and run_id is not None:
+            try:
+                repo.save_run_notes_verdicts(db_conn, run_id, _notes_verdicts)
+                db_conn.commit()
+            except Exception:
+                logger.warning("Could not record the notes verdicts of run %s",
+                               run_id, exc_info=True)
         overall_status = _resolve_run_status(
             all_agents_ok=all_agents_ok,
             merge_success=merge_result.success,
@@ -8287,6 +8601,7 @@ async def run_multi_agent_stream(
         )
         if _safe_mark_finished(db_conn, run_id, overall_status):
             terminal_status = overall_status
+            retry_status_decided = True
 
         # Emit cross-check results as SSE events
         checks_data = []
@@ -8314,6 +8629,8 @@ async def run_multi_agent_stream(
             [r.template_type.value for r in notes_result.agent_results if r.status == "failed"]
             if notes_result is not None else []
         )
+        notes_completed += [n for n, status in retry_other_notes.items() if status == "succeeded"]
+        notes_failed += [n for n, status in retry_other_notes.items() if status == "failed"]
         # If the client disconnected mid-stream we cannot yield anymore —
         # a generator that caught GeneratorExit is allowed to run to
         # completion, but any further ``yield`` raises RuntimeError. The
@@ -8433,6 +8750,8 @@ async def run_multi_agent_stream(
         # call it aborted. Idempotent for rows that were already finalized.
         if terminal_status is None:
             _safe_mark_finished(db_conn, run_id, "aborted")
+        if retry_in_run and not retry_status_decided:
+            _settle_interrupted_retry(db_conn, run_id, retry_prior_status)
         # Session-wide task_registry cleanup used to live in coordinator.py's
         # finally block, but that erased notes tasks mid-flight whenever face
         # finished before notes. Now the outer orchestrator owns it — one

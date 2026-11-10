@@ -1068,7 +1068,7 @@ export function RunDetailView({
         message={retryAgent?.startsWith("NOTES_")
           ? "This replaces extracted results and any edits for the selected notes template. For prepared documents, it also reruns Corporate Information, Accounting Policies and List of Notes, replacing results and edits in every retried template."
           : retryAgent != null && isReportType(retryAgent)
-            ? "This extracts the selected report again in a new run. Your current report and edits remain saved."
+            ? "This replaces extracted results and any edits for the selected report."
             : "This replaces extracted results and any edits for the selected statement."}
         confirmLabel="Retry extraction" onCancel={() => setRetryAgent(null)}
         onConfirm={async () => {

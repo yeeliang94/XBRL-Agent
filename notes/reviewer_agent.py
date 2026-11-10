@@ -38,30 +38,8 @@ from pydantic_ai.models import Model
 
 from model_settings import build_model_settings
 
-_THINKING_WARNED: set[str] = set()
-
-
-def _thinking_level_for(role: str):
-    """Per-role thinking level, or None. Lazy import + swallow: `server`
-    imports this module, and a settings lookup must never fail a run."""
-    try:
-        import server
-
-        return server.thinking_level_for(role)
-    except Exception:  # noqa: BLE001 — a settings lookup must never fail a run
-        # ...but it must not fail SILENTLY either. Swallowing everything meant
-        # a rename or an import regression would leave the Settings control
-        # looking active while doing nothing, with no diagnostic anywhere
-        # (peer review, 2026-08-01). Once per role per process.
-        global _THINKING_WARNED
-        if role not in _THINKING_WARNED:
-            _THINKING_WARNED.add(role)
-            logging.getLogger("server").warning(
-                "Could not resolve the thinking level for %r; that agent will "
-                "use the provider default. The Settings control will appear "
-                "to have no effect.", role, exc_info=True,
-            )
-        return None
+# One shared resolver (model_settings); the alias keeps each factory's call site.
+from model_settings import configured_role_thinking_level as _thinking_level_for  # noqa: E402
 
 from db import repository as repo
 from notes.agent import _apply_cross_sheet_tokens

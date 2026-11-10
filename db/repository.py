@@ -495,6 +495,88 @@ def mark_draft_started(
     return started
 
 
+def latest_started_run_for_session(
+    conn: sqlite3.Connection, session_id: str,
+) -> Optional[int]:
+    """The newest non-draft run recorded for an upload session, if any."""
+    row = conn.execute(
+        "SELECT id FROM runs WHERE session_id = ? AND status != 'draft' "
+        "ORDER BY id DESC LIMIT 1",
+        (session_id,),
+    ).fetchone()
+    return int(row[0]) if row is not None else None
+
+
+def mark_run_retrying(conn: sqlite3.Connection, run_id: int) -> Optional[str]:
+    """Reopen a finished run so one of its agents can be retried inside it.
+
+    Atomically flips a terminal run back to ``running`` and returns the status
+    it had, or None when the run is missing, a draft, or already running (the
+    caller should 409). ``started_at`` is left alone: the run is the same run.
+    """
+    row = conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
+    if row is None or row[0] not in _TERMINAL_STATUSES:
+        return None
+    cur = conn.execute(
+        "UPDATE runs SET status = 'running', ended_at = NULL "
+        "WHERE id = ? AND status = ?",
+        (run_id, row[0]),
+    )
+    return row[0] if cur.rowcount > 0 else None
+
+
+def save_run_notes_verdicts(conn: sqlite3.Connection, run_id: int, verdicts: dict) -> None:
+    """Record the notes-side verdicts that went into a run's status."""
+    conn.execute(
+        "UPDATE runs SET notes_verdicts_json = ? WHERE id = ?",
+        (json.dumps(verdicts), run_id),
+    )
+
+
+def fetch_run_notes_verdicts(conn: sqlite3.Connection, run_id: int) -> Optional[dict]:
+    """The run's recorded notes-side verdicts, or None when none were recorded."""
+    row = conn.execute(
+        "SELECT notes_verdicts_json FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    return _parse_json_object(row[0]) if row is not None else None
+
+
+def reset_or_create_agent_row_for_retry(
+    conn: sqlite3.Connection,
+    run_id: int,
+    statement_type: str,
+    variant: str | None = None,
+    model: str | None = None,
+) -> int:
+    """One ``run_agents`` row per retried agent — the retry replaces its attempt.
+
+    Same idea as :func:`reset_or_create_scout_agent_row`: a second row for the
+    same statement would show History two cards and keep the failed attempt
+    counting against the run. The latest row is reset to ``running`` and its
+    recorded activity, turns and field projection are removed so the new
+    attempt writes a clean record. Its usage rows are replaced when the new
+    attempt's turns are saved, so the row reports the latest attempt's cost.
+    """
+    row = conn.execute(
+        "SELECT id FROM run_agents WHERE run_id = ? AND statement_type = ? "
+        "ORDER BY id DESC LIMIT 1",
+        (run_id, statement_type),
+    ).fetchone()
+    if row is None:
+        return create_run_agent(conn, run_id, statement_type, variant=variant, model=model)
+    agent_row_id = int(row[0])
+    for table in ("agent_events", "run_agent_turns", "extracted_fields"):
+        conn.execute(f"DELETE FROM {table} WHERE run_agent_id = ?", (agent_row_id,))
+    conn.execute(
+        "UPDATE run_agents SET status = 'running', started_at = ?, "
+        "ended_at = NULL, model = ?, variant = COALESCE(?, variant), "
+        "workbook_path = NULL, error_type = NULL, error_message = NULL "
+        "WHERE id = ?",
+        (_now(), model, variant, agent_row_id),
+    )
+    return agent_row_id
+
+
 def _parse_json_object(raw: Any) -> Optional[dict[str, Any]]:
     """Hydrate a JSON object, returning None for a corrupt blob."""
     if not raw:

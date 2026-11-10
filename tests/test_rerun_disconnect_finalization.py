@@ -290,3 +290,189 @@ async def test_disconnect_during_integrated_scout_still_finishes_run(session_env
     assert run["status"] in {"completed", "completed_with_errors"}
     assert scout_row["status"] == "succeeded"
     assert scout_row["ended_at"] is not None
+
+
+async def _run_statements(session_env, outcomes, *, statements, retry=None, checks=None,
+                          coordinator_error=None):
+    """Drive one stream with a faked coordinator; return its events.
+
+    ``outcomes`` maps a statement name to the status its agent ends in.
+    ``retry`` is ``(run_id, prior_status)`` from the retry route's reopen step.
+    """
+    from server import RunConfigRequest, run_multi_agent_stream
+
+    session_id, out = session_env
+    session_dir = out / session_id
+
+    async def coordinator(config, infopack=None, event_queue=None, session_id=None,
+                          push_sentinel=True, **_kw):
+        if coordinator_error is not None:
+            raise coordinator_error
+        results = []
+        for stmt in sorted(config.statements_to_run, key=lambda s: s.value):
+            status = outcomes[stmt.value]
+            workbook = session_dir / f"{stmt.value}_filled.xlsx"
+            if status == "succeeded":
+                workbook.write_bytes(b"fake per-agent xlsx")
+            results.append(AgentResult(
+                statement_type=stmt, variant="CuNonCu" if stmt.value == "SOFP" else "Function",
+                status=status, workbook_path=str(workbook) if status == "succeeded" else None,
+                error=None if status == "succeeded" else "model stopped",
+            ))
+        return CoordinatorResult(agent_results=results)
+
+    def record_checks(checks_, ctx, check_config, **_kw):
+        if checks is not None:
+            checks.append(set(check_config["statements_to_run"]))
+        return []
+
+    body = RunConfigRequest(
+        statements=statements, variants={"SOFP": "CuNonCu", "SOPL": "Function"},
+        models={}, infopack=None, use_scout=False, denomination="thousands",
+    )
+    extra = {} if retry is None else {"existing_run_id": retry[0], "retry_prior_status": retry[1]}
+    with patch("server._create_proxy_model", return_value="fake-model"), \
+         patch("coordinator.run_extraction", side_effect=coordinator), \
+         patch("workbook_merger.merge", return_value=MergeResult(
+             success=True, output_path=str(session_dir / "filled.xlsx"), sheets_copied=1)), \
+         patch("cross_checks.framework.run_all", return_value=[]), \
+         patch("cross_checks.framework.run_all_facts", side_effect=record_checks):
+        return [event async for event in run_multi_agent_stream(
+            session_id=session_id, session_dir=session_dir, run_config=body,
+            api_key="test-key", proxy_url="", model_name="test-model", **extra,
+        )]
+
+
+def _run_state(session_env):
+    import json
+
+    _, out = session_env
+    conn = _open_db(out / "xbrl_agent.db")
+    try:
+        runs = [dict(r) for r in conn.execute("SELECT * FROM runs").fetchall()]
+        agents = [(r["statement_type"], r["status"]) for r in conn.execute(
+            "SELECT statement_type, status FROM run_agents "
+            "WHERE statement_type IN ('SOFP', 'SOPL') ORDER BY id")]
+    finally:
+        conn.close()
+    return runs, agents, json.loads(runs[0]["run_config_json"])
+
+
+@pytest.mark.asyncio
+async def test_retrying_one_statement_keeps_the_run_and_its_other_results(session_env):
+    """Azure report (2026-11-10): retrying a failed SOFP started a run of its
+    own, so the user saw SOFP alone and the finished statements were gone.
+    The retry now runs inside the original run and judges the run whole."""
+    from api.run_control import _reopen_run_for_retry
+
+    session_id, _ = session_env
+    await _run_statements(session_env, {"SOFP": "failed", "SOPL": "succeeded"},
+                          statements=["SOFP", "SOPL"])
+    runs, agents, _ = _run_state(session_env)
+    assert runs[0]["status"] == "failed"
+    assert agents == [("SOFP", "failed"), ("SOPL", "succeeded")]
+
+    retry = _reopen_run_for_retry(session_id, None)
+    assert retry == (runs[0]["id"], "failed")
+    checks: list = []
+    events = await _run_statements(session_env, {"SOFP": "succeeded"}, statements=["SOFP"],
+                                   retry=retry, checks=checks)
+
+    runs, agents, config = _run_state(session_env)
+    assert len(runs) == 1 and runs[0]["status"] == "completed"
+    # One record per statement: the retry replaced SOFP's failed attempt.
+    assert agents == [("SOFP", "succeeded"), ("SOPL", "succeeded")]
+    # The run keeps its own setup, not the one-statement retry request.
+    assert config["statements"] == ["SOFP", "SOPL"]
+    done = [e for e in events if e.get("event") == "run_complete"][-1]["data"]
+    assert done["run_id"] == runs[0]["id"]
+    assert sorted(done["statements_completed"]) == ["SOFP", "SOPL"]
+    # Cross-checks cover every statement the run holds.
+    assert checks and all({s.value for s in scope} == {"SOFP", "SOPL"} for scope in checks)
+
+
+@pytest.mark.asyncio
+async def test_a_retry_cannot_hide_another_statement_that_failed(session_env):
+    from api.run_control import _reopen_run_for_retry
+
+    session_id, _ = session_env
+    await _run_statements(session_env, {"SOFP": "failed", "SOPL": "failed"},
+                          statements=["SOFP", "SOPL"])
+    retry = _reopen_run_for_retry(session_id, None)
+    events = await _run_statements(session_env, {"SOFP": "succeeded"}, statements=["SOFP"],
+                                   retry=retry)
+
+    runs, agents, _ = _run_state(session_env)
+    assert runs[0]["status"] != "completed"
+    assert agents == [("SOFP", "succeeded"), ("SOPL", "failed")]
+    done = [e for e in events if e.get("event") == "run_complete"][-1]["data"]
+    assert done["statements_failed"] == ["SOPL"] and done["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_retry_that_stops_early_never_leaves_a_clean_or_running_run(session_env):
+    """The retried statement's earlier figures are cleared before the retry
+    runs. If the retry then stops, the run cannot keep a clean status, and it
+    must still end in a terminal one (invariant 10)."""
+    from api.run_control import _reopen_run_for_retry
+    from fastapi import HTTPException
+
+    session_id, _ = session_env
+    await _run_statements(session_env, {"SOFP": "succeeded", "SOPL": "succeeded"},
+                          statements=["SOFP", "SOPL"])
+    assert _run_state(session_env)[0][0]["status"] == "completed"
+    retry = _reopen_run_for_retry(session_id, None)
+    # A run that is already reopened cannot be retried a second time at once.
+    with pytest.raises(HTTPException) as busy:
+        _reopen_run_for_retry(session_id, None)
+    assert busy.value.status_code == 409
+
+    await _run_statements(session_env, {}, statements=["SOFP"], retry=retry,
+                          coordinator_error=RuntimeError("provider down"))
+
+    runs, agents, config = _run_state(session_env)
+    assert len(runs) == 1 and runs[0]["status"] == "failed"
+    # The run's own setup was never replaced by the one-statement request.
+    assert config["statements"] == ["SOFP", "SOPL"]
+    assert ("SOPL", "succeeded") in agents
+    assert all(status != "running" for _, status in agents)
+
+
+def test_a_retry_takes_each_notes_verdict_from_the_pass_that_covered_it(tmp_path):
+    """A verdict is replaced only by a pass that actually ran in the retry;
+    otherwise the recorded one stands. No record is never clean."""
+    from db import repository as repo
+    from db.schema import init_db
+    from server import _retry_notes_verdicts
+
+    db = tmp_path / "audit.db"
+    init_db(db)
+    clean = {"validator_failed": False, "notes_coverage_unresolved": False,
+             "notes_integrity_unresolved": False, "notes_formatting_incomplete": False,
+             "notes_cleanup_incomplete": False}
+    with repo.db_session(db) as conn:
+        run_id = repo.create_run(conn, pdf_filename="a.pdf", session_id="s", output_dir="/o")
+
+        def verdicts(**kwargs):
+            return _retry_notes_verdicts(conn, run_id, dict(clean), **kwargs)
+
+        whole_run = frozenset({"validator_failed", "notes_coverage_unresolved",
+                               "notes_integrity_unresolved"})
+        assert verdicts(repeated=frozenset(), run_has_notes=False) == (clean, False)
+        unknown, no_record = verdicts(repeated=frozenset(), run_has_notes=True)
+        assert no_record and unknown["notes_coverage_unresolved"] is True
+
+        repo.save_run_notes_verdicts(conn, run_id, {
+            **clean, "validator_failed": True, "notes_formatting_incomplete": True})
+        kept, no_record = verdicts(repeated=frozenset(), run_has_notes=True)
+        assert not no_record
+        assert kept["validator_failed"] and kept["notes_formatting_incomplete"]
+        cleared, _ = verdicts(repeated=whole_run, run_has_notes=True)
+        assert cleared["validator_failed"] is False
+        # Formatting was redone only for the retried sheet, so it stays.
+        assert cleared["notes_formatting_incomplete"] is True
+        # PR review: a numeric notes retry runs no prose review, so the
+        # earlier review finding must stand even though notes were retried.
+        numeric, _ = verdicts(repeated=frozenset({"notes_integrity_unresolved"}),
+                              run_has_notes=True)
+        assert numeric["validator_failed"] is True
