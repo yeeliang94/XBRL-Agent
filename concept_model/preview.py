@@ -1,9 +1,10 @@
 """Read-only projection of canonical facts for the legacy Data Preview tab."""
 from __future__ import annotations
-from utils.paths import safe_db_target, safe_path
+from utils.paths import safe_path
 
 import json
 import sqlite3
+from db import engine as db_engine
 from pathlib import Path
 from typing import Mapping
 
@@ -21,7 +22,7 @@ def build_preview_fields(
         return []
     template_ids = list(statements_by_template_id)
     placeholders = ",".join("?" for _ in template_ids)
-    conn = sqlite3.connect(safe_db_target(str(db_path)))
+    conn = db_engine.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
         from concept_model.periods import run_periods

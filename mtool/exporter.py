@@ -65,10 +65,9 @@ difference must be a narrow concept override and must be confirmed by the
 Windows acceptance run before it is enabled.
 """
 from __future__ import annotations
-from utils.paths import safe_db_target
 
 import json
-import sqlite3
+from db import engine as db_engine
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -147,7 +146,7 @@ def build_fill_doc(
         db_path, run_id,
         filing_standard=filing_standard, filing_level=filing_level)
     from concept_model.periods import run_periods
-    with sqlite3.connect(safe_db_target(str(db_path))) as conn:
+    with db_engine.connect(str(db_path)) as conn:
         periods = run_periods(conn, run_id)
         from concept_model.prior_year import is_preserved
         preserve_prior_year = is_preserved(conn, run_id)

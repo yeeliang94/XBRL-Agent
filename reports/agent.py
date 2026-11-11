@@ -8,7 +8,7 @@ from dataclasses import dataclass, field, replace
 import json
 import logging
 from pathlib import Path
-import sqlite3
+from db import engine as db_engine
 
 import fitz
 from pydantic import BaseModel, Field
@@ -168,7 +168,7 @@ def create_report_agent(model, deps: ReportDeps):
                     f"Permitted concept IDs (copy exactly): {json.dumps(permitted_concepts)}")
             if len({f.concept for f in captured}) != len(captured):
                 raise ValueError("Assess each field once within a call")
-            with closing(sqlite3.connect(ctx.deps.db_path)) as conn, conn:
+            with closing(db_engine.connect(ctx.deps.db_path)) as conn, conn:
                 conn.execute("PRAGMA busy_timeout=5000")
                 conn.execute("BEGIN IMMEDIATE")
                 for f in captured:
@@ -222,7 +222,7 @@ async def run_reports(config, requested, models, run_agent_ids, event_queue, ses
                                             turns=attempt_turns, runtime_metadata=runtime)
                         save_messages_trace(messages, config.output_dir, report,
                                             turns=attempt_turns, runtime_metadata=runtime)
-                with closing(sqlite3.connect(config.db_path)) as conn:
+                with closing(db_engine.connect(config.db_path)) as conn:
                     view = report_view(conn, config.run_id, report)
                     incomplete = [f for f in view["fields"] if f["value_status"] == "unresolved" or (f["kind"] == "html" and not f["value"])]
                     output = str(Path(config.output_dir) / f"{report}_filled.xlsx")
@@ -267,7 +267,7 @@ async def run_reports(config, requested, models, run_agent_ids, event_queue, ses
             logger.exception("Report extraction failed for %s", report)
             result.error = "Report extraction failed. Captured values are retained for review."
         finally:
-            with closing(sqlite3.connect(config.db_path)) as conn, conn:
+            with closing(db_engine.connect(config.db_path)) as conn, conn:
                 rai = run_agent_ids[report]
                 repo.insert_agent_turns(conn, rai, turns)
                 repo.finish_run_agent(conn, rai, result.status, workbook_path=result.workbook_path,
@@ -307,7 +307,7 @@ async def run_reports(config, requested, models, run_agent_ids, event_queue, ses
         if isinstance(outcome, BaseException):
             status = "cancelled" if isinstance(outcome, asyncio.CancelledError) else "failed"
             outcome = ReportResult(report, status, error="Report extraction did not finish. Review retained values.")
-            with closing(sqlite3.connect(config.db_path)) as conn, conn:
+            with closing(db_engine.connect(config.db_path)) as conn, conn:
                 repo.finish_run_agent(conn, run_agent_ids[report], status, error_message=outcome.error)
             task_registry.unregister(session_id, f"report:{report}".lower())
         results.append(outcome)

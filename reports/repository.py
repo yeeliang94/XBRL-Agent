@@ -1,12 +1,13 @@
 """Report values use registered canonical targets; narrative HTML stays in notes_cells."""
 from __future__ import annotations
-from utils.paths import safe_db_target, safe_path
+from utils.paths import safe_path
 
 from dataclasses import asdict
 from datetime import date, datetime, timezone
 import hashlib
 import json
 import sqlite3
+from db import engine as db_engine
 
 from db import repository as runs
 from notes.html_sanitize import sanitize_notes_html
@@ -167,7 +168,7 @@ def diagnostic_workbooks(db_path, run_id: int, output_dir) -> dict[str, str]:
     from pathlib import Path
     from contextlib import closing
     paths = {}
-    with closing(sqlite3.connect(safe_db_target(db_path))) as conn:
+    with closing(db_engine.connect(db_path)) as conn:
         for (report,) in conn.execute("SELECT DISTINCT report_type FROM report_fields WHERE run_id=?", (run_id,)).fetchall():
             path = str(Path(output_dir) / f"{report}_filled.xlsx")
             export_internal(conn, run_id, report, path)

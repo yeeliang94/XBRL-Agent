@@ -20,10 +20,10 @@ matrix (SOCIE) templates write per-cell targets inline during import.
 The exporter no longer falls back to ``concept_nodes.render_*``.
 """
 from __future__ import annotations
-from utils.paths import safe_db_target, safe_path
+from utils.paths import safe_path
 
 import json
-import sqlite3
+from db import engine as db_engine
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -53,7 +53,7 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
     shape: str = payload.get("shape", "linear")
     is_matrix = shape == "matrix"
 
-    conn = sqlite3.connect(safe_db_target(str(db_path)))
+    conn = db_engine.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     # Self-referencing concept_nodes.parent_uuid can point at a sibling
     # that arrives later in iteration order (e.g. dedup picks the sub-
@@ -423,7 +423,7 @@ def import_company_targets(db_path: str | Path, template_id: str) -> int:
     Skips ABSTRACT concepts (never written) and SOCIE (matrix — its
     per-cell targets are written inline by :func:`import_template`).
     """
-    conn = sqlite3.connect(safe_db_target(str(db_path)))
+    conn = db_engine.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     try:
         template = conn.execute(
@@ -496,7 +496,7 @@ def import_group_targets(db_path: str | Path, template_id: str) -> int:
     Skips ABSTRACT concepts — they're never written to, so they don't
     need per-scope render coordinates.
     """
-    conn = sqlite3.connect(safe_db_target(str(db_path)))
+    conn = db_engine.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     try:
         template = conn.execute(

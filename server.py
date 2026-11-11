@@ -7,7 +7,8 @@ Run mode: POST /api/run/{session_id} with RunConfigRequest body.
 Orchestrates N sub-agents via coordinator, merges workbooks, runs
 cross-checks, and persists results to SQLite audit DB.
 """
-from utils.paths import safe_db_target, safe_entry_path, safe_path
+from db import engine as db_engine
+from utils.paths import safe_entry_path, safe_path
 # Force UTF-8 on Windows (avoids charmap codec errors with Unicode text from PDFs)
 import sys
 if sys.platform == "win32":
@@ -284,9 +285,8 @@ def _run_has_facts(db_path, run_id: int) -> Optional[bool]:
     and left untouched. A failed probe is not evidence of zero facts: callers
     must attempt the export so any failure surfaces artifact degradation.
     """
-    import sqlite3
     try:
-        conn = sqlite3.connect(safe_db_target(str(db_path)))
+        conn = db_engine.connect(str(db_path))
         try:
             return conn.execute(
                 "SELECT 1 FROM run_concept_facts WHERE run_id = ? LIMIT 1",
@@ -921,9 +921,8 @@ def _open_conflict_count(db_path, run_id) -> int:
     human needs to reconcile, which flips the run to completed_with_errors
     (peer-review finding 4 / Phase E).
     """
-    import sqlite3
     try:
-        conn = sqlite3.connect(safe_db_target(str(db_path)))
+        conn = db_engine.connect(str(db_path))
         try:
             return conn.execute(
                 "SELECT COUNT(*) FROM run_concept_conflicts "
@@ -1670,9 +1669,8 @@ async def _run_reviewer_pass(
     # existing extraction, not bootstrap one from nothing — so refuse rather
     # than make non-revertible writes (peer-review P1). Re-run extraction
     # first. Checked BEFORE snapshotting so we never write a 0-row snapshot.
-    import sqlite3 as _sqlite3_count
     try:
-        _cc = _sqlite3_count.connect(safe_db_target(str(db_path)))
+        _cc = db_engine.connect(str(db_path))
         try:
             _fact_count = _cc.execute(
                 "SELECT COUNT(*) FROM run_concept_facts WHERE run_id = ?",
@@ -1732,7 +1730,7 @@ async def _run_reviewer_pass(
     # Falls back to the PDF's parent (pdf_path is {output_dir}/uploaded.pdf).
     _review_out_dir: Optional[str] = None
     try:
-        _cc2 = _sqlite3_count.connect(safe_db_target(str(db_path)))
+        _cc2 = db_engine.connect(str(db_path))
         try:
             _row = _cc2.execute(
                 "SELECT output_dir FROM runs WHERE id = ?", (run_id,),
@@ -4449,14 +4447,13 @@ def _run_notes_numeric_footing(run_id: int, filing_level: str,
     Reads the run's facts, never writes. Infrastructure trouble is an
     incomplete assessment warning, never a successful empty result.
     """
-    import sqlite3
     from cross_checks.framework import CrossCheckResult
     try:
         from cross_checks.notes_numeric_footing import (
             TOLERANCE, check_notes_numeric_footing,
         )
         import server as _self
-        with sqlite3.connect(safe_db_target(str(_self.AUDIT_DB_PATH))) as conn:
+        with db_engine.connect(str(_self.AUDIT_DB_PATH)) as conn:
             findings = check_notes_numeric_footing(
                 conn, run_id, filing_level, filing_standard)
     except Exception:  # noqa: BLE001 — advisory, never fail a run
@@ -5459,7 +5456,7 @@ async def run_multi_agent_stream(
         return make(conn, run_id_, **fields)
     notes_review_finalize_gate: Optional[asyncio.Event] = None
     try:
-        db_conn = sqlite3.connect(safe_db_target(str(AUDIT_DB_PATH)))
+        db_conn = db_engine.connect(str(AUDIT_DB_PATH))
         db_conn.execute("PRAGMA foreign_keys = ON")
         db_conn.execute("PRAGMA journal_mode = WAL")
         db_conn.execute("PRAGMA busy_timeout = 5000")
@@ -8979,7 +8976,7 @@ def _open_audit_conn():
     # Concurrent first readers must not race the rollback-journal to WAL
     # transition. The lock covers setup only, not queries or transactions.
     with _audit_connection_init_lock:
-        conn = sqlite3.connect(safe_db_target(str(AUDIT_DB_PATH)))
+        conn = db_engine.connect(str(AUDIT_DB_PATH))
         try:
             conn.execute("PRAGMA busy_timeout = 5000")
             conn.execute("PRAGMA foreign_keys = ON")
@@ -9001,7 +8998,7 @@ def _open_audit_conn():
         from db.schema import init_db
         init_db(AUDIT_DB_PATH)
         with _audit_connection_init_lock:
-            conn = sqlite3.connect(safe_db_target(str(AUDIT_DB_PATH)))
+            conn = db_engine.connect(str(AUDIT_DB_PATH))
             try:
                 conn.execute("PRAGMA busy_timeout = 5000")
                 conn.execute("PRAGMA foreign_keys = ON")

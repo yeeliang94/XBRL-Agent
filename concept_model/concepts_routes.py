@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from db import engine as db_engine
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -42,7 +43,7 @@ class ConflictResolution(BaseModel):
 
 def register_concept_routes(app, audit_db_getter) -> None:
     def _conn():
-        c = sqlite3.connect(str(audit_db_getter()))
+        c = db_engine.connect(str(audit_db_getter()))
         c.execute("PRAGMA foreign_keys = ON")
         c.row_factory = sqlite3.Row
         return c

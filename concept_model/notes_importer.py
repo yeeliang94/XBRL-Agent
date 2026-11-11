@@ -8,9 +8,8 @@ when a relabelled row mints a new ``node_uuid``). Idempotent: re-importing the
 same template yields the same rows.
 """
 from __future__ import annotations
-from utils.paths import safe_db_target
 
-import sqlite3
+from db import engine as db_engine
 from pathlib import Path
 from typing import Sequence
 
@@ -27,7 +26,7 @@ def import_notes_template(
     failure mid-write leaves the prior rows intact rather than a half-swept
     template.
     """
-    conn = sqlite3.connect(safe_db_target(str(db_path)))
+    conn = db_engine.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("BEGIN")
     try:

@@ -15,9 +15,9 @@ not a prohibition on preparing a workbook. No override reason is required.
 Pure reads; no writes, no schema of its own.
 """
 from __future__ import annotations
-from utils.paths import safe_db_target
 
 import sqlite3
+from db import engine as db_engine
 from pathlib import Path
 from typing import Any
 
@@ -201,7 +201,7 @@ def evaluate_preflight(
     Messages are written for the operator, not the log.
     """
     family_prefix = f"{filing_standard.lower()}-{filing_level.lower()}-"
-    conn = sqlite3.connect(safe_db_target(str(db_path)))
+    conn = db_engine.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
         if conflicts is None:

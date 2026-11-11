@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from db import engine as db_engine
+
 import openpyxl
 from openpyxl.formula.tokenizer import Tokenizer
 
@@ -1002,14 +1004,12 @@ def verify_statement(
         _fact_based_verify_enabled()
         and db_path and run_id is not None and template_id
     ):
-        import sqlite3
-
         from concept_model.cascade import recompute_after_turn
         from tools.verifier_facts import verify_statement_facts
 
         # Q4 (recompute on entry) — totals fresh regardless of tool ordering.
         recompute_after_turn(db_path, run_id)
-        conn = sqlite3.connect(db_path)
+        conn = db_engine.connect(db_path)
         # Shared run DB: concurrent agents may be committing project_writes
         # while this read runs — give it the same 5000ms retry window the
         # writers use instead of failing on an immediate lock (see cascade).
