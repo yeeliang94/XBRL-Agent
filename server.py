@@ -3794,6 +3794,29 @@ def _retry_missing_source_blocks(
         conn.close()
 
 
+NOTES_INTEGRITY_DETAIL_LIMIT = 25
+
+
+def _notes_integrity_details(outcome: Optional[dict], error: Optional[str]) -> list[str]:
+    """Why completeness stayed unresolved, for the workstream's Technical detail.
+
+    A crash, a check that never ran and real gaps share one headline, so the
+    recorded detail is what tells them apart.
+    """
+    if error:
+        return [f"The completeness check stopped with an error: {error}"]
+    if outcome is None:
+        return ["The completeness check did not run, so no result was recorded."]
+    findings = [f for f in outcome.get("findings") or [] if f.get("severity") == "unresolved"]
+    if not findings:
+        return ["The check asked for review but recorded no individual finding."]
+    details = [f"{len(findings)} unresolved finding(s)."]
+    details += [f"{f.get('check')}: {f.get('message')}" for f in findings[:NOTES_INTEGRITY_DETAIL_LIMIT]]
+    if len(findings) > NOTES_INTEGRITY_DETAIL_LIMIT:
+        details.append(f"{len(findings) - NOTES_INTEGRITY_DETAIL_LIMIT} more not shown.")
+    return details
+
+
 def _notes_integrity_tips_status(outcome: Optional[dict]) -> bool:
     """Whether the integrity verdict tips the run to
     ``completed_with_errors``. Only ever true in `enforce` — `shadow` records
@@ -8134,6 +8157,7 @@ async def run_multi_agent_stream(
                     yield event
                 except (asyncio.CancelledError, GeneratorExit):
                     client_connected = False
+        notes_integrity_error: Optional[str] = None
         try:
             notes_integrity_outcome = await asyncio.to_thread(
                 _run_notes_integrity_check,
@@ -8157,13 +8181,14 @@ async def run_multi_agent_stream(
             # Remaining gaps belong to the draft's review list. The first notes
             # review already saw source findings; do not repeat a full paid pass.
 
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Notes integrity check failed; the run keeps its other "
                 "outcomes and reports no verdict",
                 exc_info=True, extra={"session_id": session_id},
             )
             notes_integrity_outcome = None
+            notes_integrity_error = f"{type(exc).__name__}: {exc}"
         if notes_result is not None:
             if notes_source_generation_id is None:
                 _emit_stage("checking_notes", status="skipped",
@@ -8179,7 +8204,8 @@ async def run_multi_agent_stream(
                     message=integrity_message)
                 if integrity_incomplete:
                     _enqueue_system_error({"type": "notes_integrity_incomplete", "phase": "checking_notes",
-                        "message": integrity_message})
+                        "message": integrity_message,
+                        "details": _notes_integrity_details(notes_integrity_outcome, notes_integrity_error)})
 
         notes_formatting_incomplete = False
         # PDF styling checks final content/table geometry against the source.

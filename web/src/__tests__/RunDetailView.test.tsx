@@ -1162,6 +1162,75 @@ describe("RunDetailView", () => {
     expect(within(screen.getByRole("list", { name: "Activity updates" })).getByText("Checked four note sections.")).toBeVisible();
   });
 
+  test.each([
+    [["2 unresolved finding(s).", "placement: block b4 lost"], ["2 unresolved finding(s).", "placement: block b4 lost"]],
+    [undefined, ["No further detail was recorded for this step."]],
+  ])("failed notes completeness explains itself behind Technical detail", (details, shown) => {
+    render(<RunDetailView detail={makeDetail({ status: "completed_with_errors", agents: [makeAgent()], run_events: [
+      { event: "pipeline_stage", data: { stage: "checking_notes", status: "failed", message: "Source completeness remains unresolved." }, timestamp: 1 },
+      { event: "error", data: { type: "notes_integrity_incomplete", message: "Source completeness remains unresolved.", details }, timestamp: 2 },
+    ] })} onDelete={vi.fn()} />);
+    clickRunTab(/^activity$/i);
+    fireEvent.click(within(screen.getByRole("tablist", { name: "Run workstreams" })).getByRole("tab", { name: /Notes completeness/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Technical detail" }));
+    for (const line of shown) expect(within(screen.getByTestId("activity-technical")).getByText(line)).toBeVisible();
+  });
+
+  test.each([
+    ["succeeded", null],
+    ["failed", "Second attempt reason"],
+  ])("a retried completeness check shows only the latest attempt's reasons (%s)", (secondStatus, secondReason) => {
+    const message = "Source completeness remains unresolved.";
+    render(<RunDetailView detail={makeDetail({ status: "completed_with_errors", agents: [makeAgent()], run_events: [
+      { event: "pipeline_stage", data: { stage: "checking_notes", message: "Checking." }, timestamp: 1 },
+      { event: "pipeline_stage", data: { stage: "checking_notes", status: "failed", message }, timestamp: 2 },
+      { event: "error", data: { type: "notes_integrity_incomplete", message, details: ["First attempt reason"] }, timestamp: 3 },
+      { event: "pipeline_stage", data: { stage: "checking_notes", message: "Checking." }, timestamp: 4 },
+      { event: "pipeline_stage", data: { stage: "checking_notes", status: secondStatus, message: secondReason ? message : "Checked." }, timestamp: 5 },
+      ...(secondReason ? [{ event: "error", data: { type: "notes_integrity_incomplete", message, details: [secondReason] }, timestamp: 6 }] : []),
+    ] })} onDelete={vi.fn()} />);
+    clickRunTab(/^activity$/i);
+    fireEvent.click(within(screen.getByRole("tablist", { name: "Run workstreams" })).getByRole("tab", { name: /Notes completeness/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Technical detail" }));
+    const technical = within(screen.getByTestId("activity-technical"));
+    expect(technical.queryByText("First attempt reason")).toBeNull();
+    if (secondReason) expect(technical.getByText(secondReason)).toBeVisible();
+  });
+
+  test("a rerun's cleanup replaces the earlier cleanup in saved activity", () => {
+    render(<RunDetailView detail={makeDetail({ agents: [
+      makeAgent({ id: 7, statement_type: "NOTES_CLEANUP", variant: null, status: "completed", started_at: "2026-11-10T09:00:00Z" }),
+      makeAgent({ id: 9, statement_type: "NOTES_CLEANUP", variant: null, status: "failed", started_at: "2026-11-10T10:00:00Z" }),
+    ] })} onDelete={vi.fn()} />);
+    clickRunTab(/^activity$/i);
+    const cleanup = within(screen.getByRole("tablist", { name: "Run workstreams" })).getAllByRole("tab", { name: /Notes cleanup/ });
+    expect(cleanup).toHaveLength(1);
+    expect(cleanup[0]).toHaveTextContent("Failed");
+  });
+
+  test("AI review shows its first check and focused investigation separately", () => {
+    const status = (message: string, phase: string, timestamp: number) =>
+      ({ event: "status", data: { phase, message }, timestamp }) as RunAgentJson["events"][number];
+    render(<RunDetailView detail={makeDetail({ agents: [makeAgent({ statement_type: "CORRECTION", variant: null, status: "completed", events: [
+      // An earlier attempt on the same record: only the latest is split.
+      status("Earlier triage", "triage_started", 0),
+      status("Earlier handoff", "triage_handoff", 0.5),
+      status("Sampling high-value figures", "started", 1),
+      status("AI triage found 1 item(s) for focused investigation.", "triage_handoff", 2),
+      status("AI review is investigating the triage findings against the PDF.", "investigation_started", 3),
+    ] })] })} onDelete={vi.fn()} />);
+    clickRunTab(/^activity$/i);
+    const passes = screen.getByRole("tablist", { name: "AI review passes" });
+    const updates = () => within(screen.getByRole("list", { name: "Activity updates" }));
+    fireEvent.click(within(passes).getByRole("tab", { name: "First check" }));
+    expect(updates().getByText("Sampling high-value figures.")).toBeVisible();
+    expect(updates().queryByText("AI review is investigating the triage findings against the PDF.")).toBeNull();
+    fireEvent.click(within(passes).getByRole("tab", { name: "Focused investigation" }));
+    expect(updates().getByText("AI review is investigating the triage findings against the PDF.")).toBeVisible();
+    expect(updates().queryByText("Sampling high-value figures.")).toBeNull();
+    expect(updates().queryByText("Earlier handoff.")).toBeNull();
+  });
+
   // Phase 9.3: legacy runs have no config AND (often) no agents. The
   // view must not crash and must still report status.
   test("legacy run with no agents and null config explains its limited details", () => {

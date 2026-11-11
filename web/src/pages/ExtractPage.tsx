@@ -7,6 +7,7 @@ import type { AppState, AppAction } from "../lib/appReducer";
 import { notesTabLabel, agentSubAgentSummary } from "../lib/appReducer";
 import { fetchRunDetail, getResultJson, getExtendedSettings } from "../lib/api";
 import { PageHeader } from "../components/PageHeader";
+import { Disclosure } from "../components/Disclosure";
 import { DocumentPreparation } from "../components/DocumentPreparation";
 import { UploadPanel } from "../components/UploadPanel";
 import { PreRunPanel } from "../components/PreRunPanel";
@@ -19,6 +20,7 @@ import { AgentWorkspace } from "../components/AgentWorkspace";
 import type { AgentTabState } from "../components/AgentTabs";
 import { ValidatorTab } from "../components/ValidatorTab";
 import { NotesSubTabBar } from "../components/NotesSubTabBar";
+import { filterReviewerPass, reviewerPassRanges } from "../lib/reviewerPasses";
 import { FormatterSubAgentActivity } from "../components/FormatterSubAgentActivity";
 import { deriveFormatterSheets, formatterProgressSummary, formatterRunningParts } from "../lib/formatterSubAgents";
 import { notesSheetDisplayName } from "../lib/sheetLabels";
@@ -34,7 +36,7 @@ import { isCompletedWorkstream, workstreamStatusLabel } from "../lib/workstreamS
 
 /** How long the prepared outcome shows before Filing setup opens. */
 const SETUP_HANDOFF_MS = 1200;
-import { notesFormattingActivity, notesCleanupActivity, notesIntegrityActivity } from "../lib/notesFormattingActivity";
+import { latestStageDetails, notesFormattingActivity, notesCleanupActivity, notesIntegrityActivity } from "../lib/notesFormattingActivity";
 
 // Re-export so existing callers / tests that imported NOTES_12_AGENT_ID
 // from ExtractPage keep working. The single source of truth lives in
@@ -803,11 +805,16 @@ export function ActiveTabPanel({
   // couple of wasted array references — cheap, and the values are
   // simply ignored because the early return below doesn't use them.
   const activeAgent = state.activeTab ? state.agents[state.activeTab] : null;
-  const subAgents =
+  // AI review's first check and focused investigation share the same chips.
+  const isReviewer = activeAgent?.role === "CORRECTION";
+  const subAgents = useMemo(() => (
     isNotes12AgentId(state.activeTab) && activeAgent?.subAgentBatchRanges
       ? activeAgent.subAgentBatchRanges
-      : [];
+      : isReviewer && activeAgent ? reviewerPassRanges(activeAgent.events) : []
+  ), [state.activeTab, activeAgent, isReviewer]);
   const showSubTabs = subAgents.length > 0;
+  // A selection made on another workstream does not apply here.
+  const activeSubId = subAgents.some((sub) => sub.subAgentId === notes12SubId) ? notes12SubId : null;
   const rawEvents = activeAgent ? activeAgent.events : state.events;
   const running = activeAgent ? activeAgent.status === "running" : state.isRunning;
   const aggregateTimeline = activeAgent ? activeAgent.toolTimeline : state.toolTimeline;
@@ -818,8 +825,9 @@ export function ActiveTabPanel({
   // agents). For the "All" view we reuse the pre-computed aggregate
   // timeline and skip the rebuild entirely.
   const { events, toolTimeline, reasoningBlocks } = useMemo(() => {
-    if (showSubTabs && notes12SubId !== null) {
-      const filtered = filterEventsBySubAgent(rawEvents, notes12SubId);
+    if (showSubTabs && activeSubId !== null) {
+      const filtered = isReviewer ? filterReviewerPass(rawEvents, activeSubId)
+        : filterEventsBySubAgent(rawEvents, activeSubId);
       return {
         events: filtered,
         toolTimeline: buildToolTimeline(filtered),
@@ -831,7 +839,7 @@ export function ActiveTabPanel({
       toolTimeline: aggregateTimeline,
       reasoningBlocks: aggregateReasoning,
     };
-  }, [rawEvents, notes12SubId, showSubTabs, aggregateTimeline, aggregateReasoning]);
+  }, [rawEvents, activeSubId, isReviewer, showSubTabs, aggregateTimeline, aggregateReasoning]);
   if (state.activeTab === "notes-formatting" || state.activeTab === "notes-cleanup" || state.activeTab === "notes-integrity") {
     const isCleanup = state.activeTab === "notes-cleanup";
     const label = state.activeTab === "notes-integrity" ? "Notes completeness" : isCleanup ? "Notes cleanup" : "Notes formatting";
@@ -849,6 +857,12 @@ export function ActiveTabPanel({
     const incomplete = [...state.events].reverse().find((event) =>
       event.event === "error" && event.data.type === "notes_formatting_incomplete");
     const outcomes = incomplete?.event === "error" ? incomplete.data.sheets : undefined;
+    const stageErrorType = state.activeTab === "notes-integrity" ? "notes_integrity_incomplete"
+      : isCleanup ? "notes_cleanup_incomplete" : "notes_formatting_incomplete";
+    const stageName = state.activeTab === "notes-integrity" ? "checking_notes"
+      : isCleanup ? "cleaning_notes" : "formatting_notes";
+    const stageDetails = formatting.status === "failed"
+      ? latestStageDetails(state.events, stageName, stageErrorType) : [];
     let stageMessages: string[] = [];
     if (!bySheet) stageMessages = [message];
     else if (formatting.status === "failed") {
@@ -893,6 +907,13 @@ export function ActiveTabPanel({
             </div>
           )}
         </div>}
+        {stageDetails.length > 0 && (
+          <Disclosure summary="Technical detail" style={{ padding: `0 ${ds.space.lg}px ${ds.space.lg}px` }}>
+            <ul aria-label="Recorded reasons" style={{ margin: 0, paddingLeft: ds.space.lg, display: "grid", gap: ds.space.sm, fontSize: 13, color: ds.grey700 }}>
+              {stageDetails.map((detail, index) => <li key={index}>{detail}</li>)}
+            </ul>
+          </Disclosure>
+        )}
         {bySheet && (
           <FormatterSubAgentActivity events={formatterEvents} status={formatting.status} />
         )}
@@ -1039,8 +1060,9 @@ export function ActiveTabPanel({
       {showSubTabs && (
         <NotesSubTabBar
           subAgents={subAgents}
-          activeSubId={notes12SubId}
+          activeSubId={activeSubId}
           onSelect={setNotes12SubId}
+          ariaLabel={isReviewer ? "AI review passes" : undefined}
         />
       )}
       <ActivityStream
@@ -1049,7 +1071,7 @@ export function ActiveTabPanel({
         reasoningBlocks={reasoningBlocks}
         isRunning={running}
         status={activeAgent?.status}
-        streamKey={`${state.activeTab ?? "run"}:${notes12SubId ?? "all"}`}
+        streamKey={`${state.activeTab ?? "run"}:${activeSubId ?? "all"}`}
         technical={
           <>
             <AgentTimeline events={events} toolTimeline={toolTimeline}

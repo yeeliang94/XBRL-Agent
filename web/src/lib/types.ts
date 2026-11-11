@@ -228,6 +228,8 @@ export interface ErrorData {
   /** Per-sheet outcomes on notes_formatting_incomplete. */
   sheets?: Record<string, { ok?: boolean; skipped?: boolean; error?: string | null; summary?: string | null }>;
   traceback?: string;
+  /** Recorded reasons behind a notes stage failure, shown in Technical detail. */
+  details?: string[];
   /** Discriminator for coordinator/sub-pass error shapes (`merge_failed`,
    *  `cross_check_exception`, `canonical_reexport_failed`,
    *  `canonical_export_degraded`, `reviewer_*`, `validator_*`). Absent on

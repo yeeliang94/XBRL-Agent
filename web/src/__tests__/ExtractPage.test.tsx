@@ -448,6 +448,23 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(within(screen.getByRole("tabpanel", { name: `${label} activity` })).getByText(`${label}: 2 of 3 sections complete`)).toBeInTheDocument();
   });
 
+  test("failed completeness keeps its recorded reasons behind Technical detail", () => {
+    const message = "Source completeness remains unresolved. Review the notes findings.";
+    render(<ExtractPage {...makeProps({state: {
+      sessionId: "test", filename: "test.pdf", isRunning: false, isComplete: true, pipelineStage: "done",
+      agents: {sofp_0: createAgentState("sofp_0", "SOFP", "SOFP")}, agentTabOrder: ["sofp_0"],
+      activeTab: "notes-integrity", notesInRun: ["CORP_INFO"],
+      events: [
+        {event: "pipeline_stage", timestamp: 1, data: {stage: "checking_notes", started_at: 1, status: "failed", message}},
+        {event: "error", timestamp: 2, data: {type: "notes_integrity_incomplete", message,
+          details: ["The completeness check stopped with an error: KeyError: 'b12'"]}},
+      ],
+    }})} />);
+    const panel = within(screen.getByRole("tabpanel", {name: "Notes completeness activity"}));
+    fireEvent.click(panel.getByRole("button", {name: "Technical detail"}));
+    expect(panel.getByText("The completeness check stopped with an error: KeyError: 'b12'")).toBeVisible();
+  });
+
   test("no-op cleanup remains visibly complete after the run finishes", () => {
     const message = "Notes cleanup complete: 0 banners or repeated headings removed.";
     render(<ExtractPage {...makeProps({state: {

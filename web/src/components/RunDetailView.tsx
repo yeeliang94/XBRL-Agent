@@ -12,7 +12,7 @@ import { agentStatusDisplay, STATUS_SYMBOLS } from "../lib/runStatus";
 import { errorGuidance } from "../lib/errorGuidance";
 import { StatusIcon } from "./StatusIcon";
 import { ArrowForward } from "./iconGlyphs";
-import type { RunDetailJson, RunAgentJson, CrossCheckResult, ErrorData } from "../lib/types";
+import type { RunDetailJson, RunAgentJson, CrossCheckResult, ErrorData, PipelineStageData } from "../lib/types";
 import { STATEMENT_LABELS, STATEMENT_TYPES, NOTES_TEMPLATE_TYPES, REPORT_TYPES, isReportType } from "../lib/types";
 import { userMessage } from "../lib/errors";
 import { AgentTelemetryPanel } from "./AgentTelemetryPanel";
@@ -25,8 +25,9 @@ import { getHumanFile, type HumanFileRecord } from "../lib/humanFile";
 import type { Denomination } from "../lib/types";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { AgentWorkspace } from "./AgentWorkspace";
-import { notesFormattingActivity, notesCleanupActivity, notesIntegrityActivity } from "../lib/notesFormattingActivity";
+import { latestStageDetails, notesFormattingActivity, notesCleanupActivity, notesIntegrityActivity } from "../lib/notesFormattingActivity";
 import { ActivityStream } from "./ActivityStream";
+import { filterReviewerPass, reviewerPassRanges } from "../lib/reviewerPasses";
 import type { AgentTabState } from "./AgentTabs";
 import { workstreamTitle } from "./AgentTabs";
 import type { AgentTabStatus } from "../lib/types";
@@ -322,9 +323,12 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
   // the O(N) walk doesn't re-run on unrelated parent rerenders (e.g.
   // paging through the history list with this card still mounted).
   const isNotes12 = isNotes12StatementType(agent.statement_type);
+  // AI review's first check and focused investigation get the same chips.
+  const isReviewer = agent.statement_type === "CORRECTION";
   const subAgents = useMemo(
-    () => (isNotes12 ? deriveSubAgentRangesFromEvents(agent.events) : []),
-    [isNotes12, agent.events],
+    () => (isNotes12 ? deriveSubAgentRangesFromEvents(agent.events)
+      : isReviewer ? reviewerPassRanges(agent.events) : []),
+    [isNotes12, isReviewer, agent.events],
   );
   const showSubTabs = subAgents.length > 0;
 
@@ -333,7 +337,8 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
   // subs is the only trigger that rebuilds the timeline.
   const { events, toolTimeline, reasoningBlocks } = useMemo(() => {
     if (showSubTabs && notes12SubId !== null) {
-      const filtered = filterEventsBySubAgent(agent.events, notes12SubId);
+      const filtered = isReviewer ? filterReviewerPass(agent.events, notes12SubId)
+        : filterEventsBySubAgent(agent.events, notes12SubId);
       return {
         events: filtered,
         toolTimeline: buildToolTimeline(filtered),
@@ -345,7 +350,7 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
       toolTimeline: buildToolTimeline(agent.events),
       reasoningBlocks: technicalOpen ? buildReasoningTimeline(agent.events) : [],
     };
-  }, [agent.events, notes12SubId, showSubTabs, technicalOpen]);
+  }, [agent.events, notes12SubId, showSubTabs, technicalOpen, isReviewer]);
 
   // Formatter passes saved their own steps (one run_agents row per sheet or
   // table group). Older runs have none and keep the stage-message stream.
@@ -367,6 +372,22 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
   const showErrorDetail = Boolean(agent.error_message) && !formatterFailureReported
     && (agent.statement_type !== "CORRECTION" || agent.error_message !== updates[0]);
   const agentEnded = ["failed", "cancelled", "aborted"].includes(agent.status);
+  // Model-free notes stages (completeness, cleanup) carry their reasons on
+  // the stage error rather than in AI steps.
+  const stageKind = NOTES_STAGE_KINDS[agent.statement_type];
+  const recordedDetails = stageKind && agent.status === "failed"
+    ? latestStageDetails(agent.events, stageKind[0], stageKind[1]) : [];
+  const technicalMeta = [
+    formatAgentDuration(agent),
+    sourceReference,
+    displayModelId(agent.model),
+    agent.token_breakdown ? `${agent.token_breakdown.turn_count} turns` : null,
+    agent.token_breakdown ? `${agent.token_breakdown.tool_call_count} tool calls` : null,
+    agent.total_tokens != null ? `${agent.total_tokens.toLocaleString()} tokens` : null,
+    agent.total_cost != null ? formatCost(agent.total_cost) : null,
+  ].filter((part) => part && part !== "—").join(" · ");
+  const technicalEmpty = !technicalMeta && recordedDetails.length === 0
+    && toolTimeline.length === 0 && reasoningBlocks.length === 0 && !(showErrorDetail && !agentEnded);
 
   return (
     <article role="tabpanel" id={panelId} aria-labelledby={tabId} data-testid="run-detail-agent" className="app-view-enter" style={styles.agentDetail}>
@@ -416,7 +437,8 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
       {!showFormatterSubAgents && formattingSheets.size > 0 && <ul aria-label="Notes formatting by sheet">
         {[...formattingSheets].map(([sheet, message]) => <li key={sheet}>{notesSheetDisplayName(sheet)} · {message}</li>)}
       </ul>}
-      {showSubTabs && <NotesSubTabBar subAgents={subAgents} activeSubId={notes12SubId} onSelect={setNotes12SubId} />}
+      {showSubTabs && <NotesSubTabBar subAgents={subAgents} activeSubId={notes12SubId} onSelect={setNotes12SubId}
+        ariaLabel={isReviewer ? "AI review passes" : undefined} />}
       {showFormatterSubAgents ? <FormatterSubAgentActivity events={formatterEvents}
         status={savedAgentStatus(agent.status)} recorded={agent.status !== "running"}
         technical={(sheet) => <FormattingCallsDetail calls={sheet === null ? formattingCalls
@@ -425,17 +447,11 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
         recorded={agent.status !== "running"} streamKey={`${agent.id}:${notes12SubId ?? "all"}`}
         onTechnicalChange={setTechnicalOpen}
         technical={technicalOpen ? <div style={styles.agentBody}>
-          <div style={styles.agentMetaRow}>
-            {[
-              formatAgentDuration(agent),
-              sourceReference,
-              displayModelId(agent.model),
-              agent.token_breakdown ? `${agent.token_breakdown.turn_count} turns` : null,
-              agent.token_breakdown ? `${agent.token_breakdown.tool_call_count} tool calls` : null,
-              agent.total_tokens != null ? `${agent.total_tokens.toLocaleString()} tokens` : null,
-              agent.total_cost != null ? formatCost(agent.total_cost) : null,
-            ].filter(Boolean).join(" · ")}
-          </div>
+          {technicalMeta && <div style={styles.agentMetaRow}>{technicalMeta}</div>}
+          {technicalEmpty && <div style={styles.agentMetaRow}>No further detail was recorded for this step.</div>}
+          {recordedDetails.length > 0 && <ul aria-label="Recorded reasons" style={styles.formattingCalls}>
+            {recordedDetails.map((detail, index) => <li key={index}>{detail}</li>)}
+          </ul>}
           {showErrorDetail && !agentEnded && (
             <div data-testid="agent-error-message" style={styles.agentErrorMessage}>
               <span style={styles.agentErrorLabel}>Recorded detail</span>
@@ -528,6 +544,13 @@ function savedPreparationEvents(detail: RunDetailJson, agent: RunAgentJson): Run
   return events;
 }
 
+/** Each model-free notes stage: its pipeline stage and its failure type. */
+const NOTES_STAGE_KINDS: Record<string, [PipelineStageData["stage"], string]> = {
+  NOTES_FORMATTING: ["formatting_notes", "notes_formatting_incomplete"],
+  NOTES_CLEANUP: ["cleaning_notes", "notes_cleanup_incomplete"],
+  NOTES_INTEGRITY: ["checking_notes", "notes_integrity_incomplete"],
+};
+
 function observedStageAgents(detail: RunDetailJson): RunAgentJson[] {
   // Only observed stages become workstreams; a terminal parent alone never
   // invents success. Normalize the durable envelope at this boundary.
@@ -548,6 +571,8 @@ function observedStageAgents(detail: RunDetailJson): RunAgentJson[] {
         message: event.data.message, type: typeof event.data.type === "string" ? event.data.type : undefined,
         sheets: typeof event.data.sheets === "object" && event.data.sheets !== null
           ? event.data.sheets as ErrorData["sheets"] : undefined,
+        details: Array.isArray(event.data.details)
+          ? event.data.details.filter((item): item is string => typeof item === "string") : undefined,
       } });
     }
   }
@@ -566,7 +591,7 @@ function observedStageAgents(detail: RunDetailJson): RunAgentJson[] {
       status: outcome.status === "complete" ? "completed" : outcome.status,
       started_at: null, ended_at: null, workbook_path: null, total_tokens: null, total_cost: null,
       events: events.filter((event) => (event.event === "pipeline_stage" && event.data.stage === stage)
-        || (event.event === "error" && event.data.type === (type === "NOTES_FORMATTING" ? "notes_formatting_incomplete" : type === "NOTES_INTEGRITY" ? "notes_integrity_incomplete" : "notes_cleanup_incomplete"))),
+        || (event.event === "error" && event.data.type === NOTES_STAGE_KINDS[type][1])),
       error_message: outcome.status === "failed" ? outcome.message : null,
     });
   }
@@ -648,7 +673,15 @@ function SavedAgentWorkspace({ detail, filingStandard, onRetry, retryPending }: 
           error_type: failedCall?.error_type ?? null, error_message: failedCall?.error_message ?? null,
           events: [...calls.flatMap((agent) => agent.events), currentEvent] });
       }
-      return [...detail.agents.filter((agent) => agent.statement_type !== "NOTES_FORMATTING").map((agent) => {
+      // A workstream retry reruns the run's final steps, so cleanup can leave
+      // one record per pass. Only the latest pass describes the saved notes.
+      const cleanupRows = detail.agents.filter((agent) => agent.statement_type === "NOTES_CLEANUP");
+      const latestCleanup = cleanupRows.reduce<RunAgentJson | undefined>((latest, agent) => !latest
+        || (Date.parse(agent.started_at ?? "") || 0) > (Date.parse(latest.started_at ?? "") || 0)
+        || ((Date.parse(agent.started_at ?? "") || 0) === (Date.parse(latest.started_at ?? "") || 0) && agent.id > latest.id)
+        ? agent : latest, undefined);
+      return [...detail.agents.filter((agent) => agent.statement_type !== "NOTES_FORMATTING"
+        && (agent.statement_type !== "NOTES_CLEANUP" || agent === latestCleanup)).map((agent) => {
         const status = recordedAgentStatus(agent);
         const legacyReview = status === "completed_with_errors" && agent.status === "failed";
         const reportReview = legacyReview && isReportType(agent.statement_type);

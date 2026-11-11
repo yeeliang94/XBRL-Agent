@@ -72,3 +72,20 @@ export function notesIntegrityActivity(
     : state.isRunning ? "running" : "cancelled";
   return { status, message: progress.message ?? "Checking notes completeness", progress };
 }
+
+/** Reasons recorded by the latest attempt of a notes stage. A workstream
+ *  retry reruns the stage inside the same run, so an earlier attempt's
+ *  reasons must not describe a later outcome. */
+export function latestStageDetails(
+  events: AppState["events"], stage: PipelineStageData["stage"], errorType: string,
+): string[] {
+  let start = 0;
+  events.forEach((event, index) => {
+    if (event.event === "pipeline_stage" && event.data.stage === stage && !event.data.status) start = index;
+  });
+  for (let index = events.length - 1; index >= start; index -= 1) {
+    const event = events[index];
+    if (event.event === "error" && event.data.type === errorType) return event.data.details ?? [];
+  }
+  return [];
+}

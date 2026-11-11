@@ -163,6 +163,22 @@ def test_a_missing_verdict_never_tips_the_run():
     assert server_module._notes_integrity_tips_status({}) is False
 
 
+def test_an_unresolved_verdict_records_why_it_failed():
+    """A crash, a check that never ran and real gaps share one headline, so
+    the recorded reasons must tell them apart."""
+    details = server_module._notes_integrity_details
+    assert "ValueError: bad manifest" in details(None, "ValueError: bad manifest")[0]
+    assert "did not run" in details(None, None)[0]
+    findings = [{"check": "placement", "severity": "unresolved", "message": f"block b{i} lost"}
+                for i in range(server_module.NOTES_INTEGRITY_DETAIL_LIMIT + 2)]
+    findings.append({"check": "source_uncertainty", "severity": "warning", "message": "uncertain"})
+    recorded = details({"findings": findings, "requires_review": True}, None)
+    assert recorded[0] == f"{len(findings) - 1} unresolved finding(s)."
+    assert recorded[1] == "placement: block b0 lost"
+    assert recorded[-1] == "2 more not shown."
+    assert not any("uncertain" in line for line in recorded)
+
+
 @pytest.mark.skipif(not FIXTURE.is_file(), reason="Word fixture not present")
 def test_the_outcome_names_what_a_retry_should_fill(wired):
     run_id, _tmp = wired
