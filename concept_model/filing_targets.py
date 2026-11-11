@@ -6,7 +6,7 @@ callers consume the resulting writable-target decision instead of recreating
 label, style, or row-position rules.
 """
 from __future__ import annotations
-from utils.paths import safe_db_target, safe_path
+from utils.paths import safe_path
 
 from dataclasses import asdict, dataclass
 from functools import lru_cache
@@ -14,6 +14,7 @@ from hashlib import sha256
 from pathlib import Path
 import json
 import sqlite3
+from db import engine as db_engine
 from typing import Any
 
 import openpyxl
@@ -426,7 +427,7 @@ def persist_template_manifest(db_path: str | Path, path_value: str | Path) -> in
     path = Path(path_value).resolve()
     fingerprint = _workbook_fingerprint(path)
     template_id = derive_template_id(path)
-    conn = sqlite3.connect(safe_db_target(str(db_path)))
+    conn = db_engine.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     existing = conn.execute(
         "SELECT COUNT(*), MIN(manifest_version), MAX(manifest_version), "
@@ -661,7 +662,7 @@ def semantic_coverage_for_run(
     complete. Invalid historical values remain visible as quarantined counts.
     """
     family_prefix = f"{filing_standard.lower()}-{filing_level.lower()}-"
-    conn = sqlite3.connect(safe_db_target(str(db_path)))
+    conn = db_engine.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
         selected = {

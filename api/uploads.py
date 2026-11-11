@@ -3,7 +3,8 @@
 Endpoints: ``POST /api/upload``, ``POST /api/scout/{session_id}``.
 Shared state/helpers are reached through ``server.X`` at call time.
 """
-from utils.paths import safe_db_target, safe_entry_path, safe_path
+from db import engine as db_engine
+from utils.paths import safe_entry_path, safe_path
 import asyncio
 import json
 import logging
@@ -185,12 +186,11 @@ async def upload_pdf(file: UploadFile = File(...)):
     # capture the failure for ops.
     run_id: Optional[int] = None
     try:
-        import sqlite3
         from db import repository as repo
         # `init_db` already runs once in the lifespan handler — see the
         # comment at `_lifespan` for the per-request-cost rationale
         # (peer-review #9). Don't re-run it here.
-        db_conn = sqlite3.connect(safe_db_target(str(server.AUDIT_DB_PATH)))
+        db_conn = db_engine.connect(str(server.AUDIT_DB_PATH))
         try:
             db_conn.execute("PRAGMA foreign_keys = ON")
             db_conn.execute("PRAGMA busy_timeout = 5000")
@@ -302,8 +302,7 @@ async def scout_pdf(session_id: str, request: Request):
     # All best-effort: an audit-DB hiccup must never block the scout.
     def _resolve_scout_run_id() -> Optional[int]:
         try:
-            import sqlite3
-            conn = sqlite3.connect(safe_db_target(str(server.AUDIT_DB_PATH)))
+            conn = db_engine.connect(str(server.AUDIT_DB_PATH))
             try:
                 row = conn.execute(
                     "SELECT id FROM runs WHERE session_id = ? "
@@ -322,9 +321,8 @@ async def scout_pdf(session_id: str, request: Request):
 
     def _record_scout_agent_row(run_id: int) -> Optional[int]:
         try:
-            import sqlite3
             from db import repository as repo
-            conn = sqlite3.connect(safe_db_target(str(server.AUDIT_DB_PATH)))
+            conn = db_engine.connect(str(server.AUDIT_DB_PATH))
             try:
                 # Idempotent per run: a re-scout (e.g. cancel Auto-detect
                 # midway, then re-run) reuses the existing SCOUT row instead
@@ -350,7 +348,6 @@ async def scout_pdf(session_id: str, request: Request):
         usage: Optional[dict] = None,
     ) -> None:
         try:
-            import sqlite3
             from db import repository as repo
             # Run-168 QA fix: persist the scout's real usage instead of
             # finalizing with the 0 defaults (the Activity tab showed
@@ -368,7 +365,7 @@ async def scout_pdf(session_id: str, request: Request):
                 )
             except Exception:  # noqa: BLE001 — pricing is advisory
                 cost = 0.0
-            conn = sqlite3.connect(safe_db_target(str(server.AUDIT_DB_PATH)))
+            conn = db_engine.connect(str(server.AUDIT_DB_PATH))
             try:
                 repo.finish_run_agent(
                     conn, agent_row_id, status,
@@ -445,10 +442,9 @@ async def scout_pdf(session_id: str, request: Request):
         )
         if scout_run_id is not None and scout_agent_row_id is not None:
             try:
-                import sqlite3
                 from db import repository as _scout_repo
 
-                scout_audit_conn = sqlite3.connect(safe_db_target(str(server.AUDIT_DB_PATH)))
+                scout_audit_conn = db_engine.connect(str(server.AUDIT_DB_PATH))
                 scout_audit_conn.execute("PRAGMA foreign_keys = ON")
                 scout_audit_conn.execute("PRAGMA busy_timeout = 5000")
                 scout_repo = _scout_repo

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from db import engine as db_engine
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Callable, Iterator, Optional
@@ -143,7 +144,7 @@ def canonical_cell_write_validator(
     metadata). A mapped cell must satisfy the exact scalar-fact contract that
     apply_fact will enforce during projection.
     """
-    conn = sqlite3.connect(str(db_path))
+    conn = db_engine.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.row_factory = sqlite3.Row
@@ -200,7 +201,7 @@ def project_writes(
     so callers can see how many facts landed vs were skipped/rejected — a
     single bad cell never aborts a run, but the gaps are no longer silent.
     """
-    conn = sqlite3.connect(str(db_path))
+    conn = db_engine.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.row_factory = sqlite3.Row

@@ -28,13 +28,14 @@ without standing up the full pydantic-ai agent; the agent factory just
 registers thin ``@agent.tool`` wrappers around them.
 """
 from __future__ import annotations
-from utils.paths import safe_db_target, safe_path
+from utils.paths import safe_path
 
 import dataclasses
 import json
 import logging
 import os
 import sqlite3
+from db import engine as db_engine
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -106,7 +107,7 @@ def _prompt_user_guidance(value: object) -> str:
 
 
 def _open_conn(db_path: str | Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(safe_db_target(str(db_path)))
+    conn = db_engine.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.row_factory = sqlite3.Row

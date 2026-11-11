@@ -1000,10 +1000,10 @@ def _summarize_discarded_facts(
     sheets/rows the prior attempt found data for. Best-effort: any error
     reads as None (the retry just gets no hint).
     """
-    import sqlite3 as _sqlite3
+    from db import engine as db_engine
 
     try:
-        conn = _sqlite3.connect(db_path)
+        conn = db_engine.connect(db_path)
         try:
             # Same per-connection wait the repo layer uses (db/repository.py):
             # parallel agents write this DB concurrently, and without a

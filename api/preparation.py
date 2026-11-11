@@ -4,7 +4,7 @@ Workers use their own event loop, like reviewer jobs. Only plain snapshots and
 thread handles cross loops; cancellation goes through task_registry.
 """
 from __future__ import annotations
-from utils.paths import safe_db_target, safe_path
+from utils.paths import safe_path
 
 import asyncio
 import json
@@ -13,6 +13,7 @@ import logging
 import os
 from pathlib import Path
 import sqlite3
+from db import engine as db_engine
 import threading
 import time
 import uuid
@@ -170,7 +171,7 @@ def _update(directory: Path, attempt: str, **changes) -> dict:
 
 
 def _connection(db_path: Path):
-    conn = sqlite3.connect(safe_db_target(str(db_path)))
+    conn = db_engine.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=5000")

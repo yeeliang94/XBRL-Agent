@@ -1,13 +1,14 @@
 """Import and preserve rolled-forward numeric comparatives for one filing."""
 
 from __future__ import annotations
-from utils.paths import safe_db_target, safe_path
+from utils.paths import safe_path
 
 import hashlib
 import json
 import re
 import shutil
 import sqlite3
+from db import engine as db_engine
 from pathlib import Path
 
 SOURCE = "prior_year_workbook"
@@ -246,7 +247,7 @@ def import_workbook(
         return None
     path = workbook_path(session_dir, token)
     metadata = json.loads(safe_path(path.with_suffix(".json")).read_text())
-    with sqlite3.connect(safe_db_target(db_path), timeout=5) as conn:
+    with db_engine.connect(db_path, timeout=5) as conn:
         conn.row_factory = sqlite3.Row
         facts, summary = inspect_workbook(
             conn, config, path, metadata["unit"], infopack
@@ -368,7 +369,7 @@ def is_preserved(conn, run_id) -> bool:
 def guidance(db_path, run_id, template_id=None) -> str:
     if not db_path or run_id is None:
         return ""
-    with sqlite3.connect(safe_db_target(db_path)) as conn:
+    with db_engine.connect(db_path) as conn:
         if not is_preserved(conn, run_id):
             return ""
         query = (
@@ -420,7 +421,7 @@ def seed_scratch(
 ):
     if not db_path or run_id is None:
         return False
-    with sqlite3.connect(safe_db_target(db_path)) as conn:
+    with db_engine.connect(db_path) as conn:
         if not is_preserved(conn, run_id):
             return False
     from concept_model.exporter import export_run_to_xlsx
@@ -457,7 +458,7 @@ def compare_value(
 
     if not math.isfinite(value) or not evidence.strip():
         raise ValueError("A finite comparative value and source evidence are required.")
-    with sqlite3.connect(safe_db_target(db_path), timeout=5) as conn:
+    with db_engine.connect(db_path, timeout=5) as conn:
         dims = instance_key(conn, concept_uuid, dimensions or {})
         row = conn.execute(
             "SELECT f.value FROM run_concept_facts f JOIN concept_nodes n USING(concept_uuid) "
@@ -578,7 +579,7 @@ def compare_value(
 def register_comparison_tool(agent, db_path, run_id, template_id):
     if not db_path or run_id is None:
         return
-    with sqlite3.connect(safe_db_target(db_path)) as conn:
+    with db_engine.connect(db_path) as conn:
         if not is_preserved(conn, run_id):
             return
 
@@ -642,7 +643,7 @@ def _comparison_name(label, scope, dims) -> str:
 def check_results(db_path, run_id):
     from cross_checks.framework import CrossCheckResult
 
-    with sqlite3.connect(safe_db_target(db_path)) as conn:
+    with db_engine.connect(db_path) as conn:
         if not is_preserved(conn, run_id):
             return []
         facts = conn.execute(

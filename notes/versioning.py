@@ -23,10 +23,10 @@ download time. So this prose snapshot is the whole backup — no workbook
 juggling.
 """
 from __future__ import annotations
-from utils.paths import safe_db_target
 
 import logging
 import sqlite3
+from db import engine as db_engine
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -46,7 +46,7 @@ def _now() -> str:
 
 def _open_conn(db_path: str | Path) -> sqlite3.Connection:
     """Open the audit DB with the canonical pragmas. Caller closes."""
-    conn = sqlite3.connect(safe_db_target(str(db_path)))
+    conn = db_engine.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.row_factory = sqlite3.Row

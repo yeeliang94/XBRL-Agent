@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import hashlib
 import sqlite3
+from db import engine as db_engine
 from datetime import datetime, timezone
 from typing import Literal, Optional, Sequence
 
@@ -103,7 +104,7 @@ def _now() -> str:
 
 def _open_conn(db_path: str) -> sqlite3.Connection:
     """Open the audit DB with the canonical pragmas.  Caller closes."""
-    conn = sqlite3.connect(db_path)
+    conn = db_engine.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.row_factory = sqlite3.Row

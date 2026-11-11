@@ -18,12 +18,12 @@ The algorithm runs once per turn at the coordinator boundary; it is
 not meant to fire on every individual fact write.
 """
 from __future__ import annotations
-from utils.paths import safe_db_target
 
 import json
 import logging
 import math
 import sqlite3
+from db import engine as db_engine
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -71,7 +71,7 @@ def recompute_after_turn(db_path: str | Path, run_id: int) -> None:
     if we ever hit hundreds-of-thousands of concepts we can switch to
     Kahn's algorithm with an explicit indegree table.
     """
-    conn = sqlite3.connect(safe_db_target(str(db_path)))
+    conn = db_engine.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     # recompute_after_turn now runs on the per-tool verify path (item 32), so
     # it races concurrent agents' project_writes commits on the shared run DB.

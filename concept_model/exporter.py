@@ -17,10 +17,11 @@ module owns:
   distinguish "agent didn't try" from "agent confirmed missing").
 """
 from __future__ import annotations
-from utils.paths import safe_db_target, safe_path
+from utils.paths import safe_path
 
 import json
 import sqlite3
+from db import engine as db_engine
 from pathlib import Path
 from typing import Any
 
@@ -147,7 +148,7 @@ def export_run_to_xlsx(
 
     wb = openpyxl.load_workbook(safe_path(xlsx_path), data_only=False)
 
-    conn = sqlite3.connect(safe_db_target(db_path))
+    conn = db_engine.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
         from concept_model.periods import run_periods
