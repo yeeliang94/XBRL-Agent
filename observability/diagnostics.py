@@ -13,8 +13,11 @@ from tempfile import SpooledTemporaryFile
 from zipfile import ZIP_DEFLATED, ZipFile
 
 _SECRET_KEY = re.compile(r"(?i)^(?:authorization|cookie|(?:[\w-]+[_-])?(?:password|secret|token|api[_-]?key|credential))$")
+# The look-behind starts the key-name prefix only at the start of a word. Without
+# it the search retries from every character of a long word (a page image),
+# which took 27 minutes on one run and timed the download out on Azure.
 _SECRET_TEXT = re.compile(
-    r"(?i)((?:authorization|cookie|[\w-]*(?:password|secret|token|api[_-]?key))"
+    r"(?i)((?:authorization|cookie|(?<![\w-])[\w-]*(?:password|secret|token|api[_-]?key))"
     r"[\"']?\s*[:=]\s*[\"']?(?:bearer\s+)?)[^\"'\s,;&#]+"
 )
 _MAX_FILE_BYTES = 16 * 1024 * 1024

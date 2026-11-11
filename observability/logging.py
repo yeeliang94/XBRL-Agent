@@ -5,6 +5,7 @@ import json
 import logging
 import logging.handlers
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -78,8 +79,8 @@ def configure_logging(
     """Install correlation on all handlers and an optional rotating JSONL file.
 
     Idempotent: lifespan startup and ``python server.py`` may both call it.
-    Console formatting is left to uvicorn/local tooling; the durable file is
-    always structured JSON.
+    Application records also go to stdout as JSON lines, so hosted log
+    streams show them; the durable file is always structured JSON.
     """
     # On the record itself, so it holds whichever handlers end up writing it.
     logging.setLogRecordFactory(_one_line_record)
@@ -90,6 +91,15 @@ def configure_logging(
     for handler in root.handlers:
         if not any(isinstance(item, CorrelationFilter) for item in handler.filters):
             handler.addFilter(correlation_filter)
+
+    # Uvicorn only prints its own loggers. Without this, application messages
+    # never reach stdout, so a hosted log stream (Azure App Service) is empty.
+    if not any(getattr(handler, "_xbrl_console", False) for handler in root.handlers):
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler._xbrl_console = True  # type: ignore[attr-defined]
+        console_handler.addFilter(correlation_filter)
+        console_handler.setFormatter(JsonLogFormatter())
+        root.addHandler(console_handler)
 
     if log_path is None:
         configured = os.environ.get("XBRL_APP_LOG_PATH", "").strip()

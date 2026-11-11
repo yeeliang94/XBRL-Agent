@@ -36,9 +36,29 @@ def test_rotating_json_log_carries_correlation_and_redacts(tmp_path):
             handler.close()
 
 
+def test_application_records_reach_stdout_once_for_hosted_log_streams(capfd):
+    """Azure's log stream shows stdout only; uvicorn does not print app loggers."""
+    root = logging.getLogger()
+    before = set(root.handlers)
+    try:
+        configure_logging(level="INFO")
+        configure_logging(level="INFO")
+        logging.getLogger("api.files").info("export started", extra={"run_id": 7})
+        lines = [line for line in capfd.readouterr().out.splitlines() if "export started" in line]
+        assert len(lines) == 1
+        assert json.loads(lines[0])["run_id"] == 7
+    finally:
+        for handler in set(root.handlers) - before:
+            root.removeHandler(handler)
+
+
 def test_request_text_cannot_forge_a_log_line(capfd):
     root = logging.getLogger()
+    before = set(root.handlers)
     configure_logging(level="INFO")
+    # The stdout handler holds capfd's stream, which closes after this test.
+    for added in set(root.handlers) - before:
+        root.removeHandler(added)
     # Added after configure_logging: the protection must not depend on which
     # handlers existed when logging was set up.
     handler = logging.StreamHandler()

@@ -851,6 +851,28 @@ def test_diagnostics_zip_is_run_scoped_and_redacted(api_env, monkeypatch, status
     assert json.loads((run_dir / "SOFP_conversation_trace.json").read_text()) == trace
 
 
+def test_diagnostics_zip_with_a_page_image_finishes_quickly(api_env):
+    """A long unbroken string (a base64 page image) once took the export 27 minutes; Azure timed it out."""
+    import time
+    from io import BytesIO
+    from zipfile import ZipFile
+
+    client, db_path, out = api_env
+    run_dir = out / "images"
+    run_dir.mkdir()
+    run_id = _seed_run(db_path, session_id="images", pdf_filename="source.pdf",
+                       output_dir=str(run_dir), status="completed")
+    image = "iVBORw0KGgo" + "A" * 60_000
+    (run_dir / "SOFP_conversation_trace.json").write_text(json.dumps({"image": image, "note": "token=private-token"}))
+    started = time.perf_counter()
+    response = client.get(f"/api/runs/{run_id}/diagnostics")
+    assert time.perf_counter() - started < 5
+    with ZipFile(BytesIO(response.content)) as archive:
+        trace = json.loads(archive.read("traces/SOFP_conversation_trace.json"))
+    assert trace["image"] == image
+    assert trace["note"] == "token=[REDACTED]"
+
+
 def test_diagnostics_zip_refuses_a_linked_trace_that_leaves_the_run(api_env, make_symlink):
     from io import BytesIO
     from zipfile import ZipFile

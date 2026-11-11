@@ -10,6 +10,7 @@ from utils.paths import safe_entry_path, safe_path
 
 import hashlib
 import io
+import logging
 import secrets
 import shutil
 import zipfile
@@ -59,7 +60,12 @@ def _issues_dir() -> Path:
     return Path(server.OUTPUT_DIR) / "issues"
 
 
+logger = logging.getLogger(__name__)
+
+
 def _error(status_code: int, detail: str) -> JSONResponse:
+    # Returned, not raised, so the app-wide refusal log does not see it.
+    logger.warning("Issue request refused: %s", detail, extra={"http_status": status_code})
     return JSONResponse(status_code=status_code, content={"detail": detail})
 
 

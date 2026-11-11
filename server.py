@@ -9171,6 +9171,50 @@ async def _request_observability(request: Request, call_next):
         reset_correlation_id(token)
 
 
+def _log_refused_api_request(request: Request, status: int, detail: object) -> None:
+    """Record why an API request was refused; the browser alone sees the reason otherwise."""
+    if not request.url.path.startswith("/api/"):
+        return
+    logger.log(
+        logging.ERROR if status >= 500 else logging.WARNING,
+        "HTTP request refused: %s",
+        detail,
+        extra={
+            "request_id": getattr(request.state, "correlation_id", None),
+            "http_method": request.method,
+            "http_path": request.url.path,
+            "http_status": status,
+            "auth_email": getattr(request.state, "auth_email", None),
+        },
+    )
+
+
+from starlette.exceptions import HTTPException as _StarletteHTTPException  # noqa: E402
+from fastapi.exceptions import RequestValidationError as _RequestValidationError  # noqa: E402
+from fastapi.exception_handlers import (  # noqa: E402
+    http_exception_handler as _default_http_exception_handler,
+    request_validation_exception_handler as _default_validation_handler,
+)
+
+
+@app.exception_handler(_StarletteHTTPException)
+async def _logged_http_exception(request: Request, exc: _StarletteHTTPException):
+    _log_refused_api_request(request, exc.status_code, exc.detail)
+    return await _default_http_exception_handler(request, exc)
+
+
+@app.exception_handler(_RequestValidationError)
+async def _logged_validation_error(request: Request, exc: _RequestValidationError):
+    # Field and problem only: the submitted value can be a password or a file.
+    problems = [
+        # " - " not ": " so the log redactor doesn't read "password: msg" as a secret.
+        f"{'.'.join(str(part) for part in error.get('loc', ()))} - {error.get('msg')}"
+        for error in exc.errors()
+    ]
+    _log_refused_api_request(request, 422, "; ".join(problems))
+    return await _default_validation_handler(request, exc)
+
+
 # --- Serve built frontend (Vite output in dist/) ---
 #
 # Two-layer wiring:
