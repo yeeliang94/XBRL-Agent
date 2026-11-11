@@ -159,9 +159,9 @@ def inspect_workbook(conn, config: dict, path: Path, unit: str, infopack=None):
         ][w["column_role"]] = None
     inspection = inspect_template(str(path), doc, data=data)
     if not inspection["filing_family_match"]:
-        raise ValueError(
-            "The workbook does not match the selected standard, Company/Group level or statements."
-        )
+        raise ValueError(" ".join([
+            "The workbook does not match the selected standard, Company/Group level or statements.",
+            *inspection["filing_family_mismatch"]]))
     pack = config.get("infopack") or {}
     if infopack:
         pack = json.loads(infopack.to_json())

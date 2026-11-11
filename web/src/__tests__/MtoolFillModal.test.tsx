@@ -891,6 +891,7 @@ describe("MtoolFillModal", () => {
           filing_standard: "mpers", filing_level: "company",
           sheets: ["SOFP-CuNonCu"], declared_unit_scales: [],
           filing_family_match: false,
+          filing_family_mismatch: ["The run is MFRS; 01-SOFP-CuNonCu is for MPERS."],
         },
       });
       if (url.endsWith("/preflight")) return Response.json({ ok: true, blockers: [], warnings: [] });
@@ -902,6 +903,8 @@ describe("MtoolFillModal", () => {
       target: { files: [new File(["x"], "wrong.xlsx")] },
     });
     expect(await screen.findByText(/does not match the run/i)).toBeVisible();
+    // Names what differs so the person knows which file to pick.
+    expect(screen.getByText(/The run is MFRS; 01-SOFP-CuNonCu is for MPERS\./)).toBeVisible();
     expect(screen.getByRole("button", { name: "Fill" })).toBeDisabled();
     expect(screen.getByText("Not stated in template")).toBeVisible();
   });

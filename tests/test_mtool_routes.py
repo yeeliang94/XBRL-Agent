@@ -190,6 +190,25 @@ def _upload_period_marker_template(doc, *, current="31/12/2021", prior="31/12/20
     )}
 
 
+def test_template_refused_only_by_its_calculation_checks_says_so(client, monkeypatch):
+    """Detect passes on the figures, so Fill is offered; a check on a statement
+    the template lacks then blocks it. The refusal must name that cause."""
+    import api.mtool as m
+
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    run, doc, standard, level, denomination = m._build_doc(run_id)
+    doc["checks"] = [{**doc["writes"][0], "template_id": "mfrs-company-sopl-function-v1"}]
+    monkeypatch.setattr(m, "_build_doc", lambda _: (run, doc, standard, level, denomination))
+    response = tc.post(f"/api/runs/{run_id}/mtool-fill/patch", files=_upload_our_template(),
+                       data={"fill_notes": "false"})
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == (
+        "This template does not match the run. (calculation checks) 01-SOFP-CuNonCu "
+        "does not hold the SOPL statement this run fills. Choose a matching mTool template.")
+
+
 @pytest.mark.parametrize("standard,level", [("mpers", "company"), ("mfrs", "group")])
 def test_incompatible_template_family_is_rejected_before_filling(client, monkeypatch, standard, level):
     import api.mtool as m
@@ -208,7 +227,11 @@ def test_incompatible_template_family_is_rejected_before_filling(client, monkeyp
     monkeypatch.setattr(m, "fill_workbook", must_not_fill)
     response = tc.post(f"/api/runs/{run_id}/mtool-fill/patch", files=_upload_our_template())
     assert response.status_code == 422, response.text
-    assert "does not match" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert "does not match" in detail
+    # The refusal names what differs, not a generic list of possibilities.
+    assert ("01-SOFP-CuNonCu is for MPERS" in detail if standard == "mpers"
+            else "01-SOFP-CuNonCu is for Group" in detail)
     assert tc.get(f"/api/runs/{run_id}/mtool-fill/receipts").json()["receipts"] == []
 
 

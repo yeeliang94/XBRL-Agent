@@ -467,3 +467,14 @@ def test_generated_statement_family_match_uses_exact_token():
     }
     report = inspect_template(str(template), doc)
     assert report["filing_family_match"] is False
+    assert report["filing_family_mismatch"] == [
+        "09-SOCIE does not hold the SOCI statement this run fills."]
+
+    # A Group run given a Company-only template is told which level differs.
+    group = inspect_template(str(REPO / "XBRL-template-MFRS/Company/01-SOFP-CuNonCu.xlsx"), {
+        "meta": {"filing_standard": "mfrs", "filing_level": "group"},
+        "sheets": {}, "writes": [{"template_id": "mfrs-group-sofp-cunoncu-v1"}],
+    })
+    assert group["filing_family_match"] is False
+    assert group["filing_family_mismatch"] == [
+        "The run is a Group filing; 01-SOFP-CuNonCu is for Company."]

@@ -133,10 +133,17 @@ def inspect_template(
     meta = doc.get("meta", {})
     expected_standard = str(meta.get("filing_standard") or "").lower()
     expected_level = str(meta.get("filing_level") or "").lower()
-    family_match = not descriptor or (
-        (not expected_standard or expected_standard in descriptor.get("filing_standards", []))
-        and (not expected_level or expected_level in descriptor.get("filing_levels", []))
-    )
+    # Each reason names what differs, so the person can pick the right file.
+    mismatch_reasons: list[str] = []
+    template_name = (descriptor or {}).get("name") or "this file"
+    if descriptor and expected_standard and expected_standard not in descriptor.get("filing_standards", []):
+        mismatch_reasons.append(
+            f"The run is {expected_standard.upper()}; {template_name} is for "
+            f"{' / '.join(s.upper() for s in descriptor.get('filing_standards', [])) or 'another standard'}.")
+    if descriptor and expected_level and expected_level not in descriptor.get("filing_levels", []):
+        mismatch_reasons.append(
+            f"The run is a {expected_level.title()} filing; {template_name} is for "
+            f"{' / '.join(l.title() for l in descriptor.get('filing_levels', [])) or 'another level'}.")
     native_standards = set()
     for identifier in occurrences:
         if identifier.startswith(('ifrs-smes_', 'ssmt-mpers_')):
@@ -146,7 +153,9 @@ def inspect_template(
     if {'ssmt-mfrs_FundBalance', 'ssmt_DisclosureOnStatementOfIncomeAndExpenditureAbstract'} & occurrences.keys():
         native_standards = {'clbg'}
     if expected_standard and native_standards and expected_standard not in native_standards:
-        family_match = False
+        mismatch_reasons.append(
+            f"The run is {expected_standard.upper()}; the file's contents are "
+            f"{' / '.join(sorted(s.upper() for s in native_standards))}.")
     if descriptor and descriptor.get("source") == "generated":
         expected_statements = {
             str(write.get("template_id") or "").split("-")[2].upper()
@@ -158,8 +167,12 @@ def inspect_template(
             str(descriptor.get("name") or "").upper().split("-")
             if token
         }
-        family_match = family_match and all(
-            statement in descriptor_tokens for statement in expected_statements)
+        missing_statements = sorted(expected_statements - descriptor_tokens)
+        if missing_statements:
+            mismatch_reasons.append(
+                f"{template_name} does not hold the {', '.join(missing_statements)} "
+                f"statement{'s' if len(missing_statements) > 1 else ''} this run fills.")
+    family_match = not mismatch_reasons
     generated = bool(
         descriptor and descriptor.get("source") == "generated" and family_match)
     semantic_source = "generated-targets" if generated else (
@@ -182,6 +195,7 @@ def inspect_template(
         "mtool_compatibility": compatibility,
         "supported_mtool_version": "2.2",
         "filing_family_match": family_match,
+        "filing_family_mismatch": mismatch_reasons,
         "requested": requested,
         "identifier_addressable": addressable,
         "identifier_missing": missing_address,

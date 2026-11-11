@@ -298,6 +298,14 @@ def _build_doc(run_id: int):
     return run, doc, standard, level, denom
 
 
+def _family_mismatch_detail(inspection: dict) -> str:
+    """The refusal for a template that doesn't fit the run, naming what differs."""
+    reasons = " ".join(inspection.get("filing_family_mismatch") or [])
+    return ("This template does not match the run. " + (reasons or
+            "Its filing standard, Company/Group level or statements differ.")
+            + " Choose a matching mTool template.")
+
+
 @router.get("/api/runs/{run_id}/mtool-fill")
 def get_mtool_fill_doc(run_id: int):
     """Return the semantic fill document for a completed or stopped run.
@@ -638,9 +646,7 @@ def patch_mtool_template(
         inspection = _parse_template_or_422(
             "template inspection", inspect_template, str(src), doc, data=data)
         if not inspection["filing_family_match"]:
-            raise HTTPException(status_code=422, detail=(
-                "This template does not match the run's filing standard, "
-                "company/group level, or statement. Choose a matching mTool template."))
+            raise HTTPException(status_code=422, detail=_family_mismatch_detail(inspection))
         if column_map:
             try:
                 cmap = json.loads(column_map)
@@ -713,9 +719,14 @@ def patch_mtool_template(
         except (ValueError, AttributeError, TypeError, KeyError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if filing_coverage["status"] == "blocked":
-            raise HTTPException(status_code=422, detail=(
-                "This template does not match the run's filing standard, "
-                "company/group level, or statement. Choose a matching mTool template."))
+            # Blocked by the figures or by the calculation checks; say which.
+            check_inspection = (filing_coverage.get("calculation_coverage") or {}).get("inspection") or {}
+            figure_reasons = (filing_coverage.get("inspection") or {}).get("filing_family_mismatch") or []
+            check_reasons = check_inspection.get("filing_family_mismatch") or []
+            if not figure_reasons and check_reasons:
+                check_reasons = ["(calculation checks) " + reason for reason in check_reasons]
+            raise HTTPException(status_code=422, detail=_family_mismatch_detail(
+                {"filing_family_mismatch": figure_reasons or check_reasons}))
         if selection is not None:
             physical_selected = {
                 detected.get(sheet, {}).get('physical_sheet') or sheet
@@ -1130,6 +1141,10 @@ def detect_mtool_columns(
 
         inspection = _parse_template_or_422(
             "template inspection", inspect_template, str(src), doc, data=data)
+        if not inspection["filing_family_match"]:
+            # Answered with 200 and shown in the window, so log the reason here.
+            logger.warning("mTool template does not match the run: %s",
+                           " ".join(inspection["filing_family_mismatch"]), extra={"run_id": run_id})
         detected = inspection["column_map"]
         period_issues = period_compatibility_issues(detected, doc)
         fingerprint = _parse_template_or_422(
@@ -1162,6 +1177,7 @@ def detect_mtool_columns(
                 "sheets": physical_sheets,
                 "declared_unit_scales": declared_scales,
                 "filing_family_match": inspection["filing_family_match"],
+                "filing_family_mismatch": inspection["filing_family_mismatch"],
             },
             "filing_inspection": inspection,
         })

@@ -241,6 +241,8 @@ type DetectedTemplateSettings = {
   sheets: string[];
   declared_unit_scales: string[];
   filing_family_match: boolean;
+  /** What differs between the template and the run, when it doesn't match. */
+  filing_family_mismatch?: string[];
 };
 
 const DETECTED_STATEMENTS: Record<string, string> = {
@@ -1186,7 +1188,9 @@ export function MtoolFillModal({ runId, open, onClose, notice }: Props) {
                 <span style={{ color: ds.grey700 }}>Amount scale</span><span>{detectedScaleLabel(templateSettings.declared_unit_scales)}</span>
               </div>
               {!templateSettings.filing_family_match && <div role="alert" style={{ ...ui.alertError, marginTop: ds.space.sm }}>
-                This template does not match the run&apos;s filing standard, company/group level, or statements. Choose a matching template.
+                This template does not match the run. {templateSettings.filing_family_mismatch?.length
+                  ? templateSettings.filing_family_mismatch.join(" ")
+                  : "Its filing standard, Company/Group level or statements differ."} Choose a matching template.
               </div>}
               {unitScaleWarnings.length > 0 && <div role="alert" style={{ ...ui.alertWarning, marginTop: ds.space.sm }}>
                 Amount scale differs: template {detectedScaleLabel([unitScaleWarnings[0].template_declares])}, run {detectedScaleLabel([unitScaleWarnings[0].run_denomination])}. Check the amounts before filing.
