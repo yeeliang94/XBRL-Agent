@@ -53,14 +53,14 @@ test("saved formatting shows sheets, a plain failure and calls behind Technical 
         step("notes_format_Notes-Listofnotes_part2", 5, "failed",
           "1 note still looks different from the source PDF. Retry it from the Notes tab.", { detail: finding })] }),
   ], run_events: [
-    { event: "pipeline_stage", data: { stage: "formatting_notes", status: "failed", message: "Appearance checking finished." }, timestamp: 6 },
+    { event: "pipeline_stage", data: { stage: "formatting_notes", status: "failed", message: "Formatting finished." }, timestamp: 6 },
   ] })} onDelete={() => {}} onDownload={() => {}} />);
   clickRunTab(/^activity$/i);
   const workstream = within(screen.getByRole("tablist", { name: "Run workstreams" })).getByRole("tab", { name: /Notes formatting/ });
-  expect(workstream).toHaveTextContent("1 of 2 sheets verified");
+  expect(workstream).toHaveTextContent("1 of 2 sheets formatted");
   fireEvent.click(workstream);
   // No unlabelled stage line or call list beside the chips.
-  expect(screen.queryByText("Appearance checking finished.")).toBeNull();
+  expect(screen.queryByText("Formatting finished.")).toBeNull();
   expect(screen.queryByText("Formatting calls")).toBeNull();
   const chips = within(screen.getByRole("tablist", { name: "Formatting by sheet" }));
   expect(chips.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["All", "Issued Capital", "List of Notes · Needs review"]);

@@ -340,6 +340,9 @@ _TABLE_STRUCTURE_ATTRS: frozenset[str] = frozenset({
     # Formatter-set table width (notes/format_patch.py ``table_width``), so the
     # mTool decorator can restate it for TX. Value-checked like the flag above.
     "data-formatter-table-width",
+    # Formatter-chosen smaller font for a table too wide for mTool's page
+    # (notes/format_patch.py ``font_size_pt``). Value-checked to 8-14 pt.
+    "data-formatter-font-size",
 })
 
 # Table structure values cross the browser/ProseMirror boundary too. Bound
@@ -360,6 +363,8 @@ def _is_valid_table_structure_attr(name: str, value: object) -> bool:
         return bool(_TABLE_COLWIDTH_RE.match(raw))
     if name in {"data-source-styled", "data-formatter-table-width"}:
         return raw == "true"
+    if name == "data-formatter-font-size":
+        return bool(re.fullmatch(r"[0-9]{1,2}", raw)) and 8 <= int(raw) <= 14
     return False
 
 # Tags whose *contents* are also removed on strip. A `<script>` stripped

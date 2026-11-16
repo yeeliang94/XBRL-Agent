@@ -561,7 +561,7 @@ def formatter_db(tmp_path):
 
 async def _run_formatter_with_fake_agent(
     monkeypatch, formatter_db, fake_agent, *, style_sources=None, sheet=_SHEET,
-    visual_check=None, rows=None, on_event=None, deadline=None,
+    rows=None, on_event=None, deadline=None,
 ):
     from pathlib import Path
 
@@ -572,10 +572,6 @@ async def _run_formatter_with_fake_agent(
         fa, "create_notes_formatter_agent",
         lambda **_kw: (fake_agent, None),
     )
-    import notes.visual_review as vr
-    async def passed(**kwargs):
-        return {}, {"tables": [], "evidence": {}}
-    monkeypatch.setattr(vr, "check_visual_rows", visual_check or passed)
     return await fa.run_notes_formatter(
         run_id=run_id, db_path=str(db_path), pdf_path=pdf_path,
         sheet=sheet, model="fake-model",
@@ -600,7 +596,7 @@ async def test_formatter_reports_its_activity_live_and_saves_it(monkeypatch, for
     assert {data["sub_agent_id"] for _, data in live} == {_SHEET}
     phases = [data["phase"] for event_type, data in live if event_type == "status"]
     assert phases[0] == "started" and phases[-1] == "completed"
-    assert "Checking formatted notes against the source PDF…" in [
+    assert "Requesting formatting decisions…" in [
         data["message"] for _, data in live
     ]
     db, _, run_id = formatter_db
@@ -784,17 +780,11 @@ def test_failed_pass_leads_with_a_plain_sentence():
     finding = "Table 1: Note 26, row 3: the candidate combines two rows ..."
     assert plain_failure({"error_type": "visual_review_failed", "error": finding,
                            "failed_rows": [12], "table_recopy": {}}) == (
-        "1 note still looks different from the source PDF after re-copying its "
-        "tables. Retry it from the Notes tab.")
+        "1 note needs checking against the source PDF after re-copying its "
+        "tables. Check it in the Notes tab.")
     assert plain_failure({"error_type": "visual_review_failed", "failed_rows": [12, 14]}) == (
-        "2 notes still look different from the source PDF. Retry it from the Notes tab.")
+        "2 notes need checking against the source PDF. Check them in the Notes tab.")
     assert finding not in plain_failure({"error_type": "model_error", "error": finding})
-    # Every failed note saved with only a formatter limit: no pointless retry.
-    message = plain_failure({"error_type": "visual_review_failed", "failed_rows": [12], "limited_rows": [12]})
-    assert "Formatting was saved" in message and "Check them manually" in message and "Retry" not in message
-    # A real mismatch on any other note still asks for a retry.
-    assert "Retry" in plain_failure({"error_type": "visual_review_failed", "failed_rows": [12, 14],
-                                     "limited_rows": [12]})
 
 
 @pytest.mark.asyncio
@@ -848,261 +838,255 @@ def test_formatter_tool_reports_page_images_as_a_count():
     assert outcome["result_summary"] == "=== Page 3 === [1 page image(s)]"
 
 
-@pytest.mark.asyncio
-async def test_visual_failure_is_corrected_once_before_saving(monkeypatch, formatter_db):
-    from db import repository as repo
-    from notes import visual_review as vr
-    checks = []
-    async def check(**kwargs):
-        checks.append(kwargs)
-        if len(checks) == 1:
-            return {112: "Closing balance needs a bottom rule."}, {"tables": [
-                {"row": 112, "table": 0, "status": "needs_correction"},
-            ]}
-        assert "border-bottom" in kwargs["rows"][112]
-        # The recheck has its own allowance; the initial check's spending
-        # (possibly by concurrent chunks) cannot exhaust it.
-        assert kwargs["usage"] is not checks[0]["usage"] and kwargs["usage"].requests == 0
-        assert kwargs["limits"].request_limit == vr.MAX_VISUAL_REVIEW_REQUESTS
-        return {}, {"tables": [{"row": 112, "table": 0, "status": "pass"}]}
-    correction = _layout(_note(lines=[{"after_row": 1, "from_col": 2, "to_col": 2, "kind": "double"}]),
-                         summary="Closing rule corrected.")
-    fake = _FakeAgent([_GOOD_PATCH, correction])
-    result = await _run_formatter_with_fake_agent(
-        monkeypatch, formatter_db, fake, visual_check=check,
-    )
-    assert result["ok"] and result["changed_rows"] == 1
-    assert fake.calls == 2 and len(checks) == 2
-    assert "correction_patch" in result["visual_review"]
-    db, _, run_id = formatter_db
-    with repo.db_session(db) as conn:
-        assert "border-bottom" in repo.list_notes_cells_for_run(conn, run_id)[0].html
+def _unresolved(kind="cannot_format", quote="", row=112):
+    return {"row": row, "kind": kind, "table": 0, "quote": quote, "reason": "Total captured as heading cells."}
+
+
+def _reporting(*notes, unresolved):
+    return json.dumps({"sheet": _SHEET, "notes": list(notes), "unresolved": unresolved})
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["foreign_citation", "missing_image"])
-async def test_real_visual_check_saves_only_verified_notes(monkeypatch, formatter_db, failure):
-    from types import SimpleNamespace
-
+async def test_note_the_formatter_reports_unresolved_keeps_its_formatting(monkeypatch, formatter_db):
+    # A note the formatter could not make match the source is saved
+    # formatted and stays failed for a person.
     from db import repository as repo
-    import notes.agent as na
-    import notes.visual_review as vr
-
-    db, _, run_id = formatter_db
-    with repo.db_session(db) as conn:
-        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113,
-                               label="Other", html=_TABLE_HTML, source_pages=[4])
-    patch = json.loads(_layout(_note(), _note(113)))
-
-    async def render(_path, page, _dpi, **_kwargs):
-        if failure == "missing_image" and page == 4:
-            raise ValueError("Source page could not be rendered")
-        return b"source image"
-
-    class Reviewer:
-        async def run(self, *_args, **_kwargs):
-            assessments = [{"row": 112, "table": 0, "status": "pass",
-                            "source_pages": [4 if failure == "foreign_citation" else 3],
-                            "reason": "Matches source."}]
-            if failure == "foreign_citation":
-                assessments.append({"row": 113, "table": 0, "status": "pass",
-                                    "source_pages": [4], "reason": "Matches source."})
-            return SimpleNamespace(output={"tables": assessments}, all_messages=lambda: [])
-
-    monkeypatch.setattr(na, "_render_one_page_single_flight", render)
-    monkeypatch.setattr(vr, "create_visual_review_agent",
-                        lambda **_kw: (Reviewer(), SimpleNamespace(viewed_pages=set())))
-    result = await _run_formatter_with_fake_agent(
-        monkeypatch, formatter_db, _FakeAgent([json.dumps(patch)]),
-        visual_check=vr.check_visual_rows,
-    )
-    failed_row = 112 if failure == "foreign_citation" else 113
-    saved_row = 113 if failure == "foreign_citation" else 112
-    assert not result["ok"] and result["changed_rows"] == 1
-    assert result["error_type"] == "visual_review_failed"
-    assert result["failed_rows"] == [failed_row]
-    with repo.db_session(db) as conn:
-        cells = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
-        assert cells[failed_row].html == _TABLE_HTML
-        assert cells[saved_row].html != _TABLE_HTML
-        assert set(repo.fetch_notes_format_snapshots(conn, run_id, _SHEET)) == {saved_row}
-
-
-@pytest.mark.asyncio
-async def test_failed_visual_recheck_saves_only_unrelated_passed_note(monkeypatch, formatter_db):
-    from db import repository as repo
-    db, _, run_id = formatter_db
-    with repo.db_session(db) as conn:
-        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113,
-                               label="Other", html=_TABLE_HTML, source_pages=[3])
-    patch = json.loads(_layout(_note(), _note(113)))
-    calls = []
-    async def check(**kwargs):
-        calls.append(set(kwargs["rows"]))
-        finding = "Obsolete initial finding." if len(calls) == 1 else "Comparative closing rule still missing."
-        return {112: finding}, {"tables": [
-            {"row": 112, "table": 0, "status": "needs_correction", "reason": finding},
-        ]}
-    fake = _FakeAgent([json.dumps(patch), _layout()])
-    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
-    assert not result["ok"] and result["changed_rows"] == 1
-    assert result["error_type"] == "visual_review_failed"
-    assert result["failed_rows"] == [112]
-    assert result["row_errors"][112] == "Comparative closing rule still missing."
-    assert result["visual_review"]["tables"][0]["reason"] == "Obsolete initial finding."
-    assert calls == [{112, 113}, {112}]
-    assert fake.calls == 2  # no third correction
-    with repo.db_session(db) as conn:
-        cells = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
-        assert cells[112].html == _TABLE_HTML
-        assert cells[113].html != _TABLE_HTML
-
-
-@pytest.mark.asyncio
-async def test_note_failed_only_by_a_formatter_limit_keeps_its_formatting(monkeypatch, formatter_db):
-    # A note that is right except for a layout the formatter cannot draw is
-    # saved formatted, stays failed for a person, and gets no receipt.
-    from db import repository as repo
-    db, _, run_id = formatter_db
-    finding = "Table 0: needs a layout the formatter cannot produce: inset rule under 2024."
-    async def check(**kwargs):
-        return {112: finding}, {"tables": [
-            {"row": 112, "table": 0, "status": "unresolved", "issue_kind": "unsupported_layout",
-             "reason": "inset rule under 2024."},
-        ], "limitation_rows": [112]}
-    fake = _FakeAgent([_GOOD_PATCH])
-    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
-    assert not result["ok"] and result["changed_rows"] == 1
-    assert result["failed_rows"] == [112] and result["limited_rows"] == [112]
-    assert "112" not in result["verified_rows"] and 112 not in result["verified_rows"]
-    assert fake.calls == 1  # no correction attempt for a known limit
-    with repo.db_session(db) as conn:
-        cells = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
-    assert cells[112].html != _TABLE_HTML
-    assert "Formatting was saved" in fa_plain_failure(result)
-
-
-def fa_plain_failure(outcome):
     from notes.formatting_agent import plain_failure
-    return plain_failure(outcome)
+    db, _, run_id = formatter_db
+    fake = _FakeAgent([_reporting(_note(), unresolved=[_unresolved()])])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert not result["ok"] and result["changed_rows"] == 1
+    assert result["error_type"] == "visual_review_failed" and result["failed_rows"] == [112]
+    assert result["row_errors"][112] == "Table 0: Total captured as heading cells."
+    assert fake.calls == 1
+    with repo.db_session(db) as conn:
+        assert repo.list_notes_cells_for_run(conn, run_id)[0].html != _TABLE_HTML
+    assert "1 note needs checking" in plain_failure(result)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["formatter_full", "initial_check", "correction", "recheck"])
-async def test_visual_budgets_preserve_verified_rows(monkeypatch, formatter_db, stage):
-    """Budget exhaustion never discards a different row's completed review."""
+@pytest.mark.parametrize("case", ["unseen_pages", "omitted_note", "omitted_then_repaired",
+                                  "not_previewed", "previewed"])
+async def test_a_note_not_compared_with_its_source_needs_review(monkeypatch, formatter_db, case):
+    """Without a separate checker, a note whose source pages the formatter
+    never saw is not finished. A note left out of the answer gets the one
+    repair; left out again, it is not finished either."""
+    import notes.formatting_agent as fa
     from db import repository as repo
-    from notes import formatting_agent as fa
-    from notes import visual_review as vr
-    from pydantic_ai.exceptions import UsageLimitExceeded
+    db, pdf_path, run_id = formatter_db
+    with repo.db_session(db) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113, label="Other",
+                               html=_TABLE_HTML, source_pages=[3])
+    fake = _FakeAgent({
+        "omitted_note": [_layout(_note()), _layout()],
+        "omitted_then_repaired": [_layout(_note()), _layout(_note(113))],
+    }.get(case, [_layout(_note(), _note(113))]))
+    deps = fa.NotesFormatterDeps(run_id=run_id, db_path=str(db), pdf_path=pdf_path, sheet=_SHEET, model="m")
+    if case != "unseen_pages":
+        deps.viewed_pages.add(3)
+    if case != "not_previewed":
+        # The agent previews exactly the layouts it then returns.
+        from notes.format_schema import NoteLayout
+        deps.rows = {112: _TABLE_HTML, 113: _TABLE_HTML}
+        fa._preview_layout(deps, [NoteLayout.model_validate(_note()), NoteLayout.model_validate(_note(113))])
+    monkeypatch.setattr(fa, "_preload_source_pages", lambda *_a, **_k: _no_pages())
+    monkeypatch.setattr(fa, "create_notes_formatter_agent", lambda **_kw: (fake, deps))
+    result = await fa.run_notes_formatter(run_id=run_id, db_path=str(db), pdf_path=pdf_path,
+                                          sheet=_SHEET, model="fake-model")
+    if case in ("omitted_then_repaired", "previewed"):
+        assert result["ok"] and result["changed_rows"] == 2
+        return
+    if case == "not_previewed":
+        # Saved as drawn, but flagged for a person.
+        assert not result["ok"] and result["failed_rows"] == [112, 113] and result["changed_rows"] == 2
+        assert "not previewed" in result["row_errors"][112]
+        return
+    expected = [112, 113] if case == "unseen_pages" else [113]
+    assert not result["ok"] and result["failed_rows"] == expected
+    reason = "did not view every source page" if case == "unseen_pages" else "no layout was returned"
+    assert all(reason in result["row_errors"][row] for row in expected)
 
+
+@pytest.mark.asyncio
+async def test_a_repair_replaces_the_reports_of_the_notes_it_answers(monkeypatch, formatter_db):
+    """A rejected layout with a report, then a valid repair without one: the
+    withdrawn report must not leave the fixed note flagged."""
+    bad = {"row": 112, "tables": [{"table": 7, "columns": ["label", "amount"]}]}
+    fake = _FakeAgent([_reporting(bad, unresolved=[_unresolved()]), _GOOD_PATCH])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert fake.calls == 2 and result["ok"] and result["changed_rows"] == 1
+
+
+async def _no_pages():
+    return [], set()
+
+
+@pytest.mark.asyncio
+async def test_house_style_note_is_saved_as_formatted_with_a_note(monkeypatch, formatter_db):
+    """A capability limit is drawn in the nearest house style: the note is
+    formatted, not failed, and carries the formatter's note for a person."""
+    from db import repository as repo
+    note = {"row": 112, "kind": "house_style", "table": 0,
+            "reason": "Gapped underlines in the source are drawn as one line."}
+    fake = _FakeAgent([_reporting(_note(), unresolved=[note])])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert result["ok"] and result["changed_rows"] == 1 and "failed_rows" not in result
+    assert result["layout_notes"][112]["text"] == "Table 0: Gapped underlines in the source are drawn as one line."
+    assert "nearest house style" in result["summary"]
     db, _, run_id = formatter_db
     with repo.db_session(db) as conn:
-        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113,
-                               label="Other", html=_TABLE_HTML, source_pages=[3])
-    patch = json.loads(_layout(_note(), _note(113)))
-    formatter_usages = []
+        assert repo.list_notes_cells_for_run(conn, run_id)[0].style_source == "formatter"
 
-    class BudgetAgent(_FakeAgent):
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["recopied", "refused", "unquoted"])
+async def test_reported_miscopied_table_is_recopied_then_reformatted(monkeypatch, formatter_db, case):
+    """A table the formatter reports as wrongly copied goes back to
+    preparation, and the rebuilt note gets one ordinary formatting pass. A
+    report that quotes no text from that table never triggers a re-copy."""
+    import notes.table_recopy as tr
+    calls = []
+
+    async def recopy(**kwargs):
+        calls.append(kwargs["findings"])
+        if case == "refused":
+            return {"rebuilt_rows": [], "errors": {112: "Table 0 could not be re-copied: x"},
+                    "corrected": [], "usage": {"prompt_tokens": 0, "completion_tokens": 0}}
+        return {"rebuilt_rows": [112], "errors": {}, "corrected": [{"row": 112}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 1}}
+
+    monkeypatch.setattr(tr, "recopy_tables", recopy)
+    quote = "Not in this table" if case == "unquoted" else "<br/>Total"
+    fake = _FakeAgent([_reporting(_note(), unresolved=[_unresolved("miscopied_table", quote)]), _GOOD_PATCH])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert "miscopied" not in result
+    if case == "unquoted":
+        assert calls == [] and fake.calls == 1 and result["failed_rows"] == [112]
+        return
+    assert calls == [{112: [(0, "Total captured as heading cells.")]}]
+    if case == "recopied":
+        assert fake.calls == 2 and result["ok"] and "Re-copied 1 table" in result["summary"]
+    else:
+        assert fake.calls == 1 and not result["ok"]
+        assert "could not be re-copied" in result["row_errors"][112]
+
+
+@pytest.mark.asyncio
+async def test_failed_reformat_after_recopy_keeps_saved_rows(monkeypatch, formatter_db):
+    """A provider error after the re-copy must not discard the first pass's
+    saved rows; only the re-copied row stays unresolved."""
+    import notes.table_recopy as tr
+    from db import repository as repo
+    db_path, _, run_id = formatter_db
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113, label="Other",
+                               html=_TABLE_HTML, source_pages=[3])
+
+    async def recopy(**_kwargs):
+        return {"rebuilt_rows": [112], "errors": {}, "corrected": [{"row": 112}],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0}}
+
+    monkeypatch.setattr(tr, "recopy_tables", recopy)
+
+    class _Down(_FakeAgent):
         async def run(self, prompt, **kwargs):
-            usage = kwargs["usage"]
-            formatter_usages.append(usage)
-            if usage.requests >= kwargs["usage_limits"].request_limit:
-                raise UsageLimitExceeded("Formatter budget exhausted")
-            usage.requests += fa.MAX_FORMATTER_REQUESTS if stage in {"formatter_full", "correction"} else 1
-            usage.input_tokens += 10
+            if self.calls:
+                raise RuntimeError("provider unavailable")
             return await super().run(prompt, **kwargs)
 
-    checks = []
-    async def check(**kwargs):
-        checks.append(kwargs)
-        assert kwargs["usage"] is not formatter_usages[0]
-        assert kwargs["limits"].request_limit == vr.MAX_VISUAL_REVIEW_REQUESTS < 50
-        kwargs["usage"].input_tokens += 20
-        if len(checks) == 1:
-            assert kwargs["usage"].requests == 0
-            kwargs["usage"].requests = vr.MAX_VISUAL_REVIEW_REQUESTS
-            if stage == "formatter_full":
-                return {}, {"tables": []}
-            if stage == "initial_check":
-                return {row: "Visual checking reached its request budget." for row in kwargs["rows"]}, {
-                    "tables": [], "error_type": "turn_budget",
-                }
-            return {112: "Closing balance needs a bottom rule."}, {"tables": [
-                {"row": 112, "table": 0, "status": "needs_correction"},
-            ]}
-        # The recheck has its own allowance; the initial check's spending
-        # (possibly by concurrent chunks) cannot exhaust it.
-        assert kwargs["usage"] is not checks[0]["usage"] and kwargs["usage"].requests == 0
-        assert kwargs["limits"].request_limit == vr.MAX_VISUAL_REVIEW_REQUESTS
-        return {112: "Visual checking reached its request budget."}, {
-            "tables": [], "error_type": "turn_budget",
-        }
-
-    fake = BudgetAgent([json.dumps(patch), _layout()])
-    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
-    expected_saved = {112, 113} if stage == "formatter_full" else set() if stage == "initial_check" else {113}
-    assert result["changed_rows"] == len(expected_saved)
-    assert result["ok"] is (stage == "formatter_full")
-    assert result["prompt_tokens"] == fake.calls * 10 + len(checks) * 20
-    with repo.db_session(db) as conn:
-        ledger = conn.execute("SELECT SUM(input_tokens) FROM model_usage_calls WHERE run_id=? AND role='NOTES_FORMATTING'", (run_id,)).fetchone()
-        assert ledger[0] == result["prompt_tokens"]
-    if stage != "formatter_full":
-        assert result["error_type"] == "visual_review_failed"
-        assert set(result["failed_rows"]) == {112, 113} - expected_saved
-        assert "request budget" in result["row_errors"][112]
-    if stage == "recheck":
-        assert "Closing balance" not in result["row_errors"][112]
-        assert "budget" in result["row_errors"][112].lower()
-    with repo.db_session(db) as conn:
-        saved = {c.row for c in repo.list_notes_cells_for_run(conn, run_id) if c.html != _TABLE_HTML}
-        assert saved == expected_saved
-        assert set(repo.fetch_notes_format_snapshots(conn, run_id, _SHEET)) == expected_saved
+    fake = _Down([_reporting(_note(), _note(113), unresolved=[_unresolved("miscopied_table", "Total")])])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert not result["ok"] and result["changed_rows"] == 2
+    assert result["failed_rows"] == [112] and "provider unavailable" in result["row_errors"][112]
+    with repo.db_session(db_path) as conn:
+        rows = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
+    assert rows[113].style_source == "formatter"
 
 
 @pytest.mark.asyncio
-async def test_noop_proposal_requires_visual_evidence(monkeypatch, formatter_db):
-    async def unavailable(**kwargs):
-        assert kwargs["rows"][112] == _TABLE_HTML
-        return {112: "Visual renderer unavailable."}, {"tables": []}
-    fake = _FakeAgent([_layout()])
-    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=unavailable)
-    assert result["error_type"] == "visual_review_failed"
-    assert result["changed_rows"] == 0 and result["failed_rows"] == [112]
-    assert fake.calls == 1  # no paid correction for missing evidence
-
-
-@pytest.mark.asyncio
-async def test_noop_visual_decision_does_not_certify_concurrent_edit(monkeypatch, formatter_db):
+async def test_recopy_pass_keeps_first_pass_revert_and_save_warning(monkeypatch, formatter_db):
+    """The post-re-copy pass must not wipe the first pass's revert snapshot,
+    and a failed save to the prepared document is reported, not hidden."""
+    import notes.table_recopy as tr
     from db import repository as repo
-    db, _, run_id = formatter_db
-    async def edited_during_check(**kwargs):
-        with repo.db_session(db) as conn:
-            conn.execute("UPDATE notes_cells SET html = ? WHERE run_id = ? AND row = 112",
-                         ("<p>Human edited this note during review.</p>", run_id))
-        return {}, {"tables": []}
-    fake = _FakeAgent([_layout()])
-    result = await _run_formatter_with_fake_agent(
-        monkeypatch, formatter_db, fake, visual_check=edited_during_check,
-    )
-    assert result["changed_rows"] == 0 and result["skipped_rows"] == [112]
-    assert not result["ok"] and not result["verified_rows"]
-    assert "edited during formatting" in result["summary"]
+    db_path, _, run_id = formatter_db
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113, label="Other",
+                               html=_TABLE_HTML, source_pages=[3])
+
+    async def recopy(**_kwargs):
+        # The stand-in rebuilds nothing, so the note still holds the first pass's formatting.
+        return {"rebuilt_rows": [112], "errors": {}, "corrected": [{"row": 112}],
+                "warnings": {112: "Table re-copied for this run only."},
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0}}
+
+    monkeypatch.setattr(tr, "recopy_tables", recopy)
+    fake = _FakeAgent([_reporting(_note(), _note(113), unresolved=[_unresolved("miscopied_table", "Total")]),
+                       _GOOD_PATCH])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert result["ok"] and result["changed_rows"] == 2
+    assert "Row 112: Table re-copied for this run only." in result["summary"]
+    with repo.db_session(db_path) as conn:
+        assert set(repo.fetch_notes_format_snapshots(conn, run_id, _SHEET)) == {112, 113}
 
 
-@pytest.mark.asyncio
-async def test_visual_correction_cannot_target_another_note(monkeypatch, formatter_db, caplog):
-    async def check(**kwargs):
-        return {112: "Wrong rule."}, {"tables": [
-            {"row": 112, "table": 0, "status": "needs_correction"},
-        ]}
-    fake = _FakeAgent([_GOOD_PATCH, _layout(_note(999))])
-    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
-    assert not result["ok"] and result["changed_rows"] == 0
-    assert result["failed_rows"] == [112]
-    assert "Visual correction rejected" in caplog.text
-    assert "unreviewed row" in result["visual_review"]["correction_error"]
+def _preview(notes, rows=None):
+    from notes.format_schema import NoteLayout
+    from notes.formatting_agent import NotesFormatterDeps, _preview_layout
+    deps = NotesFormatterDeps(run_id=1, db_path="", pdf_path="", sheet=_SHEET, model="fake",
+                              rows=rows or {112: _TABLE_HTML})
+    return _preview_layout(deps, [NoteLayout.model_validate(note) for note in notes])
+
+
+def test_preview_draws_a_fitting_layout_and_explains_one_that_does_not_fit():
+    """The formatter sees its draft as a picture; a draft that does not fit
+    its table comes back as a reason, and nothing is drawn or saved for it."""
+    from pydantic_ai.messages import BinaryContent
+    label, picture = _preview([_note()])
+    assert label == "=== Row 112 as formatted (picture 1 of 1) ==="
+    assert isinstance(picture, BinaryContent) and picture.data.startswith(b"\x89PNG")
+
+    lined, = [part for part in _preview([_note(lines=[{"after_row": 1, "from_col": 2, "to_col": 2}])])
+              if isinstance(part, BinaryContent)]
+    assert lined.data != picture.data  # the draft's line is visible
+
+    refused = _preview([{"row": 112, "tables": [{"table": 7, "columns": ["label", "amount"]}]}, _note(113)],
+                       rows={112: _TABLE_HTML, 113: _TABLE_HTML})
+    assert refused[0].startswith("NOT DRAWN, correct this layout and preview it again: row 112")
+    assert refused[1] == "=== Row 113 as formatted (picture 1 of 1) ==="
+
+
+def test_preview_limits_each_note_and_survives_a_drawing_failure(monkeypatch):
+    """Previews share the request cap, so a note gets a first draft and two
+    corrections. A drawing failure is reported and never ends the pass."""
+    import notes.formatting_agent as fa
+    from notes.format_schema import NoteLayout
+    deps = fa.NotesFormatterDeps(run_id=1, db_path="", pdf_path="", sheet=_SHEET, model="fake",
+                                 rows={112: _TABLE_HTML})
+    draft = [NoteLayout.model_validate(_note())]
+    for _ in range(fa.MAX_PREVIEWS_PER_ROW):
+        assert len(fa._preview_layout(deps, draft)) == 2
+    assert fa._preview_layout(deps, draft)[0].startswith("Row 112 has no previews left")
+
+    def broken(*_args):
+        raise RuntimeError("drawing engine failed")
+    monkeypatch.setattr(fa, "render_note_preview", broken)
+    deps.previews.clear()
+    assert fa._preview_layout(deps, draft) == ["Row 112 could not be drawn: drawing engine failed"]
+
+
+def test_unreadable_unresolved_report_still_flags_its_note():
+    from notes.formatting_agent import _reported_unresolved
+    errors = {}
+    reported, miscopied = _reported_unresolved([{"row": 112, "kind": "cannot_format"}], {112: _TABLE_HTML}, errors)
+    assert reported == {112} and not miscopied and 112 in errors
+
+
+def test_formatter_agent_offers_the_preview_tool():
+    from pydantic_ai.models.test import TestModel
+    from notes.formatting_agent import create_notes_formatter_agent
+    agent, _ = create_notes_formatter_agent(run_id=1, db_path="", pdf_path="", sheet=_SHEET, model=TestModel())
+    assert "preview_layout" in agent._function_toolset.tools
 
 
 @pytest.mark.asyncio
@@ -1433,147 +1417,6 @@ async def test_retry_never_overwrites_a_person_edited_note(monkeypatch, formatte
 
 
 @pytest.mark.asyncio
-async def test_visual_correction_replaces_the_first_layout_entirely(monkeypatch, formatter_db):
-    """The correction compiles onto the pass's original HTML, so bold and lines
-    from the rejected first layout cannot survive into the saved note."""
-    from db import repository as repo
-    checks = []
-
-    async def check(**kwargs):
-        checks.append(kwargs["rows"][112])
-        if len(checks) == 1:
-            return {112: "Row 1 is not bold in the source."}, {"tables": [
-                {"row": 112, "table": 0, "status": "needs_correction"}]}
-        return {}, {"tables": [{"row": 112, "table": 0, "status": "pass"}]}
-
-    first = {**_note(lines=[{"after_row": 1, "from_col": 2, "to_col": 2}]),
-             "tables": [{"table": 0, "columns": ["label", "amount"],
-                         "rows": [{"row": 1, "bold": True}],
-                         "lines": [{"after_row": 1, "from_col": 2, "to_col": 2}]}]}
-    fake = _FakeAgent([_layout(first), _layout(_note())])
-    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
-    assert result["ok"]
-    assert "<strong" in checks[0] and "border-bottom" in checks[0]
-    db, _, run_id = formatter_db
-    with repo.db_session(db) as conn:
-        saved = repo.list_notes_cells_for_run(conn, run_id)[0].html
-    assert "<strong" not in saved and "border-bottom" not in saved
-    assert "text-align: right" in saved
-    assert result["layouts"]["112"]["tables"][0].get("rows", []) == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("recopied", [True, False])
-async def test_structure_finding_is_recopied_then_reformatted(monkeypatch, formatter_db, recopied):
-    """A wrongly copied table skips the style correction, goes back to
-    preparation, and the rebuilt note gets one ordinary formatting pass."""
-    import notes.table_recopy as tr
-    checks = []
-
-    async def check(**kwargs):
-        checks.append(set(kwargs["rows"]))
-        if len(checks) == 1:
-            return {112: "Total captured as heading cells."}, {"tables": [
-                {"row": 112, "table": 0, "status": "unresolved", "issue_kind": "structure",
-                 "reason": "Total captured as heading cells."}]}
-        return {}, {"tables": [{"row": 112, "table": 0, "status": "pass"}]}
-
-    calls = []
-
-    async def recopy(**kwargs):
-        calls.append(kwargs["findings"])
-        if not recopied:
-            return {"rebuilt_rows": [], "errors": {112: "Table 0 could not be re-copied: x"},
-                    "corrected": [], "usage": {"prompt_tokens": 0, "completion_tokens": 0}}
-        return {"rebuilt_rows": [112], "errors": {}, "corrected": [{"row": 112}],
-                "usage": {"prompt_tokens": 5, "completion_tokens": 1}}
-
-    monkeypatch.setattr(tr, "recopy_tables", recopy)
-    fake = _FakeAgent([_GOOD_PATCH, _GOOD_PATCH])
-    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
-    assert calls == [{112: [(0, "Total captured as heading cells.")]}]
-    if recopied:
-        # No style correction for a structural finding; one fresh formatting pass.
-        assert fake.calls == 2 and checks == [{112}, {112}]
-        assert result["ok"] and "Re-copied 1 table" in result["summary"]
-    else:
-        assert fake.calls == 1 and not result["ok"]
-        assert "could not be re-copied" in result["row_errors"][112]
-
-
-@pytest.mark.asyncio
-async def test_failed_reformat_after_recopy_keeps_saved_rows_and_receipts(monkeypatch, formatter_db):
-    """A provider error after the re-copy must not discard the first pass's
-    saved rows; only the re-copied row stays unresolved."""
-    import notes.table_recopy as tr
-    from db import repository as repo
-    db_path, _, run_id = formatter_db
-    with repo.db_session(db_path) as conn:
-        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113, label="Other",
-                               html=_TABLE_HTML, source_pages=[3])
-
-    async def check(**kwargs):
-        return {112: "Total captured as heading cells."}, {"tables": [
-            {"row": 112, "table": 0, "status": "unresolved", "issue_kind": "structure",
-             "reason": "Total captured as heading cells."}]}
-
-    async def recopy(**_kwargs):
-        return {"rebuilt_rows": [112], "errors": {}, "corrected": [{"row": 112}],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0}}
-
-    monkeypatch.setattr(tr, "recopy_tables", recopy)
-
-    class _Down(_FakeAgent):
-        async def run(self, prompt, **kwargs):
-            if self.calls:
-                raise RuntimeError("provider unavailable")
-            return await super().run(prompt, **kwargs)
-
-    fake = _Down([_layout(_note(), _note(113))])
-    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
-    assert not result["ok"] and result["changed_rows"] == 1
-    assert list(result["verified_rows"]) == ["113"]
-    assert result["failed_rows"] == [112] and "provider unavailable" in result["row_errors"][112]
-    with repo.db_session(db_path) as conn:
-        rows = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
-    assert rows[113].style_source == "formatter"
-
-
-@pytest.mark.asyncio
-async def test_recopy_pass_keeps_first_pass_revert_and_save_warning(monkeypatch, formatter_db):
-    """The post-re-copy pass must not wipe the first pass's revert snapshot,
-    and a failed save to the prepared document is reported, not hidden."""
-    import notes.table_recopy as tr
-    from db import repository as repo
-    db_path, _, run_id = formatter_db
-    with repo.db_session(db_path) as conn:
-        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113, label="Other",
-                               html=_TABLE_HTML, source_pages=[3])
-    checks = []
-
-    async def check(**kwargs):
-        checks.append(kwargs)
-        if len(checks) == 1:
-            return {112: "Total captured as heading cells."}, {"tables": [
-                {"row": 112, "table": 0, "status": "unresolved", "issue_kind": "structure",
-                 "reason": "Total captured as heading cells."}]}
-        return {}, {"tables": [{"row": 112, "table": 0, "status": "pass"}]}
-
-    async def recopy(**_kwargs):
-        return {"rebuilt_rows": [112], "errors": {}, "corrected": [{"row": 112}],
-                "warnings": {112: "Table re-copied for this run only."},
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0}}
-
-    monkeypatch.setattr(tr, "recopy_tables", recopy)
-    fake = _FakeAgent([_layout(_note(), _note(113)), _GOOD_PATCH])
-    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
-    assert result["ok"] and result["changed_rows"] == 2
-    assert "Row 112: Table re-copied for this run only." in result["summary"]
-    with repo.db_session(db_path) as conn:
-        assert set(repo.fetch_notes_format_snapshots(conn, run_id, _SHEET)) == {112, 113}
-
-
-@pytest.mark.asyncio
 async def test_person_save_during_formatting_keeps_ownership(monkeypatch, formatter_db):
     """A person saving identical HTML mid-pass still owns the note: the final
     write re-checks ownership, not only the HTML."""
@@ -1589,7 +1432,6 @@ async def test_person_save_during_formatting_keeps_ownership(monkeypatch, format
     fake = _FakeAgent([_layout(_note())], on_call=person_saves)
     result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
     assert result["changed_rows"] == 0 and result["person_edited_rows"] == [112]
-    assert "112" not in result["verified_rows"]
     with repo.db_session(db_path) as conn:
         cell = repo.list_notes_cells_for_run(conn, run_id)[0]
     assert cell.style_source == "human" and cell.html == _TABLE_HTML

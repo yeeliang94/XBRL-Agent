@@ -177,6 +177,34 @@ def test_table_width_alone_survives_the_sanitiser_and_reaches_tx():
     assert not decorated.find(attrs={"data-formatter-table-width": True})
 
 
+def test_wide_table_font_reaches_output_only_for_that_table_and_never_below_8pt():
+    """A smaller font for a table too wide for mTool's page applies to that
+    table's text only, survives the sanitiser, and a later layout without it
+    returns the table to the house size."""
+    from mtool.notes_decorate import NotesTableStyle, decorate_notes_html
+    from notes.html_sanitize import sanitize_notes_html
+    html = "<table><tr><td><p>Revenue</p></td><td>1,000</td></tr></table><p>After the table</p>"
+    out = compile_layouts(html, [TableLayout(table=0, columns=["label", "amount"], font_size_pt=9)])
+    assert verify_format_only(html, out).ok
+    clean = sanitize_notes_html(out)[0]
+    decorated = BeautifulSoup(decorate_notes_html(clean, NotesTableStyle(font_size_pt=11)), "html.parser")
+    assert "font-size: 9pt" in decorated.table["style"]
+    assert "font-size: 9pt" in decorated.table.p["style"]
+    assert "font-size: 11pt" in decorated.find_all("p")[-1]["style"]
+    assert not decorated.find(attrs={"data-formatter-font-size": True})
+    # The choice only shrinks: a house size below it wins.
+    smaller_house = decorate_notes_html(clean, NotesTableStyle(font_size_pt=8))
+    assert "font-size: 9pt" not in smaller_house
+    # A forged value outside 8-14 pt is dropped by the sanitiser.
+    for value in ("4", "²", "9.5"):
+        forged = sanitize_notes_html(f'<table data-formatter-font-size="{value}"><tr><td>x</td></tr></table>')[0]
+        assert "data-formatter-font-size" not in forged
+    with pytest.raises(ValueError):
+        TableLayout(table=0, columns=["label", "amount"], font_size_pt=7)
+    reset = compile_layouts(out, [TableLayout(table=0, columns=["label", "amount"])])
+    assert "data-formatter-font-size" not in reset
+
+
 def test_layout_without_widths_keeps_an_editor_resize():
     html = ('<table style="width: 380px"><colgroup><col style="width: 300px"><col style="width: 80px">'
             '</colgroup><tr><td colwidth="300">Label</td><td colwidth="80">1,000</td></tr></table>')
@@ -314,3 +342,11 @@ def test_boxed_grid_frame_draws_every_edge():
     out = compile_layouts(html, [TableLayout(table=0, columns=["label", "text"], frame="grid")])
     assert out.count("border-left: 0.75px solid #000000") >= 4
     assert [r["below_row"] for r in table_rules(out)] == [0, 1, 2]
+
+
+def test_outline_marks_shortened_text_so_it_is_not_read_as_missing_words():
+    label = "Unrealised loss/(gain) on foreign exchange"
+    cell = layout_manifest(f"<table><tr><td>{label}</td><td>1</td></tr></table>")[0]["rows"][0]["cells"][0]
+    assert cell["text"].endswith("…[shortened]") and cell["text"].startswith(label[:30])
+    short = layout_manifest("<table><tr><td>Additions</td><td>1</td></tr></table>")[0]["rows"][0]["cells"][0]
+    assert short["text"] == "Additions"

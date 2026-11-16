@@ -36,6 +36,8 @@ export const TOOL_LABELS: Record<string, string> = {
   verify_findings: "Checking review findings",
   raise_flag: "Recording an item to review",
   find_candidate_rows: "Checking candidate figures",
+  // Notes formatter tools
+  preview_layout: "Previewing formatted notes",
 };
 
 /** Return a human-readable label for a tool name, falling back to Title Case. */
@@ -136,6 +138,11 @@ export function argsPreview(toolName: string, args: Record<string, unknown>): st
     return "";
   }
 
+  if (toolName === "preview_layout") {
+    const rows = Array.isArray(args.rows) ? args.rows.length : 0;
+    return rows ? `${rows} ${rows === 1 ? "note" : "notes"}` : "";
+  }
+
   if (toolName === "write_facts" || toolName === "fill_workbook") {
     const fields = parseFillFields(args);
     if (fields) {
@@ -230,6 +237,13 @@ export function resultSummary(toolName: string, summary: string): ResultSummary 
       const m = summary.match(RE_WROTE_N);
       if (m) return { text: `${m[1]} values`, tone: "success" };
       return null;
+    }
+
+    if (toolName === "preview_layout") {
+      // The formatter was told a draft did not fit, or could not be drawn.
+      if (/NOT DRAWN|could not be drawn|no previews left/.test(summary)) return { text: "needs correction", tone: "warn" };
+      const m = summary.match(/\[(\d+) page image/);
+      return m ? { text: `${m[1]} ${m[1] === "1" ? "picture" : "pictures"}`, tone: "success" } : null;
     }
 
     if (toolName === "verify_totals") {

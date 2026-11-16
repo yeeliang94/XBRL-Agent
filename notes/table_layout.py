@@ -103,6 +103,11 @@ class TableLayout(BaseModel):
     paragraphs: list[ParagraphOverride] = Field(default_factory=list)
     emphasis: list[TextEmphasis] = Field(default_factory=list)
     width_percent: Optional[int] = Field(default=None, ge=10, le=100, strict=True)
+    font_size_pt: Optional[int] = Field(
+        default=None, ge=8, le=14, strict=True,
+        description="A smaller font for a table too wide for mTool's text width, never below 8. "
+                    "Omit to use the house font size.",
+    )
     column_widths: Optional[list[Annotated[int, Field(ge=16, le=2000, strict=True)]]] = Field(
         default=None, description="Preferred width in pixels for every GRID column, including merged columns.",
     )
@@ -299,6 +304,8 @@ def layout_operations(html: str, layouts: list[TableLayout],
             table_style["table_width"] = f"{layout.width_percent}%"
         if layout.column_widths is not None:
             table_style["column_widths"] = layout.column_widths
+        # Formatter-owned: a layout without it returns the table to the house size.
+        table_style["font_size_pt"] = layout.font_size_pt
         if table_style:
             ops.append({"target": {"table": layout.table, "range": "table"}, "style": table_style})
         ops.append({"target": {"table": layout.table, "range": "all"},
@@ -351,6 +358,12 @@ def describe_layouts(layouts: list[TableLayout]) -> str:
     return "\n".join(out) if out else "no tables"
 
 
+def _clip(text: str, limit: int) -> str:
+    """Shorten coordinate text, marking the cut so it never reads as the
+    note's own wording (a live run reported shortened labels as missing words)."""
+    return text if len(text) <= limit else text[:limit].rstrip() + " …[shortened]"
+
+
 def layout_manifest(html: str) -> list[dict]:
     """The coordinates a layout uses: grid columns per cell, by direct row."""
     tables = BeautifulSoup(html or "", "html.parser").find_all("table")
@@ -364,8 +377,8 @@ def layout_manifest(html: str) -> list[dict]:
             for cell in tr.find_all(["th", "td"], recursive=False):
                 cols = sorted({c for _, c in positions.get(id(cell), [])})
                 span = [cols[0] + 1, cols[-1] + 1] if cols else []
-                cells.append({"grid_columns": span, "text": cell.get_text(" ", strip=True)[:40],
-                              "paragraphs": [{"paragraph": i, "text": p.get_text(" ", strip=True)[:120],
+                cells.append({"grid_columns": span, "text": _clip(cell.get_text(" ", strip=True), 40),
+                              "paragraphs": [{"paragraph": i, "text": _clip(p.get_text(" ", strip=True), 120),
                                               "hard_breaks": len(p.find_all("br"))}
                                              for i, p in enumerate(cell_paragraphs(cell), 1)]})
             rows.append({"row": r, "cells": cells})

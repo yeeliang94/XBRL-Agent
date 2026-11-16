@@ -85,7 +85,7 @@ export function FormatterSubAgentActivity({ events, status, recorded = false, te
 /** Separate timelines keep parallel parts' tool calls and phases distinct. */
 function FormatterTechnicalActivity({ events }: { events: SSEEvent[] }) {
   return <div>
-    <p style={styles.execution}>Parts run in parallel; checks and corrections run in sequence within each part.</p>
+    <p style={styles.execution}>Parts run in parallel; previews and corrections run in sequence within each part.</p>
     {deriveFormatterSubAgents(events).map((part) => {
       const steps = events.filter((event) => event.data.sub_agent_id === part.subAgentId);
       return <section key={part.subAgentId} aria-label={formatterSubAgentLabel(part.subAgentId)}>

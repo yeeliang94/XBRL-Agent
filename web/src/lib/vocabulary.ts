@@ -228,7 +228,6 @@ export function notesFormatErrorMessage(
   rawError: string | null | undefined,
   outcome?: { changed_rows?: number; summary?: string | null; failed_rows?: number[] },
 ): string {
-  if (errorType === "verification_stale") return "Formatting needs rechecking after changes.";
   if ((outcome?.changed_rows ?? 0) > 0) {
     return "Some formatting was saved. Some notes still need review.";
   }

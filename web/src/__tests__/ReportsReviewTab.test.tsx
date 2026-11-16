@@ -98,7 +98,7 @@ describe("report review", () => {
     vi.mocked(launchNotesFormatter).mockResolvedValue({ ok: true, status: "running", sheet: "Report-Auditors" });
     const blocked = vi.fn();
     render(<ReportsReviewTab runId={7} onPreparationBlocked={blocked} />);
-    fireEvent.click(await screen.findByRole("button", { name: previous === "idle" ? "Check formatting" : "Retry formatting" }));
+    fireEvent.click(await screen.findByRole("button", { name: previous === "idle" ? "Format report" : "Retry formatting" }));
     expect(await screen.findByRole("button", { name: "Formatting…" })).toBeDisabled();
     expect(screen.getByLabelText("License number of auditor")).toBeDisabled();
     expect(blocked).toHaveBeenLastCalledWith(true);
@@ -108,33 +108,6 @@ describe("report review", () => {
     // The finished pass's saved text is shown, not the pre-format copy.
     expect(screen.getByLabelText("License number of auditor")).toHaveValue("0014");
     expect(apiFetch).toHaveBeenCalledTimes(2);
-  });
-
-  it("offers a formatting recheck after saving narrative changes without reopening the report", async () => {
-    const narrative = { ...field, concept: "ssmt_DisclosureOfAuditorsReportToMembersExplanatory",
-      label: "Disclosure of auditor's report to members", kind: "html", value: "<p>Original report.</p>" };
-    vi.mocked(apiFetch).mockResolvedValueOnce({ reports: [
-      { ...loaded.reports[0], fields: [narrative] },
-      { type: "STATEMENT_BY_DIRECTORS", label: "Statement by directors", sheet: "Report-StatementByDirectors", fields: [] },
-    ] }).mockResolvedValueOnce({ ...narrative, value: "<p>Corrected report.</p>", revision: 2 });
-    let saved = false;
-    vi.mocked(fetchNotesFormatStatus).mockImplementation(async (_run, sheet) => saved && sheet === "Report-Auditors"
-      ? { status: "done", sheet, error_type: "verification_stale", error: "Report changed after checking." }
-      : { status: "done", sheet });
-    vi.mocked(launchNotesFormatter).mockResolvedValue({ ok: true, status: "running", sheet: "Report-Auditors" });
-    render(<ReportsReviewTab runId={7} onPreparationBlocked={vi.fn()} />);
-    const input = await screen.findByRole("textbox", { name: "Disclosure of auditor's report to members" });
-    await waitFor(() => expect(fetchNotesFormatStatus).toHaveBeenCalledTimes(2));
-    expect(screen.queryByRole("button", { name: /formatting/i })).toBeNull();
-    fireEvent.change(input, { target: { value: "<p>Corrected report.</p>" } });
-    saved = true;
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    const recheck = await screen.findByRole("button", { name: "Recheck formatting" });
-    expect(screen.getByRole("textbox", { name: "Disclosure of auditor's report to members" })).toHaveValue("<p>Corrected report.</p>");
-    expect(fetchNotesFormatStatus).toHaveBeenCalledTimes(3);
-    expect(fetchNotesFormatStatus).toHaveBeenLastCalledWith(7, "Report-Auditors");
-    fireEvent.click(recheck);
-    await waitFor(() => expect(launchNotesFormatter).toHaveBeenCalledWith(7, "Report-Auditors"));
   });
 
   it("keeps the PDF place while editing report text and reopens the page from its label", async () => {

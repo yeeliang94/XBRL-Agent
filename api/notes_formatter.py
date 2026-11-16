@@ -69,19 +69,16 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
         # reviewer launch.)
         config = run.config or {}
         previous = repo.fetch_notes_format_task(conn, run_id, body.sheet)
-        from notes.visual_review import current_verification_cells, stale_verified_rows
-        cells = current_verification_cells(conn, run_id, body.sheet)
+        from notes.formatting_agent import filled_formatter_cells
+        cells = filled_formatter_cells(conn, run_id, body.sheet)
         previous_result = (previous or {}).get("result") or {}
-        retry_rows = sorted((set(stale_verified_rows(conn, run_id, body.sheet, previous_result, cells=cells))
-            | set(previous_result.get("failed_rows") or [])
+        retry_rows = sorted((set(previous_result.get("failed_rows") or [])
             | set(previous_result.get("skipped_rows") or [])) & cells.keys())
         if retry_rows:
             from notes.formatting_agent import formatter_cell_is_candidate
             retry_rows = sorted(set(retry_rows) | {
                 cell.row for cell in cells.values()
                 if formatter_cell_is_candidate(cell, PDF_FORMAT_CANDIDATE_SOURCES | {None})
-                and str(cell.row) not in (previous_result.get("verified_rows") or {})
-                and cell.row not in (previous_result.get("verified_rows") or {})
             })
         standard = config.get("filing_standard", "mfrs")
         level = config.get("filing_level", "company")
@@ -162,13 +159,21 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
     finally:
         launch_conn.close()
 
-    pdf_path = ""
-    if run.output_dir:
+    # The prepared copy has sideways pages turned upright; the automatic pass
+    # reads the same file. The original upload stands in when there is none.
+    from api.files import _resolve_run_pdf_path
+    resolved_pdf = await asyncio.to_thread(_resolve_run_pdf_path, run)
+    pdf_path = str(resolved_pdf) if resolved_pdf else ""
+    if not pdf_path and run.output_dir:
         cand = Path(run.output_dir) / "uploaded.pdf"
         if cand.exists():
             pdf_path = str(cand)
 
     timeout = server.NOTES_FORMATTER_WALLCLOCK_TIMEOUT
+    # The notes this launch formats; a pass that ends early leaves them for review.
+    from notes.formatting_agent import formatter_cell_is_candidate as _is_candidate
+    launch_rows = retry_rows or [row for row, cell in sorted(cells.items())
+                                 if _is_candidate(cell, PDF_FORMAT_CANDIDATE_SOURCES | {None})]
 
     async def _runner_async() -> dict:
         from notes.formatting_agent import run_notes_formatter
@@ -227,12 +232,12 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
                 "ok": False, "model": model_name, "error_type": "model_error",
                 "error": f"{type(exc).__name__}: {exc}",
             }
+        from notes.auto_format import keep_earlier_notes, unfinished
+        result = unfinished(result, launch_rows)
         try:
             tc = server._open_audit_conn()
             try:
-                from notes.visual_review import current_verification_cells, retain_other_verification_receipts
-                result = retain_other_verification_receipts((previous or {}).get("result") or {}, result,
-                    active_rows=current_verification_cells(tc, run_id, body.sheet))
+                result = keep_earlier_notes(tc, run_id, body.sheet, previous_result, result, launch_rows)
                 repo.upsert_notes_format_task(
                     tc, run_id, body.sheet, "done", model=model_name,
                     summary=result.get("summary"),
@@ -278,24 +283,12 @@ async def notes_formatter_status(run_id: int, sheet: str):
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
         state = repo.fetch_notes_format_task(conn, run_id, sheet)
-        if state and state.get("status") != "running":
-            from notes.visual_review import current_verification_cells, retain_other_verification_receipts, stale_verified_rows
-            cells = current_verification_cells(conn, run_id, sheet)
-            result = state.get("result") or {}
-            if "verified_rows" in result:
-                result = retain_other_verification_receipts({}, result, active_rows=cells)
-                state["result"] = result
-            stale = stale_verified_rows(conn, run_id, sheet, result, cells=cells)
-            if stale:
-                state["result"] = {**(state.get("result") or {}), "ok": False,
-                    "stale_rows": stale, "failed_rows": sorted(set(stale) | set((state.get("result") or {}).get("failed_rows") or [])),
-                    "error_type": "verification_stale"}
-                state["summary"] = "Notes changed after appearance checking. Recheck rows " + ", ".join(map(str, stale)) + "."
-                state["error"] = state["summary"]
-                state["error_type"] = "verification_stale"
         has_snapshot = bool(
             repo.fetch_notes_format_snapshots(conn, run_id, sheet),
         )
+        from notes.auto_format import current_layout_notes
+        layout_notes = current_layout_notes(conn, run_id, sheet,
+                                            ((state or {}).get("result") or {}).get("layout_notes"))
     finally:
         conn.close()
     if state is None:
@@ -310,6 +303,7 @@ async def notes_formatter_status(run_id: int, sheet: str):
         "status": "done", "sheet": sheet, "skipped_rows": skipped,
         "failed_rows": (state.get("result") or {}).get("failed_rows") or [],
         "can_revert": has_snapshot, **state,
+        "layout_notes": {str(row): text for row, text in layout_notes.items()},
     }
 
 

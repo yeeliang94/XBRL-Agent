@@ -286,3 +286,16 @@ describe("resultSummary", () => {
     expect(resultSummary("fill_workbook", "")).toBeNull();
   });
 });
+
+describe("notes formatter preview", () => {
+  test("shows how many notes were previewed and whether a draft was refused", () => {
+    expect(humanToolName("preview_layout")).toBe("Previewing formatted notes");
+    expect(argsPreview("preview_layout", { rows: [112, 125] })).toBe("2 notes");
+    expect(argsPreview("preview_layout", { rows: [112] })).toBe("1 note");
+    expect(argsPreview("preview_layout", {})).toBe("");
+    expect(resultSummary("preview_layout", "=== Row 112 as formatted (picture 1 of 1) === [1 page image(s)]"))
+      .toEqual({ text: "1 picture", tone: "success" });
+    expect(resultSummary("preview_layout", "NOT DRAWN, correct this layout and preview it again: row 112: bad line"))
+      .toEqual({ text: "needs correction", tone: "warn" });
+  });
+});

@@ -1250,10 +1250,9 @@ New author-written section headings still use the established h3 convention.
 Source preparation captures hierarchy/emphasis; destination formatting may not
 flatten that hierarchy, remove source emphasis, or change text/table geometry.
 Emphasis patches add only; a false removal request is rejected with an explicit
-source-correction/human-review disposition. Appearance assessments distinguish
-style from source content, provenance, emphasis and structure defects. A note
-with a source defect cannot enter the style-correction retry or become verified.
-Pinned by `tests/test_notes_visual_review.py` and `tests/test_notes_format_patch.py`.
+source-correction/human-review disposition. The formatter reports source
+content, provenance, emphasis and structure defects as unresolved notes; a
+layout cannot repair them. Pinned by `tests/test_notes_format_patch.py`.
 Pinned by source-render, sanitizer, format-patch, clipboard and notes-decoration
 heading preservation tests.
 
@@ -1456,8 +1455,8 @@ Key invariants:
     This distinguishes `no_change_needed` on the initial valid
     patch from `invalid_patch_fallback` after a rejected target;
     `notes_formatter` ∈ `_AGENT_ROLES`. The output has no model-authored
-    confidence score. Deterministic validation owns content safety; the separate
-    appearance check below compares formatting against the source. Mixed numeric sheets permit formatting only for
+    confidence score. Deterministic validation owns content safety; the formatter's
+    own layout preview below compares formatting against the source. Mixed numeric sheets permit formatting only for
     filled, valid canonical HTML disclosure slots resolved within the run's
     exact filing family. Structured numeric rows and mismatched identities are
     excluded from selection, patch targets and snapshots; eligibility is checked
@@ -1471,15 +1470,10 @@ Key invariants:
     `tests/test_notes_format_patch.py`,
     `test_db_schema_v26.py`/`_v27.py`.
     Manual retry accepts `unstyled`/`floor` cells and older cells with no
-    style provenance; stale verification retries also select affected `formatter`
-    cells. Automatic PDF formatting uses only `unstyled`/`floor`.
-    Successful per-note receipts in task result JSON bind canonical HTML, prepared
-    output, source pages and source generation. Status reads detect later edits,
-    reviewer writes, source changes and output-setting changes; stale notes expose
-    a targeted retry. Failed and skipped rechecks remain retryable, including already
-    formatted fields. Newly filled eligible PDF fields without receipts are unchecked.
-    Cleared or deleted fields lose their receipts. Targeted retries preserve
-    unrelated verification receipts for remaining filled canonical fields.
+    style provenance; a retry after a failed pass also selects its failed and
+    skipped rows, including already formatted fields. Automatic PDF formatting
+    uses only `unstyled`/`floor`. Task results carry no per-note verification
+    receipts; a person's final formatting pass is the appearance check.
     Omitted page lists preserve existing evidence; missing legacy lists can recover
     only from the cell's exact active source placements. A note without evidence
     stays unresolved without blocking other selected notes. Pinned by
@@ -1497,57 +1491,51 @@ Key invariants:
     Formatter patches cannot introduce text underline; table rules use cell
     borders, and existing source/human markup remains intact. Existing row
     errors retain their root cause.
-    Before saving, a fresh formatter-model context compares every prepared
-    output table (the same HTML used by review and Copy, plus its geometry)
-    with source PDF images, including comparative years and continuation
-    pages. No browser is required. Oversize output, missing/duplicate table
-    decisions or incomplete source evidence remains unresolved. One targeted style-only correction is
-    supplied with all failed-table findings for the note, not only its last
-    finding. Each table cites its actual inspected source pages; tables within
-    one note may have different citations. All known note source pages are
-    loaded independently before checking. A note with any missing source image
-    stays unresolved without blocking notes whose images are complete. Empty,
-    unseen-page or other-note citations stay unresolved. A table's citations
-    must belong to its own note's recorded source pages; source-viewing tools
-    remain unrestricted and may inspect any valid PDF page.
-    The correction is
-    checked once. Only passed rows reach existing CAS writes
-    and snapshots; grouped task results retain each part's visual assessment
-    and evidence hashes. No-op proposals also require the check. Formatting and
-    correction share the formatter request cap. Initial checking and one recheck each
-    have a separate eight-request allowance, aggregated into the same token telemetry
-    only after correction finishes. A check covering more than
-    `visual_review.VISUAL_TABLES_PER_CHECK` tables runs as concurrent chunks, each
-    with only its notes' source pages and the whole remaining allowance; a chunk
-    that fails leaves only its own notes unresolved. Checker packets omit the
-    geometry JSON the canonical HTML already states, send paragraph coordinates
-    only for multi-paragraph or hard-break cells, and list prepared declarations
-    shared by every cell once (moved only where it cannot change any cell). Quotes
-    are compared as text, so copied markup such as `<br/>` still identifies a table. Budget exhaustion leaves affected rows unresolved and
-    preserves unrelated rows that already passed. Duplicate/omitted assessments
-    retain unresolved findings; rejected corrections are logged. Completed
-    rechecks replace current errors with the latest outstanding findings while
-    initial findings remain in trace history. Corrections receive a fresh labeled
-    coordinate manifest. Formatter/checker usage is recorded once per part as
-    a NOTES_FORMATTING audit entry, including completed responses before failure. Manual summaries and automatic stage
-    events surface checking, correction and rechecking. The check does not
-    certify native Word or mTool rendering. Pinned by
-    `tests/test_notes_visual_review.py` and the visual-save cases in
-    `tests/test_notes_format_patch.py`.
-    Visual review also receives the current canonical candidate so it can check
-    source double-rule intent before the approved mTool substitution erases it.
-    A source double rule requires a canonical double edge at the correct position
-    and extent, plus the corresponding prepared 0.75px solid edge with its colour
-    and sides retained. Missing or misplaced intent and degraded output still
-    fail; the substitution alone does not. The evidence boundary is pinned by
-    `tests/test_notes_visual_review.py::test_review_can_distinguish_double_intent_after_transport_normalization`.
-    Formatter and reviewer read lines from `notes/rule_map.py`: one entry per
-    physical horizontal line, resolved from both cells by the border-collapse
-    winner and named by the row it sits below (runs 347-349 read mirrored edges
-    as two rules). Single-rule thickness is not reproduced or judged; every
-    single rule is 0.75px. Both prompts receive the resolved appearance (house
-    default borderless, no fill). `numeric_cells` skips the description column.
-    Pinned by `tests/test_notes_rule_map.py` and `tests/test_notes_format_patch.py`.
+    **Layout preview (2026-11-15):** the formatter checks its own work. Its
+    `preview_layout` tool compiles a draft layout onto the launch HTML and
+    returns pictures of the fully decorated output (as review and Copy show it;
+    mTool's size tiers are not applied), drawn by `notes/render.py` with
+    PyMuPDF's HTML engine. Each row can be previewed `MAX_PREVIEWS_PER_ROW` times. No
+    browser is required. A draft that does not fit its table is not drawn; the
+    tool returns the reason. A preview saves nothing, so the final answer
+    restates every layout. Text is drawn in the bundled Liberation Sans
+    (`notes/fonts/`), whose letter widths equal Arial's; the built-in fallback
+    font wraps figures that Arial fits. The page is mTool's note editor page
+    (File > Page Setup: A4 portrait, 20 mm margins, so 170 mm of text width and
+    257 mm of text per page). A table that cannot fit 170 mm even at its
+    narrowest is drawn on a widened page and the formatter is told by how many
+    millimetres. A long note is drawn as several pages,
+    at most `MAX_PREVIEW_PAGES` pictures per call. Drawing is serialized by a
+    lock because formatter parts run on several threads. The picture
+    approximates a browser and does not certify native Word or mTool
+    rendering. There is no separate checker agent, correction round or
+    recheck. Previews share the formatter request cap (invariant 18).
+    The formatter's final answer lists notes it could not match exactly
+    (`SheetLayout.unresolved`). A capability limit (gapped or inset rules,
+    boxed cells, a single indented hard-break line) is drawn in the nearest
+    house style and reported as `house_style`: the note is formatted, not
+    failed, and the formatter's note is kept in `layout_notes` with the hash
+    of the saved note text; the status route shows it under the note only
+    while the note is unchanged (`notes.auto_format.current_layout_notes`), and
+    a retry carries forward notes for notes it did not touch. Because no
+    separate checker runs, a note whose source pages the formatter never
+    viewed, or whose tables it left out of its answer, stays failed. A note
+    whose final formatting differs from every preview of it is saved but
+    flagged, because no one compared that exact result with the source. A repair
+    answer replaces the earlier reports for the notes it covers. Any other report keeps and saves its
+    best-effort formatting but stays failed (`error_type =
+    visual_review_failed`, a historical name) for a person. A part that ends
+    early (time limit, request limit, AI error) names each of its notes in
+    `failed_rows` (`notes.auto_format.unfinished`), automatic and manual.
+    Formatter usage is recorded once per part as a NOTES_FORMATTING audit
+    entry, including completed responses before failure. Single-rule
+    thickness is not reproduced; every single rule is 0.75px. The prompt
+    receives the resolved appearance (house default borderless, no fill).
+    `numeric_cells` skips the description column. `notes/rule_map.py` (one
+    entry per physical horizontal line, resolved from both cells by the
+    border-collapse winner) is no longer sent to a model; the layout tests use
+    it to read compiled lines. Pinned by `tests/test_notes_render.py`,
+    `tests/test_notes_rule_map.py` and `tests/test_notes_format_patch.py`.
     **Table layouts (2026-10-11):** the formatter returns a `SheetLayout`
     (`notes/format_schema.py`): per table, one role per GRID column
     (label/amount/date/text), optional row roles (bold, indent, shaded) and
@@ -1566,7 +1554,15 @@ Key invariants:
     it and the format-only gate exempts it; unmarked (source or human) emphasis
     can never be removed. An editor save drops the marker, which leaves that
     bold permanent (the safe direction); mTool output strips both formatter
-    markers. Table width percentages and
+    markers. A table too wide for mTool's 170 mm text width may take a
+    smaller font (`font_size_pt`, 8–14, stored as `data-formatter-font-size`
+    on the `<table>`; never below 8 pt and never above the house size). The
+    preview names the largest size at which the note's tables fit
+    (`notes.render.fitting_font_size`). The sanitizer, the editor's
+    `StyledTable` and the mTool decorator keep it; it applies only to that
+    table's text, and a later layout without it returns the house size.
+    Pinned by `tests/test_notes_table_layout.py`, `tests/test_notes_render.py`
+    and `cellFormatting.test.ts`. Table width percentages and
     bounded per-grid-column pixel widths are presentation preferences, not
     changes to rows or merged cells. A layout changes sizing only when it
     states widths, so an editor resize or source widths survive a layout that
@@ -1587,36 +1583,32 @@ Key invariants:
     paragraph structure and source emphasis. Editor cell attributes retain
     vertical alignment; prepared Copy/mTool HTML retains both capabilities.
     Native save/reopen fidelity is not certified by these HTML checks.
-    `unsupported_layout` findings (inset/gapped cell-edge rules, unsupported
-    fragment styling, individual hard-break indentation) remain unresolved and bypass
-    style correction and source re-copy, even if the checker calls them passed.
-    The finding must quote this table in `observed_text`; an unquoted claim is
-    downgraded to an ordinary style correction. A note whose only findings are
-    such limits (`limited_rows`) keeps and saves its best-effort formatting but
-    stays failed with no verification receipt; its status says formatting was
-    saved and directs manual review instead of another style retry.
+    Layout limits (inset/gapped cell-edge rules, unsupported fragment
+    styling, individual hard-break indentation) are drawn in the nearest
+    house style and reported as `house_style` notes, not failures.
     Each formatter part is closed once by `FormatterActivity.finish` (first
     outcome and usage win). Audit writes remain retryable until commit, without
     repeating the terminal event; status steps save immediately, tool steps are batched.
     Pinned by `tests/test_notes_format_schema.py`,
     `tests/test_notes_html_sanitize_css.py`, `tests/test_notes_table_layout.py`,
-    `tests/test_notes_visual_review.py`, and `cellFormatting.test.ts`.
+    and `cellFormatting.test.ts`.
     Code owns alignment:
     right only when every covered column is amount/date. Invalid rows enter
-    the bounded repair; valid rows proceed. A visual correction compiles onto
-    the pass's ORIGINAL HTML, so it replaces the first layout entirely; bold
-    is additive (source and earlier-pass emphasis are indistinguishable). The
-    reviewer keeps every evidence input and receives the layout as context.
+    the bounded repair; valid rows proceed. Every preview and the final layout
+    compile onto the pass's ORIGINAL HTML, so a later draft replaces an earlier
+    one entirely; bold is additive (source and earlier-pass emphasis are
+    indistinguishable).
     Person ownership: the editor PATCH route saves `style_source = "human"`;
     `content_origin = human_modified` cannot identify a person because the
     notes reviewer AI also stamps it. The formatter skips `human` rows even on
     retry (`person_edited_rows`). Earlier person edits carry no marker. Pinned
-    by `tests/test_notes_table_layout.py`, `tests/test_notes_format_patch.py`,
-    `tests/test_notes_visual_review.py` and `tests/test_server_notes_cells_api.py`.
-    **Table re-copy (schema v52):** a visual assessment with
-    `issue_kind = structure` (the copied table differs from the PDF: heading vs
-    data cells, rows, columns, merges) is never a pass and never enters the
-    style correction round. `notes/table_recopy.py` maps it to exactly one
+    by `tests/test_notes_table_layout.py`, `tests/test_notes_format_patch.py`
+    and `tests/test_server_notes_cells_api.py`.
+    **Table re-copy (schema v52):** the formatter reports a table whose copy
+    differs from the PDF (heading vs data cells, rows, columns, merges) as a
+    `miscopied_table` unresolved note. The report triggers a re-copy only when
+    its quote is text from that table; otherwise it stays an ordinary finding.
+    `notes/table_recopy.py` maps it to exactly one
     source table block and re-copies it with preparation's own capture and
     verification prompts (`ingest/document_preparation.recapture_table`).
     Gates: nothing else on the page changes, identical word/figure multiset,
@@ -1629,15 +1621,16 @@ Key invariants:
     equal their render (including cleanup receipts), Word or non-prepared
     sources, continued/grouped tables, and blocks used on another sheet. The
     prepared document on disk is updated (`record_table_correction`) so a rerun
-    of the upload keeps the fix. Rebuilt rows get one ordinary formatting pass.
+    of the upload keeps the fix. Rebuilt rows get one ordinary formatting pass;
+    a report from that pass is not re-copied again.
     Heading styling (bold, fill, header rule) applies only to a table's
     leading heading rows (thead, or all-`th` rows before the first data row);
     a `th` lower down is a row label or a captured total and renders as a data
     cell (`heading_rows` in `mtool/notes_decorate.py`, `headingRows` in
     `web/src/lib/tableAlign.ts`). Pinned by
     `tests/test_mtool_notes_decorate.py` and `tableAlign.test.ts`.
-    Pinned by `tests/test_table_recopy.py`, `tests/test_db_schema_v52.py`,
-    `tests/test_notes_format_patch.py` and `tests/test_notes_visual_review.py`.
+    Pinned by `tests/test_table_recopy.py`, `tests/test_db_schema_v52.py`
+    and `tests/test_notes_format_patch.py`.
     Partial saves retain
     `ok=false`, `validation_failed` or `visual_review_failed`, `failed_rows`, and per-row errors, alongside
     the actual `changed_rows`. Snapshots include only saved rows. The review
@@ -1654,8 +1647,8 @@ Key invariants:
     navigation plus page inspection; scanned pages use existing vision fallback.
     Both author semantic HTML and table geometry. Automatic notes review is followed
     by content cleanup, source-integrity assessment and its single bounded repair,
-    then the dedicated formatter and final table appearance check. No content author
-    runs after that check in automatic finalization. The integrity repair reassesses
+    then the dedicated formatter with its layout previews. No content author
+    runs after the formatter in automatic finalization. The integrity repair reassesses
     completeness before returning. Pinned by `tests/test_preparation_integration.py`
     and `tests/test_pdf_notes_auto_format_wiring.py`. There is no normal transcription or
     formatting toggle. Old `XBRL_PDF_SIDECAR` enable values and

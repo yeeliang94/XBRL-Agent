@@ -47,6 +47,27 @@ class NoteLayout(BaseModel):
     blocks: List[BlockOperation] = Field(default_factory=list)
 
 
+class UnresolvedNote(BaseModel):
+    """A note the formatter could not make match the source; a person checks it."""
+    model_config = ConfigDict(extra="forbid")
+    row: int = Field(ge=1, description="The notes-sheet row number")
+    kind: Literal["house_style", "miscopied_table", "cannot_format"] = Field(
+        description='"house_style" when the source shows formatting the layout cannot draw '
+                    "and you used the nearest house-style equivalent; the note is not a "
+                    'failure. "miscopied_table" when the copied table itself differs from the '
+                    "PDF (rows, columns, merged or heading cells); that table is re-copied from "
+                    'the source. "cannot_format" for anything else a person must check.',
+    )
+    table: Optional[int] = Field(
+        default=None, ge=0, description="The table's number in layout_tables, when one table is meant.",
+    )
+    quote: str = Field(
+        default="",
+        description="For miscopied_table: an exact row label or cell text copied from that table.",
+    )
+    reason: str = Field(min_length=1, description="One short sentence a person will read.")
+
+
 class SheetLayout(BaseModel):
     """The formatter's whole answer: what each table is, not how to style it."""
     sheet: str = Field(description="Must equal the sheet you were given.")
@@ -56,6 +77,10 @@ class SheetLayout(BaseModel):
     notes: List[NoteLayout] = Field(
         default_factory=list,
         description="One entry per note row to format; empty when nothing needs formatting.",
+    )
+    unresolved: List[UnresolvedNote] = Field(
+        default_factory=list,
+        description="Notes a person must check, each with a reason.",
     )
 
 

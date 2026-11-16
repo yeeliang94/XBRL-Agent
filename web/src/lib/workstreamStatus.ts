@@ -1,7 +1,7 @@
 import type { AgentTabStatus } from "./types";
 
 export function workstreamStatusLabel(status: AgentTabStatus, role?: string): string {
-  // Formatting can save useful output while leaving appearance unverified.
+  // Formatting can save useful output while leaving some notes for a person to check.
   if (status === "failed" && (role === "NOTES_FORMATTING" || role === "notes-formatting")) return "Needs review";
   switch (status) {
     case "running": return "Working";

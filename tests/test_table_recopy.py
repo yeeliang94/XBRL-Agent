@@ -324,3 +324,28 @@ async def test_recorded_page_banner_removal_survives_the_rebuild(tmp_path):
         assert "VTech Telecommunications" not in html and "<td>12,856</td>" in html
         source_cell = next(c for c in build_input(conn, run_id, generation).cells if c.row == 71)
         assert source_cell.selection_matches_content is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("viewed, turn", [("uploaded.pdf", 90), ("prepared-x.pdf", 0)])
+async def test_recopy_turns_a_sideways_page_once(recopy_run, viewed, turn):
+    """The prepared copy is already upright; turning it again by the recorded
+    correction re-copies the table from a sideways picture."""
+    from notes.table_recopy import recopy_tables
+
+    db_path, pdf_path, run_id = recopy_run
+    metadata = Path(pdf_path).parent / PREPARATION_NAME
+    data = json.loads(metadata.read_text())
+    data["pdf_file"] = "prepared-x.pdf"
+    data["pages"][0]["rotation"] = 90
+    metadata.write_text(json.dumps(data))
+    turns = []
+
+    async def recapture(path, **kwargs):
+        turns.append(kwargs["rotation"])
+        return await _fake_recapture(path, **kwargs)
+
+    await recopy_tables(run_id=run_id, db_path=str(db_path), pdf_path=str(Path(pdf_path).parent / viewed),
+                        sheet=SHEET, findings={71: [(0, "Total captured as heading cells.")]}, model=None,
+                        _recapture=recapture)
+    assert turns == [turn]

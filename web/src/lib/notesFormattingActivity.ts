@@ -21,8 +21,8 @@ export function notesFormattingActivity(
   }
   if (failure) return { status: "failed", message: failure, progress };
   if (!progress) return null;
-  if (progress.status === "failed") return { status: "failed", message: progress.message ?? "Notes appearance checking failed", progress };
-  if (progress.status === "succeeded") return { status: "complete", message: progress.message ?? "Notes appearance verified", progress };
+  if (progress.status === "failed") return { status: "failed", message: progress.message ?? "Notes formatting needs review", progress };
+  if (progress.status === "succeeded") return { status: "complete", message: progress.message ?? "Notes formatted", progress };
   if (state.pipelineStage === "done" || state.pipelineStage === "cleaning_notes") {
     return { status: "complete", message: "Formatting complete", progress };
   }

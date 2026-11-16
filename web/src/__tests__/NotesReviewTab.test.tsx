@@ -3080,18 +3080,14 @@ describe("NotesReviewTab — AI formatter", () => {
     ).length;
   }
 
-  test("edited notes show one quiet recheck notice and a contextual action", async () => {
+  test("a house-style formatter note shows under its note without an error", async () => {
     routedFetch({status: (url) => url.includes("Notes-CI") ? {
-      status: "done", sheet: "Notes-CI", error_type: "verification_stale",
-      error: "Notes changed after appearance checking. Recheck rows 112.",
-      changed_rows: 1, summary: "Previous formatting saved.",
+      status: "done", sheet: "Notes-CI", changed_rows: 1, error: null,
+      layout_notes: { "4": "Gapped underlines in the source are drawn as one line." },
     } : {status: "idle", sheet: "other"}});
     render(<NotesReviewTab runId={42} />);
-    const notice = await screen.findByTestId("notes-format-summary");
-    expect(notice).toHaveAttribute("role", "status");
-    expect(screen.getAllByText("Formatting needs rechecking after changes.")).toHaveLength(1);
-    expect(notice).not.toHaveTextContent("112");
-    expect(screen.getByRole("button", {name: "Recheck formatting Corporate Information"})).toBeEnabled();
+    expect(await screen.findByText("Formatting note: Gapped underlines in the source are drawn as one line.")).toBeInTheDocument();
+    expect(screen.queryByTestId("notes-format-summary")).toBeNull();
   });
 
   test("Format launches, polls to done, and refetches cells without a verbose summary", async () => {

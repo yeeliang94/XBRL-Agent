@@ -479,6 +479,8 @@ FORMATTER_TABLE_WIDTH_ATTR = "data-formatter-table-width"
 # Marks emphasis the formatter added, so a later layout reset can take it
 # back off without ever touching emphasis copied from the source.
 FORMATTER_EMPHASIS_ATTR = "data-formatter-emphasis"
+# A smaller table font in points, for a table too wide for mTool's page.
+FORMATTER_FONT_SIZE_ATTR = "data-formatter-font-size"
 LAYOUT_OWNED_PREFIXES = ("border", "text-align", "vertical-align", "background", "padding")
 
 
@@ -569,6 +571,15 @@ def _apply_style(el: Tag, style: dict[str, Any]) -> None:
             if not isinstance(value, str) or not SPACING_RE.match(value):
                 raise FormatPatchError("invalid space_after")
             current["margin-bottom"] = value
+        elif key == "font_size_pt":
+            if el.name != "table":
+                raise FormatPatchError("font_size_pt can target only table")
+            if value is None:
+                el.attrs.pop(FORMATTER_FONT_SIZE_ATTR, None)
+            elif type(value) is int and 8 <= value <= 14:
+                el[FORMATTER_FONT_SIZE_ATTR] = str(value)
+            else:
+                raise FormatPatchError("font_size_pt must be 8 to 14")
         elif key == "table_width":
             if el.name != "table":
                 raise FormatPatchError("table_width can target only table")
