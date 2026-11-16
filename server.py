@@ -8062,7 +8062,7 @@ async def run_multi_agent_stream(
                     }}
                 return
 
-        # Finalize content before source integrity and appearance verification.
+        # Finalize content before source integrity and formatting.
         # Its receipts preserve original HTML and exact source-backed omissions.
         notes_cleanup_incomplete = False
         from reports.registry import REPORTS as _REPORT_REGISTRY
@@ -8285,15 +8285,15 @@ async def run_multi_agent_stream(
                         _enqueue_system_error({
                             "type": "notes_formatting_incomplete",
                             "phase": "formatting_notes",
-                            "message": f"Extracted content is saved. {_prose_label} needing appearance review: " + "; ".join(
-                                f"{sheet}: {outcome.get('error') or outcome.get('summary') or 'assessment incomplete'}"
+                            "message": f"Extracted content is saved. {_prose_label} needing formatting review: " + "; ".join(
+                                f"{sheet}: {outcome.get('error') or outcome.get('summary') or 'formatting incomplete'}"
                                 for sheet, outcome in _format_outcome.get("sheets", {}).items()
                                 if not outcome.get("ok")
                             ),
                             "sheets": _format_outcome.get("sheets", {}),
                         })
                     _emit_stage("formatting_notes", status="failed" if notes_formatting_incomplete else "succeeded",
-                        message="Appearance checking finished; review the affected content." if notes_formatting_incomplete else f"{_prose_label} appearance verified.")
+                        message="Formatting finished; review the affected content." if notes_formatting_incomplete else f"{_prose_label} formatted.")
                     logger.info(
                         "automatic PDF notes formatting completed run=%s "
                         "formatted=%s partial=%s failed=%s skipped=%s",

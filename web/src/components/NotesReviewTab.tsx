@@ -1321,13 +1321,12 @@ function SheetSection({
   const isFormatting = formatRequestPending || formatStatus?.status === "running";
   const hasUnfinishedFormatWork = formatStatus?.error_type !== "no_unfinished_rows";
   const skippedFormatRows = formatStatus?.skipped_rows ?? [];
-  const needsRecheck = formatStatus?.error_type === "verification_stale";
   const showFormatAction = canFormat && hasUnfinishedFormatWork && (formatStatus?.status === "idle" || formatStatus?.status === "running" || formatStatus?.error || formatError || skippedFormatRows.length > 0);
   const formatButtonLabel = hasPendingRowSave
     ? "Save pending"
     : isFormatting
       ? "Formatting..."
-      : needsRecheck ? "Recheck formatting" : "Retry formatting";
+      : "Retry formatting";
 
   return (
     <section ref={sectionRef} style={styles.workspaceSheetSection}>
@@ -1335,8 +1334,8 @@ function SheetSection({
       {(showFormatAction || formatError || formatStatus?.error || skippedFormatRows.length > 0) && (
       <div style={styles.formatActionRow}>
         {(formatError || formatStatus?.error || skippedFormatRows.length > 0) && (
-          <div style={{ ...styles.formatSummary, color: needsRecheck ? ds.grey700 : ds.errorText }}
-            role={needsRecheck ? "status" : "alert"} data-testid="notes-format-summary">
+          <div style={{ ...styles.formatSummary, color: ds.errorText }}
+            role="alert" data-testid="notes-format-summary">
             {formatError || (formatStatus?.error
               ? notesFormatErrorMessage(formatStatus?.error_type, formatStatus.error, formatStatus ?? undefined)
               : "Some notes changed during formatting and need another check.")}
@@ -1349,7 +1348,7 @@ function SheetSection({
             style={styles.sheetFormatButton}
             disabled={isFormatting || hasPendingRowSave}
             onClick={handleFormat}
-            aria-label={`${needsRecheck ? "Recheck formatting" : "Retry formatting"} ${notesSheetDisplayName(sheet.sheet)}`}
+            aria-label={`Retry formatting ${notesSheetDisplayName(sheet.sheet)}`}
             title={
               hasPendingRowSave
                 ? "Resolve notes save status before formatting."
@@ -1453,6 +1452,8 @@ function SheetSection({
               ? humanFilled && !aiFilled ? "missed" : aiFilled && !humanFilled ? "ai_only" : "agree"
               : undefined;
             const statusId = `note-field-status-${runId}-${encodeURIComponent(sheet.sheet)}-${cell.row}`;
+            // A later edit by a person or reviewer makes the note out of date.
+            const layoutNote = cell.style_source === "formatter" ? formatStatus?.layout_notes?.[String(cell.row)] : undefined;
             const marker = !selected && humanStatus && humanStatus !== "agree"
               ? humanStatus === "missed" ? "Missed by AI" : "AI-only"
               : null;
@@ -1503,6 +1504,7 @@ function SheetSection({
                   </button>}
                 </div>
                 {marker && <span id={`${statusId}-comparison`} hidden>{marker}</span>}
+                {layoutNote && <p style={{ ...styles.dim, margin: `0 0 ${ds.space.sm}px` }}>Formatting note: {layoutNote}</p>}
                 {selected ? (compared && human && field ? <div className="notes-human-pair" data-testid="notes-human-pair" style={styles.humanPair}>
                   <div className="notes-human-extracted" style={styles.comparisonRows}>{row}</div>
                   <HumanNoteCell html={human.html[field]} status={humanStatus}

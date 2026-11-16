@@ -155,7 +155,10 @@ async def recopy_tables(*, run_id: int, db_path: str, pdf_path: str, sheet: str,
                     result = await recapture(
                         pdf_path, page_number=page["page"], page_html=page["html"],
                         block_index=prepared["locator"]["page_block"], finding=reason, model=model,
-                        rotation=page.get("rotation") or 0, usage_out=usage)
+                        # The prepared copy is already upright; only the original
+                        # upload still needs the recorded turn.
+                        rotation=0 if Path(pdf_path).name == data.get("pdf_file") else page.get("rotation") or 0,
+                        usage_out=usage)
                 finally:
                     for key in tokens:
                         tokens[key] += int(usage.get(key) or 0)

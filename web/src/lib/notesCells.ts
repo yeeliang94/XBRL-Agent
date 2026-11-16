@@ -116,6 +116,8 @@ export interface NotesFormatStatus {
   skipped_rows?: number[];
   /** Rows whose formatting failed validation. */
   failed_rows?: number[];
+  /** The formatter's note per row where it used the nearest house style. */
+  layout_notes?: Record<string, string>;
   /** True when a pre-format snapshot exists — enables "Revert formatting". */
   can_revert?: boolean;
   error?: string | null;

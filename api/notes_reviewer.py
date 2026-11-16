@@ -170,8 +170,12 @@ async def re_review_notes(run_id: int, body: Optional[dict] = None):
         launch_conn.close()
 
     # Resolve the source PDF + merged workbook from the run's output dir.
-    pdf_path = None
-    if run.output_dir:
+    # The prepared copy has sideways pages turned upright; the original
+    # upload stands in when there is none.
+    from api.files import _resolve_run_pdf_path
+    resolved_pdf = await asyncio.to_thread(_resolve_run_pdf_path, run)
+    pdf_path = str(resolved_pdf) if resolved_pdf else None
+    if not pdf_path and run.output_dir:
         cand = Path(run.output_dir) / "uploaded.pdf"
         if cand.exists():
             pdf_path = str(cand)

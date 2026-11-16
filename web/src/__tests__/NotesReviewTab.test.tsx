@@ -3080,19 +3080,28 @@ describe("NotesReviewTab — AI formatter", () => {
     ).length;
   }
 
-  test("edited notes show one quiet recheck notice and a contextual action", async () => {
-    routedFetch({status: (url) => url.includes("Notes-CI") ? {
-      status: "done", sheet: "Notes-CI", error_type: "verification_stale",
-      error: "Notes changed after appearance checking. Recheck rows 112.",
-      changed_rows: 1, summary: "Previous formatting saved.",
-    } : {status: "idle", sheet: "other"}});
-    render(<NotesReviewTab runId={42} />);
-    const notice = await screen.findByTestId("notes-format-summary");
-    expect(notice).toHaveAttribute("role", "status");
-    expect(screen.getAllByText("Formatting needs rechecking after changes.")).toHaveLength(1);
-    expect(notice).not.toHaveTextContent("112");
-    expect(screen.getByRole("button", {name: "Recheck formatting Corporate Information"})).toBeEnabled();
-  });
+  test.each(["formatter", "human"] as const)(
+    "a house-style formatter note shows without an error, and only while the note is the formatter's (%s)",
+    async (styleSource) => {
+      const fetchMock = routedFetch({status: (url) => url.includes("Notes-CI") ? {
+        status: "done", sheet: "Notes-CI", changed_rows: 1, error: null,
+        layout_notes: { "4": "Gapped underlines in the source are drawn as one line." },
+      } : {status: "idle", sheet: "other"}});
+      const routed = fetchMock.getMockImplementation()!;
+      const [ci, ...rest] = SAMPLE.sheets;
+      const cells = { sheets: [{ ...ci, rows: ci.rows.map((row) => ({ ...row, style_source: styleSource })) }, ...rest] };
+      fetchMock.mockImplementation(async (input: RequestInfo | URL) => String(input).includes("/notes-format")
+        ? routed(input)
+        : new Response(JSON.stringify(cells), { status: 200, headers: { "Content-Type": "application/json" } }));
+      render(<NotesReviewTab runId={42} />);
+      const text = "Formatting note: Gapped underlines in the source are drawn as one line.";
+      await screen.findByText("Corporate info");
+      await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/notes-format/status"))).toBe(true));
+      if (styleSource === "formatter") expect(await screen.findByText(text)).toBeInTheDocument();
+      else await waitFor(() => expect(screen.queryByText(text)).toBeNull());
+      expect(screen.queryByTestId("notes-format-summary")).toBeNull();
+    },
+  );
 
   test("Format launches, polls to done, and refetches cells without a verbose summary", async () => {
     vi.useFakeTimers();

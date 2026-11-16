@@ -314,3 +314,11 @@ def test_boxed_grid_frame_draws_every_edge():
     out = compile_layouts(html, [TableLayout(table=0, columns=["label", "text"], frame="grid")])
     assert out.count("border-left: 0.75px solid #000000") >= 4
     assert [r["below_row"] for r in table_rules(out)] == [0, 1, 2]
+
+
+def test_outline_marks_shortened_text_so_it_is_not_read_as_missing_words():
+    label = "Unrealised loss/(gain) on foreign exchange"
+    cell = layout_manifest(f"<table><tr><td>{label}</td><td>1</td></tr></table>")[0]["rows"][0]["cells"][0]
+    assert cell["text"].endswith("…[shortened]") and cell["text"].startswith(label[:30])
+    short = layout_manifest("<table><tr><td>Additions</td><td>1</td></tr></table>")[0]["rows"][0]["cells"][0]
+    assert short["text"] == "Additions"

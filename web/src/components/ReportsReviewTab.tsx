@@ -249,7 +249,7 @@ function ReportsReview({ runId, onPreparationBlocked }: ReportsReviewProps) {
               const state = await launchNotesFormatter(runId, activeReport.sheet);
               setFormats(old => ({ ...old, [activeReport.sheet]: state }));
             } catch (e) { setFormatError(userMessage(e)); } finally { setFormatLaunching(false); }
-          }}>{formatting ? "Formatting…" : format?.error_type === "verification_stale" ? "Recheck formatting" : format?.status === "idle" ? "Check formatting" : "Retry formatting"}</button>
+          }}>{formatting ? "Formatting…" : format?.status === "idle" ? "Format report" : "Retry formatting"}</button>
         {formatNeedsReview && <span role="status">Formatting needs review.</span>}
         {formatError && <span role="alert">{formatError}</span>}
       </div>}

@@ -351,6 +351,12 @@ def describe_layouts(layouts: list[TableLayout]) -> str:
     return "\n".join(out) if out else "no tables"
 
 
+def _clip(text: str, limit: int) -> str:
+    """Shorten coordinate text, marking the cut so it never reads as the
+    note's own wording (a live run reported shortened labels as missing words)."""
+    return text if len(text) <= limit else text[:limit].rstrip() + " …[shortened]"
+
+
 def layout_manifest(html: str) -> list[dict]:
     """The coordinates a layout uses: grid columns per cell, by direct row."""
     tables = BeautifulSoup(html or "", "html.parser").find_all("table")
@@ -364,8 +370,8 @@ def layout_manifest(html: str) -> list[dict]:
             for cell in tr.find_all(["th", "td"], recursive=False):
                 cols = sorted({c for _, c in positions.get(id(cell), [])})
                 span = [cols[0] + 1, cols[-1] + 1] if cols else []
-                cells.append({"grid_columns": span, "text": cell.get_text(" ", strip=True)[:40],
-                              "paragraphs": [{"paragraph": i, "text": p.get_text(" ", strip=True)[:120],
+                cells.append({"grid_columns": span, "text": _clip(cell.get_text(" ", strip=True), 40),
+                              "paragraphs": [{"paragraph": i, "text": _clip(p.get_text(" ", strip=True), 120),
                                               "hard_breaks": len(p.find_all("br"))}
                                              for i, p in enumerate(cell_paragraphs(cell), 1)]})
             rows.append({"row": r, "cells": cells})

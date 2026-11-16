@@ -103,10 +103,6 @@ describe("denominationLabel", () => {
 });
 
 describe("notesFormatErrorMessage", () => {
-  test("recheck guidance hides internal row details and old formatting summaries", () => {
-    expect(notesFormatErrorMessage("verification_stale", "Recheck rows 112.", {changed_rows: 1, summary: "Formatting saved for 1 row(s)."}))
-      .toBe("Formatting needs rechecking after changes.");
-  });
   test("unverified table appearance remains a review exception", () => {
     expect(notesFormatErrorMessage("visual_review_failed", "row 112: bad edge")).toContain(
       "Table appearance needs review against the source PDF",

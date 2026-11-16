@@ -294,13 +294,10 @@ async def test_large_sheet_is_formatted_in_concurrent_row_groups(auto_format_db)
             all_started.set()
         await asyncio.wait_for(all_started.wait(), timeout=2)
         if kwargs["rows"][0] == rows[-1]:
-            return {"ok": False, "error_type": "model_error", "error": "boom",
-                    "prompt_tokens": 5}
+            # The part runs out of time: nothing it held was saved.
+            raise asyncio.TimeoutError
         return {"ok": True, "changed_rows": len(kwargs["rows"]),
-                "summary": "Aligned amounts.", "prompt_tokens": 10,
-                "visual_review": {"tables": [], "evidence": {
-                    row: {"html_sha256": f"reviewed-{row}"} for row in kwargs["rows"]
-                }}}
+                "summary": "Aligned amounts.", "prompt_tokens": 10}
 
     result = await run_pdf_auto_format(
         run_id=run_id, db_path=db_path, pdf_path=str(tmp_path / "uploaded.pdf"),
@@ -315,11 +312,25 @@ async def test_large_sheet_is_formatted_in_concurrent_row_groups(auto_format_db)
     with repo.db_session(db_path) as conn:
         task = repo.fetch_notes_format_task(conn, run_id, "Notes-Listofnotes")
     assert task["changed_rows"] == 2 * auto_format.FORMAT_ROWS_PER_PART
-    assert task["error_type"] == "model_error"
-    assert task["prompt_tokens"] == 25
-    evidence = {row: value for review in task["result"]["visual_reviews"]
-                for row, value in review["evidence"].items()}
-    assert sorted(map(int, evidence)) == rows[:-1]
+    assert task["error_type"] == "timeout"
+    assert task["prompt_tokens"] == 20
+    # The timed-out part's note is named for review, not silently dropped.
+    assert task["result"]["failed_rows"] == [rows[-1]]
+    assert "time limit" in task["result"]["row_errors"][str(rows[-1])]
+
+
+def test_retry_keeps_house_style_notes_only_for_notes_still_formatted(auto_format_db):
+    """A retry formats unfinished notes only; finished notes keep their note
+    unless a person has changed them since."""
+    db_path, run_id, _ = auto_format_db
+    with repo.db_session(db_path) as conn:
+        for row, source in ((10, "formatter"), (11, "human"), (12, "unstyled")):
+            repo.upsert_notes_cell(conn, run_id=run_id, sheet="Notes-Listofnotes", row=row, label="Note",
+                                   html="<p>x</p>", source_pages=[1], style_source=source)
+        previous = {"layout_notes": {"10": "kept", "11": "edited since", "12": "reformatted"}}
+        result = auto_format.keep_earlier_notes(conn, run_id, "Notes-Listofnotes", previous,
+                                                {"ok": True, "layout_notes": {12: "new"}}, launched=[12])
+    assert result["layout_notes"] == {10: "kept", 12: "new"}
 
 
 def test_row_groups_are_sized_by_tables_and_pages(auto_format_db):

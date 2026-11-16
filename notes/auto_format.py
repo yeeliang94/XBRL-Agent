@@ -121,6 +121,44 @@ _TOKEN_FIELDS = (
 )
 
 
+def unfinished(result: dict[str, Any], rows: Iterable[int]) -> dict[str, Any]:
+    """Name the notes a failed or timed-out part left unformatted.
+
+    A part that ends without its own result (time limit, request limit, an
+    AI error) saves nothing, so each of its notes needs review.
+    """
+    reason = {
+        "timeout": "Formatting reached its time limit before this note was finished.",
+        "turn_budget": "Formatting reached its request limit before this note was finished.",
+        "model_error": "Formatting stopped with an error before this note was finished.",
+    }.get(result.get("error_type"))
+    rows = sorted(rows)
+    if result.get("ok") or result.get("failed_rows") or not rows or reason is None:
+        return result
+    return {**result, "failed_rows": rows, "row_errors": {row: reason for row in rows}}
+
+
+def keep_earlier_notes(conn, run_id: int, sheet: str, previous: dict[str, Any] | None,
+                       result: dict[str, Any], launched: Iterable[int]) -> dict[str, Any]:
+    """Carry house-style notes forward for notes this pass did not format.
+
+    A retry formats only unfinished notes and replaces the stored result, so
+    without this the notes already formatted would lose their note. A note a
+    person or reviewer has since changed loses it.
+    """
+    launched = set(launched)
+    earlier = {int(row): note for row, note in ((previous or {}).get("layout_notes") or {}).items()
+               if int(row) not in launched}
+    if not earlier:
+        return result
+    formatted = {c.row for c in list_formatter_cells_for_run(conn, run_id)
+                 if c.sheet == sheet and c.style_source == "formatter"}
+    kept = {row: note for row, note in earlier.items() if row in formatted}
+    if not kept:
+        return result
+    return {**result, "layout_notes": {**kept, **{int(r): n for r, n in (result.get("layout_notes") or {}).items()}}}
+
+
 def merge_part_results(parts: list[dict[str, Any]]) -> dict[str, Any]:
     """Combine row-group outcomes into one sheet outcome.
 
@@ -146,13 +184,9 @@ def merge_part_results(parts: list[dict[str, Any]]) -> dict[str, Any]:
     }
     for field_name in _TOKEN_FIELDS:
         merged[field_name] = sum(int(p.get(field_name) or 0) for p in parts)
-    visual_reviews = [p["visual_review"] for p in active if "visual_review" in p]
-    if visual_reviews:
-        merged["visual_reviews"] = visual_reviews
-    merged["verified_rows"] = {
-        row: identity for part in parts
-        for row, identity in (part.get("verified_rows") or {}).items()
-    }
+    layout_notes = {row: note for p in active for row, note in (p.get("layout_notes") or {}).items()}
+    if layout_notes:
+        merged["layout_notes"] = layout_notes
     if failures:
         merged["error_type"] = failures[0].get("error_type")
         merged["error"] = "; ".join(
@@ -161,11 +195,6 @@ def merge_part_results(parts: list[dict[str, Any]]) -> dict[str, Any]:
         failed_rows = sorted(
             row for p in failures for row in p.get("failed_rows") or []
         )
-        limited_rows = sorted(
-            row for p in failures for row in p.get("limited_rows") or []
-        )
-        if limited_rows:
-            merged["limited_rows"] = limited_rows
         if failed_rows:
             merged["failed_rows"] = failed_rows
             merged["row_errors"] = {
@@ -178,12 +207,10 @@ def merge_part_results(parts: list[dict[str, Any]]) -> dict[str, Any]:
 def _persist_outcome(
     db_path: str, run_id: int, sheet: str, model_name: str,
     result: dict[str, Any],
-    previous_result: dict[str, Any] | None = None,
+    previous: dict[str, Any] | None = None, launched: Iterable[int] = (),
 ) -> None:
-    from notes.visual_review import current_verification_cells, retain_other_verification_receipts
     with repo.db_session(db_path) as conn:
-        result = retain_other_verification_receipts(previous_result or {}, result,
-            active_rows=current_verification_cells(conn, run_id, sheet))
+        result = keep_earlier_notes(conn, run_id, sheet, previous, result, launched)
         repo.upsert_notes_format_task(
             conn, run_id, sheet, "done", model=model_name,
             summary=result.get("summary"),
@@ -280,10 +307,11 @@ async def run_pdf_auto_format(
             activity.finish(status, result)
 
     async def one(sheet: str) -> tuple[str, dict[str, Any]]:
+        groups: list[list[int]] = []
         previous = None
         try:
             with repo.db_session(db_path) as conn:
-                previous = repo.fetch_notes_format_task(conn, run_id, sheet)
+                previous = (repo.fetch_notes_format_task(conn, run_id, sheet) or {}).get("result")
                 claim = repo.claim_notes_format_task_guarded(
                     conn, run_id, sheet, model=model_name,
                 )
@@ -340,7 +368,7 @@ async def run_pdf_auto_format(
                         except asyncio.CancelledError:
                             raise
                         except Exception as exc:  # noqa: BLE001 — per-part isolation
-                            return _failure_result(exc, timeout_s, run_id, sheet)
+                            return unfinished(_failure_result(exc, timeout_s, run_id, sheet), group)
 
                     result = merge_part_results(await asyncio.gather(*(
                         part(index, group)
@@ -362,8 +390,10 @@ async def run_pdf_auto_format(
                 )
             raise
         except Exception as exc:  # noqa: BLE001 — advisory pass, per-sheet isolation
-            result = _failure_result(exc, timeout_s, run_id, sheet)
-        _persist_outcome(db_path, run_id, sheet, model_name, result, (previous or {}).get("result"))
+            result = unfinished(_failure_result(exc, timeout_s, run_id, sheet),
+                                (row for group in groups for row in group))
+        _persist_outcome(db_path, run_id, sheet, model_name, result, previous,
+                         (row for group in groups for row in group))
         return sheet, result
 
     completed = 0

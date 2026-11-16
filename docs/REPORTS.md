@@ -41,9 +41,9 @@ The save tool exposes the exact report-specific taxonomy IDs as schema choices.
 Unknown IDs reject the complete batch before any write and return the invalid
 IDs plus the exact permitted catalogue, with two bounded correction attempts.
 Report prose follows the shared source-backed page-banner cleanup and PDF
-style-only formatting and visual checks, including the converted PDF for Word
+style-only formatting with layout previews, including the converted PDF for Word
 uploads. Word financial notes retain their separate source-style path. Report-only runs receive these stages
-too. Incomplete checks leave the run needing review. Canonical report prose is
+too. Unresolved formatting leaves the run needing review. Canonical report prose is
 available to the formatter while remaining outside financial-note review and
 source-integrity inventories. Human report edits are protected during formatting
 and excluded from automatic content cleanup.
@@ -52,7 +52,7 @@ A report table with a structural error remains unresolved. The shared formatter
 already attempts source-table re-copy, but it can change structure only for
 content linked exactly to frozen prepared-source blocks and placements. Directly
 authored report HTML has no such linkage. Correct its structure against the
-cited PDF in the report editor, then repeat appearance checking. The formatter
+cited PDF in the report editor, then format it again. The formatter
 must not move headings, change merged cells or alter wording to clear a finding.
 
 After extraction, report narratives join the same guarded page-banner and

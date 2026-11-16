@@ -1,8 +1,8 @@
 """AI notes formatting pass for the Notes Review panel.
 
-The model proposes a constrained JSON style patch. This module applies it
-through notes.format_patch, which verifies content preservation before any DB
-write.
+The model describes each table's layout, previews the drawn result against the
+source PDF and corrects it. This module applies the final layout through
+notes.format_patch, which verifies content preservation before any DB write.
 """
 from __future__ import annotations
 
@@ -34,10 +34,10 @@ from notes.format_patch import (
     FormatPatchError,
     apply_sheet_patch,
 )
-from notes.format_schema import NoteLayout, SheetLayout, layout_to_dict
+from notes.format_schema import NoteLayout, SheetLayout, UnresolvedNote, layout_to_dict
 from notes.table_layout import LayoutError, layout_manifest, layout_operations
 from notes.format_verify import table_rows as _direct_table_rows
-from notes.rule_map import rule_map_text
+from notes.render import render_note_preview
 from notes.table_theme import firm_theme, resolve_run_theme
 from model_settings import build_model_settings, describe_model_runtime
 
@@ -58,6 +58,13 @@ def formatter_cell_is_candidate(cell: Any, style_sources: Optional[set[str | Non
 
 list_formatter_cells_for_run = repo.list_formatter_cells_for_run
 
+
+def filled_formatter_cells(conn, run_id: int, sheet: str) -> dict[int, Any]:
+    """The sheet's filled canonical disclosure fields that hold text, by row."""
+    return {c.row: c for c in list_formatter_cells_for_run(conn, run_id)
+            if c.sheet == sheet and formatter_cell_is_candidate(c, None)
+            and BeautifulSoup(c.html, "html.parser").get_text().strip()}
+
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "notes_formatter.md"
 
 _STRUCTURED_OUTPUT_INSTRUCTION = """\
@@ -73,9 +80,9 @@ above. Do not wrap it in Markdown and do not add commentary before or after it.
 """
 
 
-# Cumulative per-click model-request budget across the formatter's (up to
-# four) agent.run passes — initial, output-rejection retry, validation repair,
-# and visual correction. Visual checking has a separate bounded allowance.
+# Cumulative per-click model-request budget across the formatter's agent.run
+# passes — the initial pass with its layout previews, the output-rejection
+# retry and the validation repair.
 # Like the extraction MAX_AGENT_ITERATIONS cap, it
 # MUST stay strictly below pydantic-ai's silent UsageLimits.request_limit=50
 # (gotcha #18) — otherwise pydantic-ai fires its own UsageLimitExceeded from
@@ -145,7 +152,7 @@ def _output_json(output: Any) -> str:
 # branch on these codes, not on the human-facing error prose. No CHECK
 # constraint on the column (same rationale as runs.status).
 FORMATTER_ERROR_TYPES = (
-    "visual_review_failed", # tables remain different from the source or unverified
+    "visual_review_failed", # the formatter reported notes it could not match to the source
     "timeout",              # wall-clock cap (XBRL_NOTES_FORMATTER_WALLCLOCK_S)
     "turn_budget",          # cumulative request cap (UsageLimitExceeded)
     "low_confidence",       # historical task rows only
@@ -172,6 +179,10 @@ class NotesFormatterDeps:
     pdf_page_count: int = 0
     # notes.formatter_activity.FormatterActivity for this pass, when reporting.
     activity: Any = None
+    # What preview_layout draws: the launch HTML per row and the output style.
+    rows: dict[int, str] = field(default_factory=dict)
+    style: NotesTableStyle = field(default_factory=NotesTableStyle)
+    previews: dict[int, int] = field(default_factory=dict)
 
 
 def _report_tool(deps: NotesFormatterDeps, tool_name: str, args: dict):
@@ -202,11 +213,76 @@ def create_notes_formatter_agent(
         base_prompt += "\n\n" + _STRUCTURED_OUTPUT_INSTRUCTION.strip()
     else:
         base_prompt += "\n\n" + _JSON_FALLBACK_INSTRUCTION.strip()
-    return _create_notes_style_agent(
+    agent, deps = _create_notes_style_agent(
         run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
         model=model, prompt=base_prompt, output_type=output_type,
         cache_key="xbrl-notes-formatter",
     )
+
+    @agent.tool
+    def preview_layout(
+        ctx: RunContext[NotesFormatterDeps], notes: list[NoteLayout],
+    ) -> list[Union[str, BinaryContent]]:
+        """Draw a draft layout and return pictures of the formatted notes.
+
+        Nothing is saved. Each picture shows the note as review, Copy and
+        mTool will receive it. A layout that does not fit its table is not
+        drawn; the reason is returned so you can correct it. Compare each
+        picture with the source page, then preview again only the rows you
+        changed. Your final answer must still contain every layout.
+        """
+        finish = _report_tool(ctx.deps, "preview_layout", {"rows": [note.row for note in notes]})
+        return finish(_preview_layout(ctx.deps, notes))
+
+    return agent, deps
+
+
+# Pictures returned by one preview call; more rows need a further call.
+MAX_PREVIEW_PAGES = 12
+# A first draft and two corrections per note; previews share the request cap.
+MAX_PREVIEWS_PER_ROW = 3
+
+
+def _preview_layout(
+    deps: NotesFormatterDeps, notes: list[NoteLayout],
+) -> list[Union[str, BinaryContent]]:
+    layout = {"notes": [note.model_dump(exclude_none=True) for note in notes]}
+    try:
+        patch, _rejected, errors = _partition_layout(deps.rows, layout, deps.style.cell_padding_px)
+    except FormatPatchError as exc:
+        return [f"NOT DRAWN: {exc}"]
+    results: list[Union[str, BinaryContent]] = [
+        f"NOT DRAWN, correct this layout and preview it again: {error}" for error in errors.values()
+    ]
+    drawn = apply_sheet_patch(deps.rows, patch).rows
+    pages_sent = 0
+    for row in sorted(cell["row"] for cell in patch["cells"]):
+        if deps.previews.get(row, 0) >= MAX_PREVIEWS_PER_ROW:
+            results.append(f"Row {row} has no previews left. Return its final layout, or "
+                           "report it in `unresolved` if it still differs from the source.")
+            continue
+        try:
+            pages, too_wide_mm = render_note_preview(drawn[row], deps.style)
+        except Exception as exc:  # noqa: BLE001 — a failed drawing must not end the pass
+            logger.warning("Could not draw a preview run=%s row=%s", deps.run_id, row, exc_info=True)
+            results.append(f"Row {row} could not be drawn: {exc}")
+            continue
+        if pages_sent + len(pages) > MAX_PREVIEW_PAGES and pages_sent:
+            results.append(f"Row {row} was not drawn in this call; preview it in a separate call.")
+            continue
+        if len(pages) > MAX_PREVIEW_PAGES:
+            results.append(f"Row {row}: only its first {MAX_PREVIEW_PAGES} pictures are shown.")
+            pages = pages[:MAX_PREVIEW_PAGES]
+        pages_sent += len(pages)
+        deps.previews[row] = deps.previews.get(row, 0) + 1
+        if too_wide_mm:
+            results.append(f"Row {row}: a table is {too_wide_mm} mm wider than mTool's 170 mm text "
+                           "width even at its narrowest. The picture is widened to show it whole, so "
+                           "this note's text wraps wider than in mTool.")
+        for index, png in enumerate(pages, 1):
+            results.append(f"=== Row {row} as formatted (picture {index} of {len(pages)}) ===")
+            results.append(BinaryContent(data=png, media_type="image/png"))
+    return results or ["Nothing to draw: the preview held no layouts."]
 
 
 def _create_notes_style_agent(
@@ -392,15 +468,11 @@ def plain_failure(outcome: Optional[dict]) -> str:
     error_type = outcome.get("error_type")
     if error_type == "visual_review_failed":
         failed = {int(row) for row in outcome.get("failed_rows") or outcome.get("row_errors") or {}}
-        limited = {int(row) for row in outcome.get("limited_rows") or []}
-        if failed and failed <= limited:
-            notes = "1 note needs" if len(failed) == 1 else f"{len(failed)} notes need"
-            return (f"Formatting was saved, but {notes} a layout the formatter cannot produce. "
-                    "Check them manually in the Notes tab.")
         count = len(failed) or 1
-        notes = "1 note still looks" if count == 1 else f"{count} notes still look"
+        notes = "1 note needs" if count == 1 else f"{count} notes need"
         recopied = " after re-copying its tables" if "table_recopy" in outcome else ""
-        return f"{notes} different from the source PDF{recopied}. Retry it from the Notes tab."
+        return (f"{notes} checking against the source PDF{recopied}. "
+                f"Check {'it' if count == 1 else 'them'} in the Notes tab.")
     return {
         "timeout": "Formatting reached its time limit. Retry it from the Notes tab.",
         "turn_budget": "Formatting reached its request limit. Retry it from the Notes tab.",
@@ -435,10 +507,9 @@ async def run_notes_formatter(
     ``pass_started_at`` for the revert snapshot and write distinct traces
     under ``trace_label``.
 
-    Formatter usage accumulates across its model passes. The checker adds its
-    separate usage after correction finishes, so totals include both roles
-    without sharing their request allowances. Completed-response usage is saved
-    to the shared ledger even when a later request fails or is cancelled.
+    Formatter usage accumulates across its model passes. Completed-response
+    usage is saved to the shared ledger even when a later request fails or is
+    cancelled.
 
     Each pass reports its own activity (``notes/formatter_activity.py``):
     live through ``on_event`` and saved on its ``run_agents`` row, keyed by
@@ -483,8 +554,7 @@ async def run_notes_formatter(
             pass_started_at=pass_started_at, trace_label=trace_label, on_phase=_phase,
             activity=activity,
         )
-        from notes.visual_review import structure_findings
-        structural = structure_findings(outcome)
+        structural = outcome.pop("miscopied", None)
         if structural:
             outcome = await _recopy_and_reformat(
                 outcome, structural, run_id=run_id, db_path=db_path, pdf_path=pdf_path,
@@ -507,8 +577,8 @@ async def run_notes_formatter(
                    "error": f"{type(exc).__name__}: {exc}"}
         raise
     finally:
-        # One aggregate ledger entry includes formatter and independent checker
-        # requests. Task totals are diagnostic, not additional ledger entries.
+        # One aggregate ledger entry covers every formatter request. Task totals
+        # are diagnostic, not additional ledger entries.
         try:
             metrics = split_usage(usage)
             usage_fields = dict(
@@ -534,8 +604,8 @@ async def _recopy_and_reformat(outcome: dict, structural: dict, *, run_id: int, 
                                trace_label, on_phase, activity=None) -> dict:
     """Re-copy wrongly copied tables from the PDF, then format the rebuilt notes.
 
-    The rebuilt notes get one ordinary formatting pass with its own visual
-    check. A table that cannot be re-copied keeps its original finding.
+    The rebuilt notes get one ordinary formatting pass. A table that cannot be
+    re-copied keeps its original finding.
     """
     from notes.table_recopy import recopy_tables
 
@@ -563,12 +633,13 @@ async def _recopy_and_reformat(outcome: dict, structural: dict, *, run_id: int, 
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 — the first pass and re-copy are already saved
-        # Keep their changed-row counts and receipts; only the rebuilt rows
-        # stay unresolved.
+        # Keep their changed-row counts; only the rebuilt rows stay unresolved.
         logger.warning("Formatting re-copied notes failed run=%s sheet=%s", run_id, sheet,
                        exc_info=True)
         final = {"ok": False, "changed_rows": 0,
                  "error": f"Formatting the re-copied note failed: {type(exc).__name__}: {exc}"}
+    # A re-copied table is not re-copied again; its finding stays for a person.
+    final.pop("miscopied", None)
     errors = {int(row): error for row, error in (outcome.get("row_errors") or {}).items()
               if int(row) not in rebuilt}
     errors.update({int(row): error for row, error in (final.get("row_errors") or {}).items()})
@@ -577,11 +648,8 @@ async def _recopy_and_reformat(outcome: dict, structural: dict, *, run_id: int, 
     for row, reason in recopy["errors"].items():
         if row in errors:
             errors[row] += "; " + reason
-    verified = {str(row): identity for row, identity in (outcome.get("verified_rows") or {}).items()
-                if int(row) not in rebuilt}
-    verified.update({str(row): identity for row, identity in (final.get("verified_rows") or {}).items()})
     result.update(
-        ok=not errors, verified_rows=verified,
+        ok=not errors,
         changed_rows=int(outcome.get("changed_rows") or 0) + int(final.get("changed_rows") or 0),
         after_recopy=final,
         summary=(f"Re-copied {len(recopy['corrected'])} table(s) from the source PDF. "
@@ -594,16 +662,16 @@ async def _recopy_and_reformat(outcome: dict, structural: dict, *, run_id: int, 
         result["recopy_warnings"] = warnings
         result["summary"] += " " + " ".join(
             f"Row {row}: {text}" for row, text in sorted(warnings.items()))
-    limited = ({int(row) for row in outcome.get("limited_rows") or [] if int(row) not in rebuilt}
-               | {int(row) for row in final.get("limited_rows") or []})
-    limited = {row for row in limited if row in errors and row not in recopy["errors"]}
-    for key in ("error", "error_type", "failed_rows", "row_errors", "limited_rows"):
+    notes = {int(row): note for row, note in (outcome.get("layout_notes") or {}).items() if int(row) not in rebuilt}
+    notes.update({int(row): note for row, note in (final.get("layout_notes") or {}).items()})
+    result.pop("layout_notes", None)
+    if notes:
+        result["layout_notes"] = notes
+    for key in ("error", "error_type", "failed_rows", "row_errors"):
         result.pop(key, None)
     if errors:
         result.update(error="; ".join(errors.values()), error_type="visual_review_failed",
                       failed_rows=sorted(errors), row_errors=errors)
-    if limited:
-        result["limited_rows"] = sorted(limited)
     return result
 
 
@@ -684,8 +752,11 @@ async def _run_notes_formatter_impl(
     agent, deps = create_notes_formatter_agent(
         run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet, model=model,
     )
+    padding = NotesTableStyle.from_theme(output_theme).cell_padding_px
     if deps is not None:
         deps.activity = activity
+        deps.rows = rows_for_patch
+        deps.style = NotesTableStyle.from_theme(output_theme)
     # The old prompt forced a tool-only first model turn before the model could
     # do any work. That re-billed the full CURRENT CELLS payload (and every
     # prior part) on the second request. Attach the known source pages to the
@@ -706,9 +777,8 @@ async def _run_notes_formatter_impl(
     if deps is not None:
         deps.viewed_pages.update(preloaded_pages)
     # One shared usage accumulator + request cap across every pass below, so
-    # all formatting (initial + output retry + validation repair + correction) is
-    # bounded — not each
-    # pass independently. UsageLimitExceeded surfaces as a structured "turn
+    # all formatting (initial with previews + output retry + validation repair)
+    # is bounded — not each pass independently. UsageLimitExceeded surfaces as a structured "turn
     # budget" outcome in the API worker (mirrors the wall-clock timeout).
     limits = UsageLimits(request_limit=MAX_FORMATTER_REQUESTS)
     trace_messages: list = []
@@ -761,8 +831,8 @@ async def _run_notes_formatter_impl(
     # Validate each notes cell independently, retaining all operations for a
     # row as one unit. A bad target must not discard unrelated valid notes.
     repair_attempted = False
-    padding = NotesTableStyle.from_theme(output_theme).cell_padding_px
     layouts_by_row: dict[int, dict] = {}
+    reports = list(patch.get("unresolved") or [])
 
     def _keep_layouts(layout: dict, accepted: dict) -> None:
         rows_ok = {cell["row"] for cell in accepted["cells"]}
@@ -802,6 +872,7 @@ async def _run_notes_formatter_impl(
         if not apply_sheet_patch(rows_for_patch, patch).changed_rows:
             return failure
         summary = screened.summary
+        reports += screened.patch.get("unresolved") or []
     if row_errors and not repair_attempted:
         if activity is not None:
             activity.status("working", "Repairing rejected formatting decisions…")
@@ -814,6 +885,8 @@ async def _run_notes_formatter_impl(
             _output_json(repair_result.output), sheet, revised=True,
         )
         if err is None:
+            reports += [item for item in screened.patch.get("unresolved") or []
+                        if isinstance(item, dict) and item.get("row") in row_errors]
             # The repair owns only rejected rows. It cannot replace previously
             # accepted decisions, nor silently style a different note.
             try:
@@ -836,54 +909,17 @@ async def _run_notes_formatter_impl(
 
     applied = apply_sheet_patch(rows_for_patch, patch)
     row_errors.update(missing_page_errors)
-    from notes.visual_review import review_and_correct_rows
-
-    output_style = NotesTableStyle.from_theme(_resolve_notes_table_theme(db_path, run_id))
-    visual_errors, visual_review, corrected_rows = await review_and_correct_rows(
-        rows={row: html for row, html in applied.rows.items() if row not in row_errors},
-        cells=cells,
-        style=output_style,
-        run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
-        model=model, usage=usage, formatter_run=_agent_run,
-        output_dir=output_dir, trace_label=trace_label or f"notes_format_{sheet}",
-        on_phase=on_phase, originals=rows_for_patch, layouts=layouts_by_row,
-        cell_padding=padding, activity=activity,
-    )
-    for row, html in corrected_rows.items():
-        applied.rows[row] = html
-    row_errors.update(visual_errors)
-    # A note unresolved only by a formatter limit keeps its best-effort
-    # formatting; it is saved but stays failed and never gets a receipt.
-    limited_rows = {row for row in visual_review.get("limitation_rows") or []
-                    if row in applied.rows and row not in missing_page_errors}
+    # Notes the formatter says still differ from the source keep their
+    # best-effort formatting; they are saved but stay failed for a person.
+    layout_notes: dict[int, str] = {}
+    reported_rows, miscopied = _reported_unresolved(reports, rows_for_patch, row_errors, layout_notes)
     for row in row_errors:
-        if row in applied.rows and row not in limited_rows:
+        if row in applied.rows and row not in reported_rows:
             applied.rows[row] = rows_for_patch[row]
-    # Correction patches were checked against the candidate; verify the final
-    # proposal against the original too before the existing atomic write path.
-    from notes.format_verify import verify_format_only
-    for row, html in applied.rows.items():
-        verified = verify_format_only(rows_for_patch[row], html)
-        if not verified.ok:
-            row_errors[row] = verified.reason
-            applied.rows[row] = rows_for_patch[row]
-            limited_rows.discard(row)
     changed_count = sum(html != rows_for_patch[row] for row, html in applied.rows.items())
     skipped_rows: list[int] = []
     written_rows: list[int] = []
-    verified_rows: dict[int, dict] = {}
-    from notes.visual_review import note_verification_identity
     cells_by_row = {cell.row: cell for cell in cells}
-    identities = {}
-    for row, html in applied.rows.items():
-        if row in row_errors:
-            continue
-        cell = cells_by_row[row]
-        try:
-            identities[row] = note_verification_identity(html, output_style, cell.source_pages, cell.source_generation_id)
-        except ValueError as exc:
-            row_errors[row] = str(exc)
-            applied.rows[row] = rows_for_patch[row]
     with repo.db_session(db_path) as conn:
         # Take the write lock up front so the conditional writes + snapshot
         # below commit as one atomic unit (WAL + busy_timeout make concurrent
@@ -899,16 +935,15 @@ async def _run_notes_formatter_impl(
             if live is not None and live.style_source == "human":
                 person_edited.append(row)
                 row_errors.pop(row, None)
+                miscopied.pop(row, None)
                 continue
             if (live is None or live.html != rows_for_patch[row]
                 or live.source_pages != launch.source_pages
                 or live.source_generation_id != launch.source_generation_id):
                 skipped_rows.append(row)
                 continue
-            if row in row_errors and row not in limited_rows:
+            if row in row_errors and row not in reported_rows:
                 continue
-            if row not in limited_rows:
-                verified_rows[row] = identities[row]
             if html == rows_for_patch[row]:
                 continue
             # Statement-atomic compare-and-swap (`WHERE html = ?`): only
@@ -927,7 +962,6 @@ async def _run_notes_formatter_impl(
                 written_rows.append(row)
             else:
                 skipped_rows.append(row)
-                verified_rows.pop(row, None)
         if written_rows:
             # Snapshot the pre-format HTML of exactly the rows written, in
             # the SAME transaction — "Revert formatting" restores from here
@@ -940,8 +974,12 @@ async def _run_notes_formatter_impl(
         written = len(written_rows)
 
     for row in skipped_rows:
-        row_errors[row] = "Note changed during appearance checking; retry its current content."
-        limited_rows.discard(row)
+        row_errors[row] = "Note changed during formatting; retry its current content."
+        miscopied.pop(row, None)
+    # A note on house style describes formatting that was saved.
+    layout_notes = {row: note for row, note in layout_notes.items()
+                    if row in applied.rows and row not in skipped_rows and row not in person_edited
+                    and row not in row_errors}
     if row_errors:
         summary_out = (
             f"Formatting saved for {written} row(s); "
@@ -955,22 +993,71 @@ async def _run_notes_formatter_impl(
         summary_out += f" {len(skipped_rows)} row(s) skipped — edited during formatting."
     if person_edited:
         summary_out += f" {len(person_edited)} person-edited row(s) left unchanged."
+    if layout_notes:
+        summary_out += (f" {len(layout_notes)} note(s) use the nearest house style where the "
+                        "source formatting cannot be drawn.")
     return {
         "ok": not row_errors, "summary": summary_out,
-        "visual_review": visual_review,
-        "verified_rows": verified_rows,
-        **({"error_type": "visual_review_failed" if visual_errors else "validation_failed",
+        **({"layout_notes": layout_notes} if layout_notes else {}),
+        **({"miscopied": miscopied} if miscopied else {}),
+        **({"error_type": "visual_review_failed" if reported_rows & set(row_errors) else "validation_failed",
             "error": "; ".join(row_errors.values()),
             "failed_rows": sorted(row_errors), "row_errors": row_errors}
            if row_errors else {}),
         "changed_rows": written,
         "skipped_rows": skipped_rows,
-        **({"limited_rows": sorted(limited_rows & set(row_errors))} if limited_rows & set(row_errors) else {}),
         **({"person_edited_rows": sorted(person_edited)} if person_edited else {}),
         "patch": patch, "layouts": {str(row): note for row, note in sorted(layouts_by_row.items())},
         "before_text_hash": applied.before_text_hash,
         "after_text_hash": applied.after_text_hash,
     }
+
+
+def _reported_unresolved(
+    reports: list[Any], rows: dict[int, str], row_errors: dict[int, str],
+    layout_notes: dict[int, str] | None = None,
+) -> tuple[set[int], dict[int, list[tuple[int, str]]]]:
+    """Record the formatter's own unresolved notes in ``row_errors``.
+
+    A ``house_style`` report is not a failure: it goes to ``layout_notes`` as
+    a note for the person. Returns the reported rows and, per row, the
+    ``(table, reason)`` pairs to re-copy. A miscopied-table report triggers a
+    re-copy only when its quote is text from that table; otherwise it is an
+    ordinary finding.
+    """
+    reported: set[int] = set()
+    miscopied: dict[int, list[tuple[int, str]]] = {}
+    for item in reports:
+        try:
+            report = UnresolvedNote.model_validate(item)
+        except ValueError:
+            # An unreadable report still names a note the formatter flagged.
+            row = item.get("row") if isinstance(item, dict) else None
+            if type(row) is not int or row not in rows:
+                continue
+            report = UnresolvedNote(row=row, kind="cannot_format",
+                                    reason="The formatter flagged this note without a readable reason.")
+        if report.row not in rows:
+            continue
+        where = f"Table {report.table}: " if report.table is not None else ""
+        if report.kind == "house_style":
+            if layout_notes is not None:
+                previous = layout_notes.get(report.row)
+                layout_notes[report.row] = (f"{previous}; " if previous else "") + where + report.reason
+            continue
+        reported.add(report.row)
+        previous = row_errors.get(report.row)
+        row_errors[report.row] = (f"{previous}; " if previous else "") + where + report.reason
+        if report.kind != "miscopied_table" or report.table is None:
+            continue
+        tables = BeautifulSoup(rows[report.row], "html.parser").find_all("table")
+        # A quote copied from the outline may carry its shortening marker.
+        quote = report.quote.removesuffix("…[shortened]").strip()
+        quote = " ".join(BeautifulSoup(quote, "html.parser").get_text(" ").split()).casefold()
+        if report.table < len(tables) and quote and quote in " ".join(
+                tables[report.table].get_text(" ", strip=True).split()).casefold():
+            miscopied.setdefault(report.row, []).append((report.table, report.reason))
+    return reported, miscopied
 
 
 def _partition_layout(
@@ -1105,8 +1192,6 @@ def _build_user_prompt(
         compact_rows.append({
             "row": c.row, "label": c.label, "html": c.html,
             "evidence": c.evidence, "source_pages": c.source_pages,
-            # One entry per physical line; the raw HTML stores each twice.
-            "current_rules": rule_map_text(c.html),
             # Grid columns per cell: the coordinates a layout uses. Word
             # source-styled tables are omitted and need no layout.
             "layout_tables": layout_manifest(c.html),
@@ -1119,8 +1204,8 @@ def _build_user_prompt(
         f"First call view_pdf_pages for these source pages: {pages}."
     )
     return (
-        f"Format sheet {sheet!r}. {source_instruction} Then return one JSON "
-        "patch for this sheet only."
+        f"Format sheet {sheet!r}. {source_instruction} Draft the layouts, check "
+        "them with preview_layout, then return one layout for this sheet only."
         f"{_size_signals_block(size_signals or [])}\n\n"
         "RESOLVED OUTPUT APPEARANCE: " + json.dumps(appearance or firm_theme()) + "\n"
         "Describe every table listed in each row's layout_tables, using its grid columns. "

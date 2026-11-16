@@ -869,7 +869,7 @@ export function ActiveTabPanel({
       stageMessages = outcomes && Object.keys(outcomes).length > 0
         ? Object.entries(outcomes)
           .filter(([sheet, outcome]) => !outcome.ok && !formatterSheets.some((item) => item.sheet === sheet && item.status === "failed"))
-          .map(([sheet, outcome]) => `${notesSheetDisplayName(sheet)}: ${outcome.error || outcome.summary || "Appearance checking did not finish."}`)
+          .map(([sheet, outcome]) => `${notesSheetDisplayName(sheet)}: ${outcome.error || outcome.summary || "Formatting did not finish."}`)
         : [message];
     }
     return (

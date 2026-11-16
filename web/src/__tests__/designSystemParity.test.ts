@@ -76,7 +76,7 @@ describe("XBRL design system is the production authority", () => {
     expect(designSystem).toContain("A completed run must not turn failed or stopped formatting into Complete");
     expect(designSystem).toContain("Label unfinished notes formatting Needs review");
     expect(designSystem).toContain("Content finalization follows notes review and precedes source completeness checking and final formatting");
-    expect(designSystem).toContain("Later content, source or prepared-output changes invalidate appearance verification");
+    expect(designSystem).toContain("Formatting that needs review exposes a targeted retry");
   });
 
   test.each([
@@ -294,15 +294,15 @@ describe("Direction A shell and responsive composition", () => {
 
 describe("Simplified template-oriented review", () => {
   test("pins worksheet-oriented report review and source context", () => {
-    expect(designSystem).toContain("Saving report narrative refreshes that worksheet’s appearance status and exposes Recheck formatting when verification is stale");
-    for (const requirement of ["Reports review uses the same worksheet composition as Notes", "Statement by directors", "exact XBRL template label and in template order", "keep unused director slots visible", "Do not show inline source-page links in Reports", "Source PDF divider supports mouse and keyboard resizing", "All three tabs inherit the same page gutters and tab-panel spacing", "Source PDF headings use the same 16px horizontal inset as their pane body", "Report worksheet buttons use the shared quiet-button padding", "Field focus and repeated field selection update the cited PDF page", "clicking a field label reveals that pane", "Pending or failed report saves prevent worksheet changes", "Move report worksheet navigation above the fields and source before stacking the source pane", "Check formatting for a report that has never been checked"]) {
+    expect(designSystem).toContain("Saving report narrative refreshes that worksheet’s formatting status. Show Format report for a report that has never been formatted");
+    for (const requirement of ["Reports review uses the same worksheet composition as Notes", "Statement by directors", "exact XBRL template label and in template order", "keep unused director slots visible", "Do not show inline source-page links in Reports", "Source PDF divider supports mouse and keyboard resizing", "All three tabs inherit the same page gutters and tab-panel spacing", "Source PDF headings use the same 16px horizontal inset as their pane body", "Report worksheet buttons use the shared quiet-button padding", "Field focus and repeated field selection update the cited PDF page", "clicking a field label reveals that pane", "Pending or failed report saves prevent worksheet changes", "Move report worksheet navigation above the fields and source before stacking the source pane", "Format report for a report that has never been formatted"]) {
       expect(designSystem).toContain(requirement);
     }
   });
 
   test("pins the minimal Notes review contract", () => {
     expect(designSystem).toContain("current worksheet’s displayed concepts, periods, category members and entities");
-    expect(designSystem).toContain("Notes formatting rechecks use one compact notice beside the action, without internal row numbers");
+    expect(designSystem).toContain("Notes formatting that needs review uses one compact notice beside the action, without internal row numbers");
     expect(designSystem).toContain("Notes use one divider between peer fields");
     for (const requirement of [
       "Use the field heading as the disclosure control for populated and empty fields",
