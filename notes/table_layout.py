@@ -103,6 +103,11 @@ class TableLayout(BaseModel):
     paragraphs: list[ParagraphOverride] = Field(default_factory=list)
     emphasis: list[TextEmphasis] = Field(default_factory=list)
     width_percent: Optional[int] = Field(default=None, ge=10, le=100, strict=True)
+    font_size_pt: Optional[int] = Field(
+        default=None, ge=8, le=14, strict=True,
+        description="A smaller font for a table too wide for mTool's text width, never below 8. "
+                    "Omit to use the house font size.",
+    )
     column_widths: Optional[list[Annotated[int, Field(ge=16, le=2000, strict=True)]]] = Field(
         default=None, description="Preferred width in pixels for every GRID column, including merged columns.",
     )
@@ -299,6 +304,8 @@ def layout_operations(html: str, layouts: list[TableLayout],
             table_style["table_width"] = f"{layout.width_percent}%"
         if layout.column_widths is not None:
             table_style["column_widths"] = layout.column_widths
+        # Formatter-owned: a layout without it returns the table to the house size.
+        table_style["font_size_pt"] = layout.font_size_pt
         if table_style:
             ops.append({"target": {"table": layout.table, "range": "table"}, "style": table_style})
         ops.append({"target": {"table": layout.table, "range": "all"},

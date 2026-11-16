@@ -1547,7 +1547,15 @@ Key invariants:
     it and the format-only gate exempts it; unmarked (source or human) emphasis
     can never be removed. An editor save drops the marker, which leaves that
     bold permanent (the safe direction); mTool output strips both formatter
-    markers. Table width percentages and
+    markers. A table too wide for mTool's 170 mm text width may take a
+    smaller font (`font_size_pt`, 8–14, stored as `data-formatter-font-size`
+    on the `<table>`; never below 8 pt and never above the house size). The
+    preview names the largest size at which the note's tables fit
+    (`notes.render.fitting_font_size`). The sanitizer, the editor's
+    `StyledTable` and the mTool decorator keep it; it applies only to that
+    table's text, and a later layout without it returns the house size.
+    Pinned by `tests/test_notes_table_layout.py`, `tests/test_notes_render.py`
+    and `cellFormatting.test.ts`. Table width percentages and
     bounded per-grid-column pixel widths are presentation preferences, not
     changes to rows or merged cells. A layout changes sizing only when it
     states widths, so an editor resize or source widths survive a layout that

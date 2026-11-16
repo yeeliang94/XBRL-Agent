@@ -99,6 +99,10 @@ cell over columns 2 and 3. Describe every listed table exactly once.
   unique selection only if all of it is bold in the PDF. Source bold is always
   kept. Bold from an earlier layout is replaced by this one, so restate any row,
   cell or selection bold that should remain.
+- `font_size_pt`: optional smaller font for a table too wide for mTool's
+  170 mm text width, never below 8. Use it only when the preview says the
+  table is too wide (it names the size that fits) or shows words broken
+  mid-word to fit; otherwise omit it so the table keeps the house size.
 - `width_percent`: optional overall table width, 10–100 percent of the note.
 - `column_widths`: optional preferred pixel widths, 16–2000 per GRID column,
   with exactly one width per column, including columns under merged headers.

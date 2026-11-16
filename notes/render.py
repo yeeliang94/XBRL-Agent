@@ -16,7 +16,10 @@ from pathlib import Path
 import fitz
 from bs4 import BeautifulSoup, Tag
 
-from mtool.notes_decorate import DEFAULT_STYLE, NotesTableStyle, decorate_notes_html
+from mtool.notes_decorate import (
+    DEFAULT_STYLE, FORMATTER_FONT_SIZE_ATTR, MIN_TABLE_FONT_SIZE_PT, NotesTableStyle,
+    decorate_notes_html,
+)
 
 _FONTS = Path(__file__).resolve().parent / "fonts"
 # Unstyled text (a flat-tier note) also draws in the Arial-width font.
@@ -172,3 +175,17 @@ def render_note_preview(html: str, style: NotesTableStyle = DEFAULT_STYLE) -> tu
         return [], 0.0
     pages, overflow = _draw(decorate_notes_html(html, style, editable_merged_cells=True))
     return pages, round(overflow * 25.4 / 72, 1)
+
+
+def fitting_font_size(html: str, style: NotesTableStyle = DEFAULT_STYLE) -> int | None:
+    """The largest table font, below the house size and not under 8 pt, at
+    which every table of the note fits mTool's text width; None if none does."""
+    # 14 pt is the largest size a layout may state.
+    for size in range(min(style.font_size_pt - 1, 14), MIN_TABLE_FONT_SIZE_PT - 1, -1):
+        soup = BeautifulSoup(html, "html.parser")
+        for table in soup.find_all("table"):
+            if not table.find_parent("table"):
+                table[FORMATTER_FONT_SIZE_ATTR] = str(size)
+        if not _draw(decorate_notes_html(str(soup), style, editable_merged_cells=True))[1]:
+            return size
+    return None

@@ -832,6 +832,15 @@ describe("source-styled marker round-trip (real editor)", () => {
     editor.destroy();
   });
 
+  it("keeps the formatter's smaller table font and drops an out-of-range one", () => {
+    const kept = makeEditor('<table data-formatter-font-size="9"><tbody><tr><td>A</td></tr></tbody></table>');
+    expect(kept.getHTML()).toContain('data-formatter-font-size="9"');
+    kept.destroy();
+    const forged = makeEditor('<table data-formatter-font-size="4"><tbody><tr><td>A</td></tr></tbody></table>');
+    expect(forged.getHTML()).not.toContain("data-formatter-font-size");
+    forged.destroy();
+  });
+
   it("does not invent the marker on an ordinary table", () => {
     const editor = makeEditor("<table><tbody><tr><td>A</td></tr></tbody></table>");
     expect(editor.getHTML()).not.toContain("data-source-styled");

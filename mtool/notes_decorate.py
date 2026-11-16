@@ -17,7 +17,7 @@ patcher.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from bs4 import BeautifulSoup, Tag
 from notes.table_theme import LEGACY_NOTES_TABLE_STYLE
@@ -298,6 +298,27 @@ FORMATTER_WIDTHS_ATTR = "data-formatter-widths"
 FORMATTER_TABLE_WIDTH_ATTR = "data-formatter-table-width"
 # Mirrors notes/format_patch.py FORMATTER_EMPHASIS_ATTR.
 FORMATTER_EMPHASIS_ATTR = "data-formatter-emphasis"
+# Mirrors notes/format_patch.py FORMATTER_FONT_SIZE_ATTR: a smaller font the
+# formatter chose for a table too wide for mTool's text width.
+FORMATTER_FONT_SIZE_ATTR = "data-formatter-font-size"
+MIN_TABLE_FONT_SIZE_PT = 8
+
+
+def _table_font_style(o: NotesTableStyle, el: Tag) -> NotesTableStyle:
+    """``o`` with the formatter's smaller table font for text inside ``el``.
+
+    The nearest enclosing (or own) table with a font choice decides. The
+    choice only shrinks, never below 8 pt, and headings inside take it too.
+    """
+    tables = [el] if el.name == "table" else []
+    for table in [*tables, *el.find_parents("table")]:
+        raw = str(table.get(FORMATTER_FONT_SIZE_ATTR, ""))
+        if re.fullmatch(r"[0-9]{1,2}", raw):
+            size = max(MIN_TABLE_FONT_SIZE_PT, int(raw))
+            if size >= o.font_size_pt:
+                return o  # never larger than the house size
+            return replace(o, font_size_pt=size, heading_size_pt=None)
+    return o
 
 
 def _is_source_styled(table: Tag) -> bool:
@@ -845,7 +866,8 @@ def _add_transport_breaks(soup: BeautifulSoup) -> None:
 def _drop_formatter_markers(soup: BeautifulSoup) -> None:
     """Formatter bookkeeping markers mean nothing to TX; drop them so they
     cost no bytes against Excel's cell limit."""
-    for attr in (FORMATTER_EMPHASIS_ATTR, FORMATTER_WIDTHS_ATTR, FORMATTER_TABLE_WIDTH_ATTR):
+    for attr in (FORMATTER_EMPHASIS_ATTR, FORMATTER_WIDTHS_ATTR, FORMATTER_TABLE_WIDTH_ATTR,
+                 FORMATTER_FONT_SIZE_ATTR):
         for el in soup.find_all(attrs={attr: True}):
             del el[attr]
 
@@ -1045,7 +1067,9 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         # Font + wrapping hoisted here (inheritable) so cells don't each repeat
         # ~90 chars of identical boilerplate — the size win that keeps large
         # tables under Excel's cell limit.
-        _merge_style(table, table_inherited)
+        own_font = _table_font_style(style, table)
+        _merge_style(table, table_inherited if own_font is style
+                     else _table_inherited_css(own_font, lite=lite))
         # If any cell owns its own border, the cells decide the grid — a
         # table-level border="1" would redraw over a deliberately-borderless
         # cell. Suppress the legacy attribute then (as for "no border").
@@ -1187,20 +1211,22 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     heading_style = _heading_style(style)
     font_css = _font_css(style)
     for p in soup.find_all("p"):
+        own = _table_font_style(style, p)
         if _has_persisted_indent(p):
-            _merge_style(p, font_css + " margin-top: 0; margin-right: 0; "
+            _merge_style(p, _font_css(own) + " margin-top: 0; margin-right: 0; "
                          f"margin-bottom: {style.paragraph_spacing_px}px;")
         else:
-            _merge_style(p, para_style)
+            _merge_style(p, para_style if own is style else _paragraph_style(own))
     for h in soup.find_all(("h1", "h2", "h3", "h4", "h5", "h6")):
+        own = _table_font_style(style, h)
         if h.find_parent(("td", "th")) is None:
             _merge_cell_style(h, "text-align: left;")
         if _has_persisted_indent(h):
             weight = style.heading_weight if style.heading_weight is not None else 600
-            _merge_style(h, _heading_font_css(style) + " margin-top: 12px; margin-right: 0; "
+            _merge_style(h, _heading_font_css(own) + " margin-top: 12px; margin-right: 0; "
                          f"margin-bottom: 6px; font-weight: {weight};")
         else:
-            _merge_style(h, heading_style)
+            _merge_style(h, heading_style if own is style else _heading_style(own))
     for mark in soup.find_all(("strong", "b")):
         if "font-weight" not in _parse_decls(mark.get("style", "")):
             _merge_style(mark, f"font-weight: {_emphasis_weight(mark)};")
@@ -1209,7 +1235,7 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         # The marker glyph applies to <ul> only — <ol> keeps its numbering and
         # <li> inherits. Empty when un-themed (byte-identical output).
         extra = list_marker_css if lst.name == "ul" else ""
-        _merge_style(lst, font_css + extra)
+        _merge_style(lst, _font_css(_table_font_style(style, lst)) + extra)
 
     if editable_merged_cells:
         expanded = _expand_merged_cells(soup)

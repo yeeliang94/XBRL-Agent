@@ -37,7 +37,7 @@ from notes.format_patch import (
 from notes.format_schema import NoteLayout, SheetLayout, UnresolvedNote, layout_to_dict
 from notes.table_layout import LayoutError, layout_manifest, layout_operations
 from notes.format_verify import table_rows as _direct_table_rows
-from notes.render import render_note_preview
+from notes.render import fitting_font_size, render_note_preview
 from notes.table_theme import firm_theme, resolve_run_theme
 from model_settings import build_model_settings, describe_model_runtime
 
@@ -276,9 +276,12 @@ def _preview_layout(
         pages_sent += len(pages)
         deps.previews[row] = deps.previews.get(row, 0) + 1
         if too_wide_mm:
+            fits = fitting_font_size(drawn[row], deps.style)
+            advice = (f"It fits at {fits} pt: set font_size_pt {fits} on the wide table."
+                      if fits else "It does not fit even at 8 pt: keep 8 pt and leave a house_style note.")
             results.append(f"Row {row}: a table is {too_wide_mm} mm wider than mTool's 170 mm text "
                            "width even at its narrowest. The picture is widened to show it whole, so "
-                           "this note's text wraps wider than in mTool.")
+                           f"this note's text wraps wider than in mTool. {advice}")
         for index, png in enumerate(pages, 1):
             results.append(f"=== Row {row} as formatted (picture {index} of {len(pages)}) ===")
             results.append(BinaryContent(data=png, media_type="image/png"))

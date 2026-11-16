@@ -106,3 +106,17 @@ def test_a_table_wider_than_mtools_text_area_is_shown_whole_and_measured():
     assert _image(pages[0]).width > render.PAGE_WIDTH_PT * render.RENDER_DPI / 72 + 1
     fits, none = render.render_note_preview(TABLE.format(cell=""))
     assert none == 0 and _image(fits[0]).width == pytest.approx(render.PAGE_WIDTH_PT * render.RENDER_DPI / 72, abs=2)
+
+
+def test_the_preview_names_the_font_size_at_which_a_wide_table_fits():
+    headers = "".join(f"<th>Heading {i}</th>" for i in range(8))
+    figures = "".join("<td>1,265,564</td>" for _ in range(8))
+    wide = f"<table><tr>{headers}</tr><tr>{figures}</tr></table>"
+    style = render.NotesTableStyle(font_size_pt=11)
+    assert render.render_note_preview(wide, style)[1] > 0
+    size = render.fitting_font_size(wide, style)
+    assert size is not None and 8 <= size < 11
+    fitted = wide.replace("<table>", f'<table data-formatter-font-size="{size}">')
+    assert render.render_note_preview(fitted, style)[1] == 0
+    far_too_wide = wide.replace("<tr>", "<tr>" + "<td>1,265,564</td>" * 12)
+    assert render.fitting_font_size(far_too_wide, style) is None

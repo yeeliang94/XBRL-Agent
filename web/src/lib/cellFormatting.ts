@@ -276,6 +276,9 @@ export const StyledTableCell = TableCell.extend({
  *  drops the marker on the first human save and the table reverts to the house
  *  grid — the exact regression this flag exists to prevent. */
 export const SOURCE_STYLED_ATTR = "data-source-styled";
+/** A smaller font (8–14 pt) the AI formatter chose for a table too wide for
+ *  mTool's page. Kept through a person's edit so the table still fits. */
+export const FORMATTER_FONT_SIZE_ATTR = "data-formatter-font-size";
 
 export const StyledTable = Table.extend({
   addAttributes() {
@@ -287,6 +290,15 @@ export const StyledTable = Table.extend({
           el.getAttribute(SOURCE_STYLED_ATTR) === "true" ? "true" : null,
         renderHTML: (attrs: Record<string, unknown>) =>
           attrs.sourceStyled === "true" ? { [SOURCE_STYLED_ATTR]: "true" } : {},
+      },
+      formatterFontSize: {
+        default: null,
+        parseHTML: (el: HTMLElement) => {
+          const size = Number(el.getAttribute(FORMATTER_FONT_SIZE_ATTR));
+          return Number.isInteger(size) && size >= 8 && size <= 14 ? String(size) : null;
+        },
+        renderHTML: (attrs: Record<string, unknown>) =>
+          attrs.formatterFontSize ? { [FORMATTER_FONT_SIZE_ATTR]: attrs.formatterFontSize } : {},
       },
     };
   },
