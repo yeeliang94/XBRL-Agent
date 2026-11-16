@@ -183,6 +183,9 @@ class NotesFormatterDeps:
     rows: dict[int, str] = field(default_factory=dict)
     style: NotesTableStyle = field(default_factory=NotesTableStyle)
     previews: dict[int, int] = field(default_factory=dict)
+    # The note text each successful preview drew, per row: the final answer
+    # is checked against what the formatter actually saw.
+    previewed: dict[int, set[str]] = field(default_factory=dict)
 
 
 def _report_tool(deps: NotesFormatterDeps, tool_name: str, args: dict):
@@ -275,6 +278,7 @@ def _preview_layout(
             pages = pages[:MAX_PREVIEW_PAGES]
         pages_sent += len(pages)
         deps.previews[row] = deps.previews.get(row, 0) + 1
+        deps.previewed.setdefault(row, set()).add(drawn[row])
         if too_wide_mm:
             fits = fitting_font_size(drawn[row], deps.style)
             advice = (f"It fits at {fits} pt: set font_size_pt {fits} on the wide table."
@@ -936,6 +940,12 @@ async def _run_notes_formatter_impl(
             row_errors[cell.row] = "The formatter did not view every source page of this note."
         elif layout_tables(cell.html) and cell.row not in layouts_by_row and cell.row not in reported_rows:
             row_errors[cell.row] = "The formatter returned no layout for this note's tables."
+        elif (deps is not None and cell.row in layouts_by_row
+              and applied.rows.get(cell.row) not in deps.previewed.get(cell.row, set())):
+            # Saved as drawn, but nobody compared this exact result with the
+            # source, so a person checks it.
+            row_errors[cell.row] = "The final formatting of this note was not previewed against its source."
+            reported_rows.add(cell.row)
     for row in row_errors:
         if row in applied.rows and row not in reported_rows:
             applied.rows[row] = rows_for_patch[row]

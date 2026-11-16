@@ -865,7 +865,8 @@ async def test_note_the_formatter_reports_unresolved_keeps_its_formatting(monkey
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", ["unseen_pages", "omitted_note", "omitted_then_repaired"])
+@pytest.mark.parametrize("case", ["unseen_pages", "omitted_note", "omitted_then_repaired",
+                                  "not_previewed", "previewed"])
 async def test_a_note_not_compared_with_its_source_needs_review(monkeypatch, formatter_db, case):
     """Without a separate checker, a note whose source pages the formatter
     never saw is not finished. A note left out of the answer gets the one
@@ -877,19 +878,28 @@ async def test_a_note_not_compared_with_its_source_needs_review(monkeypatch, for
         repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113, label="Other",
                                html=_TABLE_HTML, source_pages=[3])
     fake = _FakeAgent({
-        "unseen_pages": [_layout(_note(), _note(113))],
         "omitted_note": [_layout(_note()), _layout()],
         "omitted_then_repaired": [_layout(_note()), _layout(_note(113))],
-    }[case])
+    }.get(case, [_layout(_note(), _note(113))]))
     deps = fa.NotesFormatterDeps(run_id=run_id, db_path=str(db), pdf_path=pdf_path, sheet=_SHEET, model="m")
     if case != "unseen_pages":
         deps.viewed_pages.add(3)
+    if case != "not_previewed":
+        # The agent previews exactly the layouts it then returns.
+        from notes.format_schema import NoteLayout
+        deps.rows = {112: _TABLE_HTML, 113: _TABLE_HTML}
+        fa._preview_layout(deps, [NoteLayout.model_validate(_note()), NoteLayout.model_validate(_note(113))])
     monkeypatch.setattr(fa, "_preload_source_pages", lambda *_a, **_k: _no_pages())
     monkeypatch.setattr(fa, "create_notes_formatter_agent", lambda **_kw: (fake, deps))
     result = await fa.run_notes_formatter(run_id=run_id, db_path=str(db), pdf_path=pdf_path,
                                           sheet=_SHEET, model="fake-model")
-    if case == "omitted_then_repaired":
-        assert result["ok"] and result["changed_rows"] == 2 and fake.calls == 2
+    if case in ("omitted_then_repaired", "previewed"):
+        assert result["ok"] and result["changed_rows"] == 2
+        return
+    if case == "not_previewed":
+        # Saved as drawn, but flagged for a person.
+        assert not result["ok"] and result["failed_rows"] == [112, 113] and result["changed_rows"] == 2
+        assert "not previewed" in result["row_errors"][112]
         return
     expected = [112, 113] if case == "unseen_pages" else [113]
     assert not result["ok"] and result["failed_rows"] == expected

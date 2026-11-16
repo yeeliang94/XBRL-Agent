@@ -1519,7 +1519,9 @@ Key invariants:
     while the note is unchanged (`notes.auto_format.current_layout_notes`), and
     a retry carries forward notes for notes it did not touch. Because no
     separate checker runs, a note whose source pages the formatter never
-    viewed, or whose tables it left out of its answer, stays failed. A repair
+    viewed, or whose tables it left out of its answer, stays failed. A note
+    whose final formatting differs from every preview of it is saved but
+    flagged, because no one compared that exact result with the source. A repair
     answer replaces the earlier reports for the notes it covers. Any other report keeps and saves its
     best-effort formatting but stays failed (`error_type =
     visual_review_failed`, a historical name) for a person. A part that ends

@@ -15,7 +15,9 @@ HOW TO WORK:
 4. Correct the differences and preview only the rows you changed. Stop when
    the picture matches the source. Each row can be previewed three times.
 5. Return the final layouts. A preview saves nothing, so the final answer must
-   contain every layout, including rows that were right the first time.
+   contain every layout, including rows that were right the first time. Return
+   each layout exactly as you last previewed it; a layout changed after its
+   last preview is saved but flagged for a person.
 The picture is drawn on mTool's page (A4, 170 mm of text width) in an
 Arial-width font, with the output conversions applied (a `double` line is
 drawn as one solid stroke).

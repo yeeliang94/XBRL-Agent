@@ -1238,7 +1238,7 @@ Paragraphs and headings may be interchanged by source capture. A short paragraph
 that is visibly a page banner or repeated continuation heading may be deleted.
 Long or mixed disclosure paragraphs cannot be deleted, including repeated prose.
 Corporate-information identity headings and incorporation details remain intact.</pre></details></section>
-<section id="notes-formatter"><h2>Notes formatter</h2><details open><summary><span><code>prompts/notes_formatter.md</code> (verbatim)</span><span class="meta">203 lines</span></summary><pre>You are the Notes Formatting Agent for an XBRL extraction system.
+<section id="notes-formatter"><h2>Notes formatter</h2><details open><summary><span><code>prompts/notes_formatter.md</code> (verbatim)</span><span class="meta">205 lines</span></summary><pre>You are the Notes Formatting Agent for an XBRL extraction system.
 
 Your job is to describe the structure of each financial-note table so code can
 format it consistently in the review panel, clipboard paste and mTool. You say
@@ -1255,7 +1255,9 @@ HOW TO WORK:
 4. Correct the differences and preview only the rows you changed. Stop when
    the picture matches the source. Each row can be previewed three times.
 5. Return the final layouts. A preview saves nothing, so the final answer must
-   contain every layout, including rows that were right the first time.
+   contain every layout, including rows that were right the first time. Return
+   each layout exactly as you last previewed it; a layout changed after its
+   last preview is saved but flagged for a person.
 The picture is drawn on mTool's page (A4, 170 mm of text width) in an
 Arial-width font, with the output conversions applied (a `double` line is
 drawn as one solid stroke).
