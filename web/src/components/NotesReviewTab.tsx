@@ -1452,8 +1452,8 @@ function SheetSection({
               ? humanFilled && !aiFilled ? "missed" : aiFilled && !humanFilled ? "ai_only" : "agree"
               : undefined;
             const statusId = `note-field-status-${runId}-${encodeURIComponent(sheet.sheet)}-${cell.row}`;
-            // A later edit by a person or reviewer makes the note out of date.
-            const layoutNote = cell.style_source === "formatter" ? formatStatus?.layout_notes?.[String(cell.row)] : undefined;
+            // The status lists only notes unchanged since formatting.
+            const layoutNote = formatStatus?.layout_notes?.[String(cell.row)];
             const marker = !selected && humanStatus && humanStatus !== "agree"
               ? humanStatus === "missed" ? "Missed by AI" : "AI-only"
               : null;

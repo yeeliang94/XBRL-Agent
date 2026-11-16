@@ -187,13 +187,13 @@
 /* A smaller font the AI formatter chose for a table too wide for mTool's page
  * (data-formatter-font-size, 8-14 pt). Matches prepared output: never larger
  * than the house size. */
-.notes-review-tab .tiptap table[data-formatter-font-size="8"] :is(td, th) { font-size: min(var(--nt-cell-font-size, 13px), 8pt); }
-.notes-review-tab .tiptap table[data-formatter-font-size="9"] :is(td, th) { font-size: min(var(--nt-cell-font-size, 13px), 9pt); }
-.notes-review-tab .tiptap table[data-formatter-font-size="10"] :is(td, th) { font-size: min(var(--nt-cell-font-size, 13px), 10pt); }
-.notes-review-tab .tiptap table[data-formatter-font-size="11"] :is(td, th) { font-size: min(var(--nt-cell-font-size, 13px), 11pt); }
-.notes-review-tab .tiptap table[data-formatter-font-size="12"] :is(td, th) { font-size: min(var(--nt-cell-font-size, 13px), 12pt); }
-.notes-review-tab .tiptap table[data-formatter-font-size="13"] :is(td, th) { font-size: min(var(--nt-cell-font-size, 13px), 13pt); }
-.notes-review-tab .tiptap table[data-formatter-font-size="14"] :is(td, th) { font-size: min(var(--nt-cell-font-size, 13px), 14pt); }
+.notes-review-tab .tiptap table[data-formatter-font-size="8"] :is(td, th, h1, h2, h3, h4, h5, h6) { font-size: min(var(--nt-cell-font-size, 13px), 8pt); }
+.notes-review-tab .tiptap table[data-formatter-font-size="9"] :is(td, th, h1, h2, h3, h4, h5, h6) { font-size: min(var(--nt-cell-font-size, 13px), 9pt); }
+.notes-review-tab .tiptap table[data-formatter-font-size="10"] :is(td, th, h1, h2, h3, h4, h5, h6) { font-size: min(var(--nt-cell-font-size, 13px), 10pt); }
+.notes-review-tab .tiptap table[data-formatter-font-size="11"] :is(td, th, h1, h2, h3, h4, h5, h6) { font-size: min(var(--nt-cell-font-size, 13px), 11pt); }
+.notes-review-tab .tiptap table[data-formatter-font-size="12"] :is(td, th, h1, h2, h3, h4, h5, h6) { font-size: min(var(--nt-cell-font-size, 13px), 12pt); }
+.notes-review-tab .tiptap table[data-formatter-font-size="13"] :is(td, th, h1, h2, h3, h4, h5, h6) { font-size: min(var(--nt-cell-font-size, 13px), 13pt); }
+.notes-review-tab .tiptap table[data-formatter-font-size="14"] :is(td, th, h1, h2, h3, h4, h5, h6) { font-size: min(var(--nt-cell-font-size, 13px), 14pt); }
 
 /* Verbatim Word passthrough (notes/writer.py::_mark_source_styled_tables).
  * A Word financial table states a couple of underlines and leaves every other

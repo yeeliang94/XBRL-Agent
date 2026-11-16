@@ -8,6 +8,7 @@ excluded by the server caller; their source-formatting contract is unchanged.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
 from datetime import datetime, timezone
@@ -138,6 +139,25 @@ def unfinished(result: dict[str, Any], rows: Iterable[int]) -> dict[str, Any]:
     return {**result, "failed_rows": rows, "row_errors": {row: reason for row in rows}}
 
 
+def note_html_sha256(html: str) -> str:
+    """Identity of a note's saved text: a house-style note describes exactly it."""
+    return hashlib.sha256((html or "").encode("utf-8")).hexdigest()
+
+
+def current_layout_notes(conn, run_id: int, sheet: str, notes: dict | None) -> dict[int, str]:
+    """House-style notes whose note is unchanged since formatting, as text.
+
+    Any later change (a person, the reviewer, a re-copy) makes the note out
+    of date, so it is not shown.
+    """
+    if not notes:
+        return {}
+    current = {c.row: note_html_sha256(c.html) for c in list_formatter_cells_for_run(conn, run_id)
+               if c.sheet == sheet}
+    return {int(row): entry["text"] for row, entry in notes.items()
+            if isinstance(entry, dict) and current.get(int(row)) == entry.get("html_sha256")}
+
+
 def keep_earlier_notes(conn, run_id: int, sheet: str, previous: dict[str, Any] | None,
                        result: dict[str, Any], launched: Iterable[int]) -> dict[str, Any]:
     """Carry house-style notes forward for notes this pass did not format.
@@ -149,11 +169,8 @@ def keep_earlier_notes(conn, run_id: int, sheet: str, previous: dict[str, Any] |
     launched = set(launched)
     earlier = {int(row): note for row, note in ((previous or {}).get("layout_notes") or {}).items()
                if int(row) not in launched}
-    if not earlier:
-        return result
-    formatted = {c.row for c in list_formatter_cells_for_run(conn, run_id)
-                 if c.sheet == sheet and c.style_source == "formatter"}
-    kept = {row: note for row, note in earlier.items() if row in formatted}
+    still_current = current_layout_notes(conn, run_id, sheet, earlier)
+    kept = {row: earlier[row] for row in still_current}
     if not kept:
         return result
     return {**result, "layout_notes": {**kept, **{int(r): n for r, n in (result.get("layout_notes") or {}).items()}}}

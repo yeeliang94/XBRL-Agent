@@ -1514,8 +1514,13 @@ Key invariants:
     (`SheetLayout.unresolved`). A capability limit (gapped or inset rules,
     boxed cells, a single indented hard-break line) is drawn in the nearest
     house style and reported as `house_style`: the note is formatted, not
-    failed, and the formatter's note is kept in `layout_notes` and shown under
-    the note in the Notes tab. Any other report keeps and saves its
+    failed, and the formatter's note is kept in `layout_notes` with the hash
+    of the saved note text; the status route shows it under the note only
+    while the note is unchanged (`notes.auto_format.current_layout_notes`), and
+    a retry carries forward notes for notes it did not touch. Because no
+    separate checker runs, a note whose source pages the formatter never
+    viewed, or whose tables it left out of its answer, stays failed. A repair
+    answer replaces the earlier reports for the notes it covers. Any other report keeps and saves its
     best-effort formatting but stays failed (`error_type =
     visual_review_failed`, a historical name) for a person. A part that ends
     early (time limit, request limit, AI error) names each of its notes in

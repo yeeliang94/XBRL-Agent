@@ -3080,28 +3080,15 @@ describe("NotesReviewTab — AI formatter", () => {
     ).length;
   }
 
-  test.each(["formatter", "human"] as const)(
-    "a house-style formatter note shows without an error, and only while the note is the formatter's (%s)",
-    async (styleSource) => {
-      const fetchMock = routedFetch({status: (url) => url.includes("Notes-CI") ? {
-        status: "done", sheet: "Notes-CI", changed_rows: 1, error: null,
-        layout_notes: { "4": "Gapped underlines in the source are drawn as one line." },
-      } : {status: "idle", sheet: "other"}});
-      const routed = fetchMock.getMockImplementation()!;
-      const [ci, ...rest] = SAMPLE.sheets;
-      const cells = { sheets: [{ ...ci, rows: ci.rows.map((row) => ({ ...row, style_source: styleSource })) }, ...rest] };
-      fetchMock.mockImplementation(async (input: RequestInfo | URL) => String(input).includes("/notes-format")
-        ? routed(input)
-        : new Response(JSON.stringify(cells), { status: 200, headers: { "Content-Type": "application/json" } }));
-      render(<NotesReviewTab runId={42} />);
-      const text = "Formatting note: Gapped underlines in the source are drawn as one line.";
-      await screen.findByText("Corporate info");
-      await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/notes-format/status"))).toBe(true));
-      if (styleSource === "formatter") expect(await screen.findByText(text)).toBeInTheDocument();
-      else await waitFor(() => expect(screen.queryByText(text)).toBeNull());
-      expect(screen.queryByTestId("notes-format-summary")).toBeNull();
-    },
-  );
+  test("a house-style formatter note shows under its note without an error", async () => {
+    routedFetch({status: (url) => url.includes("Notes-CI") ? {
+      status: "done", sheet: "Notes-CI", changed_rows: 1, error: null,
+      layout_notes: { "4": "Gapped underlines in the source are drawn as one line." },
+    } : {status: "idle", sheet: "other"}});
+    render(<NotesReviewTab runId={42} />);
+    expect(await screen.findByText("Formatting note: Gapped underlines in the source are drawn as one line.")).toBeInTheDocument();
+    expect(screen.queryByTestId("notes-format-summary")).toBeNull();
+  });
 
   test("Format launches, polls to done, and refetches cells without a verbose summary", async () => {
     vi.useFakeTimers();

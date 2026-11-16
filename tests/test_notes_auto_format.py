@@ -321,16 +321,26 @@ async def test_large_sheet_is_formatted_in_concurrent_row_groups(auto_format_db)
 
 def test_retry_keeps_house_style_notes_only_for_notes_still_formatted(auto_format_db):
     """A retry formats unfinished notes only; finished notes keep their note
-    unless a person has changed them since."""
+    unless anyone has changed them since."""
     db_path, run_id, _ = auto_format_db
     with repo.db_session(db_path) as conn:
-        for row, source in ((10, "formatter"), (11, "human"), (12, "unstyled")):
+        for row in (10, 11, 12):
             repo.upsert_notes_cell(conn, run_id=run_id, sheet="Notes-Listofnotes", row=row, label="Note",
-                                   html="<p>x</p>", source_pages=[1], style_source=source)
-        previous = {"layout_notes": {"10": "kept", "11": "edited since", "12": "reformatted"}}
+                                   html="<p>x</p>", source_pages=[1])
+        formatted = auto_format.note_html_sha256("<p>x</p>")
+        note = lambda text, sha=formatted: {"text": text, "html_sha256": sha}
+        previous = {"layout_notes": {"10": note("kept"), "11": note("edited since", "other"),
+                                     "12": note("reformatted")}}
         result = auto_format.keep_earlier_notes(conn, run_id, "Notes-Listofnotes", previous,
-                                                {"ok": True, "layout_notes": {12: "new"}}, launched=[12])
-    assert result["layout_notes"] == {10: "kept", 12: "new"}
+                                                {"ok": True, "layout_notes": {12: note("new")}}, launched=[12])
+        assert result["layout_notes"] == {10: note("kept"), 12: note("new")}
+        # Shown as text, and only while the note is unchanged since formatting.
+        assert auto_format.current_layout_notes(conn, run_id, "Notes-Listofnotes", result["layout_notes"]) == {
+            10: "kept", 12: "new"}
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet="Notes-Listofnotes", row=10, label="Note",
+                               html="<p>edited</p>", source_pages=[1])
+        assert auto_format.current_layout_notes(conn, run_id, "Notes-Listofnotes", result["layout_notes"]) == {
+            12: "new"}
 
 
 def test_row_groups_are_sized_by_tables_and_pages(auto_format_db):

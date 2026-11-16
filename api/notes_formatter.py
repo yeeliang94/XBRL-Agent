@@ -286,6 +286,9 @@ async def notes_formatter_status(run_id: int, sheet: str):
         has_snapshot = bool(
             repo.fetch_notes_format_snapshots(conn, run_id, sheet),
         )
+        from notes.auto_format import current_layout_notes
+        layout_notes = current_layout_notes(conn, run_id, sheet,
+                                            ((state or {}).get("result") or {}).get("layout_notes"))
     finally:
         conn.close()
     if state is None:
@@ -299,8 +302,8 @@ async def notes_formatter_status(run_id: int, sheet: str):
     return {
         "status": "done", "sheet": sheet, "skipped_rows": skipped,
         "failed_rows": (state.get("result") or {}).get("failed_rows") or [],
-        "layout_notes": (state.get("result") or {}).get("layout_notes") or {},
         "can_revert": has_snapshot, **state,
+        "layout_notes": {str(row): text for row, text in layout_notes.items()},
     }
 
 

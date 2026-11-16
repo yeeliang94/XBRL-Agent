@@ -35,7 +35,7 @@ from notes.format_patch import (
     apply_sheet_patch,
 )
 from notes.format_schema import NoteLayout, SheetLayout, UnresolvedNote, layout_to_dict
-from notes.table_layout import LayoutError, layout_manifest, layout_operations
+from notes.table_layout import LayoutError, layout_manifest, layout_operations, layout_tables
 from notes.format_verify import table_rows as _direct_table_rows
 from notes.render import fitting_font_size, render_note_preview
 from notes.table_theme import firm_theme, resolve_run_theme
@@ -846,6 +846,12 @@ async def _run_notes_formatter_impl(
         layout = patch
         patch, rejected_patch, row_errors = _partition_layout(rows_for_patch, layout, padding)
         _keep_layouts(layout, patch)
+        # A note with tables left out of the answer gets the same one repair.
+        reported = {item.get("row") for item in reports if isinstance(item, dict)}
+        for cell in cells:
+            if (cell.row not in layouts_by_row and cell.row not in row_errors
+                    and cell.row not in reported and layout_tables(cell.html)):
+                row_errors[cell.row] = f"row {cell.row}: no layout was returned for this note's tables"
     except FormatPatchError as exc:
         # No trustworthy row identity: repair the whole patch once, without
         # coercing model-authored row numbers into writable targets.
@@ -875,7 +881,8 @@ async def _run_notes_formatter_impl(
         if not apply_sheet_patch(rows_for_patch, patch).changed_rows:
             return failure
         summary = screened.summary
-        reports += screened.patch.get("unresolved") or []
+        # The whole answer was replaced, so are its reports.
+        reports = list(screened.patch.get("unresolved") or [])
     if row_errors and not repair_attempted:
         if activity is not None:
             activity.status("working", "Repairing rejected formatting decisions…")
@@ -888,6 +895,9 @@ async def _run_notes_formatter_impl(
             _output_json(repair_result.output), sheet, revised=True,
         )
         if err is None:
+            # The repair answers for the rejected rows: its reports replace theirs.
+            reports = [item for item in reports
+                       if not (isinstance(item, dict) and item.get("row") in row_errors)]
             reports += [item for item in screened.patch.get("unresolved") or []
                         if isinstance(item, dict) and item.get("row") in row_errors]
             # The repair owns only rejected rows. It cannot replace previously
@@ -916,6 +926,16 @@ async def _run_notes_formatter_impl(
     # best-effort formatting; they are saved but stay failed for a person.
     layout_notes: dict[int, str] = {}
     reported_rows, miscopied = _reported_unresolved(reports, rows_for_patch, row_errors, layout_notes)
+    # Without the separate checker, these are the two ways a note could look
+    # finished without being compared with its source.
+    viewed = deps.viewed_pages if deps is not None else None
+    for cell in cells:
+        if cell.row in row_errors:
+            continue
+        if viewed is not None and not set(cell.source_pages) <= viewed:
+            row_errors[cell.row] = "The formatter did not view every source page of this note."
+        elif layout_tables(cell.html) and cell.row not in layouts_by_row and cell.row not in reported_rows:
+            row_errors[cell.row] = "The formatter returned no layout for this note's tables."
     for row in row_errors:
         if row in applied.rows and row not in reported_rows:
             applied.rows[row] = rows_for_patch[row]
@@ -979,8 +999,11 @@ async def _run_notes_formatter_impl(
     for row in skipped_rows:
         row_errors[row] = "Note changed during formatting; retry its current content."
         miscopied.pop(row, None)
-    # A note on house style describes formatting that was saved.
-    layout_notes = {row: note for row, note in layout_notes.items()
+    # A note on house style describes formatting that was saved, tied to
+    # that exact text so a later change hides it.
+    from notes.auto_format import note_html_sha256
+    layout_notes = {row: {"text": note, "html_sha256": note_html_sha256(applied.rows[row])}
+                    for row, note in layout_notes.items()
                     if row in applied.rows and row not in skipped_rows and row not in person_edited
                     and row not in row_errors}
     if row_errors:

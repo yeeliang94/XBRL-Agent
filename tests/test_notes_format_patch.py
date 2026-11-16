@@ -865,6 +865,53 @@ async def test_note_the_formatter_reports_unresolved_keeps_its_formatting(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["unseen_pages", "omitted_note", "omitted_then_repaired"])
+async def test_a_note_not_compared_with_its_source_needs_review(monkeypatch, formatter_db, case):
+    """Without a separate checker, a note whose source pages the formatter
+    never saw is not finished. A note left out of the answer gets the one
+    repair; left out again, it is not finished either."""
+    import notes.formatting_agent as fa
+    from db import repository as repo
+    db, pdf_path, run_id = formatter_db
+    with repo.db_session(db) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113, label="Other",
+                               html=_TABLE_HTML, source_pages=[3])
+    fake = _FakeAgent({
+        "unseen_pages": [_layout(_note(), _note(113))],
+        "omitted_note": [_layout(_note()), _layout()],
+        "omitted_then_repaired": [_layout(_note()), _layout(_note(113))],
+    }[case])
+    deps = fa.NotesFormatterDeps(run_id=run_id, db_path=str(db), pdf_path=pdf_path, sheet=_SHEET, model="m")
+    if case != "unseen_pages":
+        deps.viewed_pages.add(3)
+    monkeypatch.setattr(fa, "_preload_source_pages", lambda *_a, **_k: _no_pages())
+    monkeypatch.setattr(fa, "create_notes_formatter_agent", lambda **_kw: (fake, deps))
+    result = await fa.run_notes_formatter(run_id=run_id, db_path=str(db), pdf_path=pdf_path,
+                                          sheet=_SHEET, model="fake-model")
+    if case == "omitted_then_repaired":
+        assert result["ok"] and result["changed_rows"] == 2 and fake.calls == 2
+        return
+    expected = [112, 113] if case == "unseen_pages" else [113]
+    assert not result["ok"] and result["failed_rows"] == expected
+    reason = "did not view every source page" if case == "unseen_pages" else "no layout was returned"
+    assert all(reason in result["row_errors"][row] for row in expected)
+
+
+@pytest.mark.asyncio
+async def test_a_repair_replaces_the_reports_of_the_notes_it_answers(monkeypatch, formatter_db):
+    """A rejected layout with a report, then a valid repair without one: the
+    withdrawn report must not leave the fixed note flagged."""
+    bad = {"row": 112, "tables": [{"table": 7, "columns": ["label", "amount"]}]}
+    fake = _FakeAgent([_reporting(bad, unresolved=[_unresolved()]), _GOOD_PATCH])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert fake.calls == 2 and result["ok"] and result["changed_rows"] == 1
+
+
+async def _no_pages():
+    return [], set()
+
+
+@pytest.mark.asyncio
 async def test_house_style_note_is_saved_as_formatted_with_a_note(monkeypatch, formatter_db):
     """A capability limit is drawn in the nearest house style: the note is
     formatted, not failed, and carries the formatter's note for a person."""
@@ -874,7 +921,7 @@ async def test_house_style_note_is_saved_as_formatted_with_a_note(monkeypatch, f
     fake = _FakeAgent([_reporting(_note(), unresolved=[note])])
     result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
     assert result["ok"] and result["changed_rows"] == 1 and "failed_rows" not in result
-    assert result["layout_notes"] == {112: "Table 0: Gapped underlines in the source are drawn as one line."}
+    assert result["layout_notes"][112]["text"] == "Table 0: Gapped underlines in the source are drawn as one line."
     assert "nearest house style" in result["summary"]
     db, _, run_id = formatter_db
     with repo.db_session(db) as conn:
