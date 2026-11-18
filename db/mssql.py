@@ -366,12 +366,17 @@ class Connection:
 
         One round trip either way. When the lock times out, a transaction this
         call opened is rolled back, as a failed SQLite BEGIN IMMEDIATE leaves none.
+
+        The batch must carry no parameters. The driver runs a parameterized
+        batch as a procedure call, and SQL Server refuses one that leaves a
+        transaction open (error 266). Both values are written in: a fixed
+        lock name and a whole number of milliseconds.
         """
         ms = max(0, int(self._timeout * 1000))
         _, _, rows = self._run(
             ("BEGIN TRANSACTION; " if begin else "")
-            + "DECLARE @r INT; EXEC @r = sp_getapplock @Resource = ?, @LockMode = 'Exclusive', "
-            "@LockOwner = 'Transaction', @LockTimeout = ?; SELECT @r", (WRITE_LOCK, ms))
+            + f"DECLARE @r INT; EXEC @r = sp_getapplock @Resource = N'{WRITE_LOCK}', @LockMode = 'Exclusive', "
+            f"@LockOwner = 'Transaction', @LockTimeout = {ms}; SELECT @r")
         if begin:
             self._in_tx = True
         result = rows[0][0] if rows else None

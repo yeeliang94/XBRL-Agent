@@ -26,6 +26,8 @@ class FakeIntegrityError(FakeError):
 
 
 class FakeServer:
+    """Records batches and answers the few SQL Server behaviours the wrapper relies on."""
+
     def __init__(self):
         self.log: list[str] = []
         self.depth = 0
@@ -50,6 +52,11 @@ class FakeCursor:
         for key, exc in s.fail.items():
             if key in sql:
                 raise exc
+        if params and "BEGIN TRANSACTION" in sql and "COMMIT" not in sql:
+            # SQL Server runs a parameterized batch as a procedure call and
+            # refuses one that leaves a transaction open.
+            raise FakeError("25000", "Transaction count after EXECUTE indicates a mismatching "
+                                     "number of BEGIN and COMMIT statements. (266)")
         if "BEGIN TRANSACTION" in sql:
             s.depth += 1
         if "COMMIT TRANSACTION" in sql or "ROLLBACK TRANSACTION" in sql:
