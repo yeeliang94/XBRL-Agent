@@ -49,6 +49,35 @@ db.schema.init_db = _init_db_from_template
 db.init_db = _init_db_from_template
 
 
+# On Azure the same SQL runs through the SQL Server translator, and a
+# statement it cannot translate fails there only. Check every application
+# statement this suite runs, and fail the test that first runs a bad one.
+from db import mssql_baseline as _mssql_baseline  # noqa: E402
+from db import mssql_translate as _mssql_translate  # noqa: E402
+from scripts import sql_capture_plugin as _sql_capture  # noqa: E402
+
+_untranslatable: list[str] = []
+
+
+def _check_translatable(sql: str, origin: str) -> None:
+    try:
+        _mssql_translate.translate(sql, _mssql_baseline.TABLES)
+    except _mssql_translate.TranslationError as exc:
+        _untranslatable.append(f"{origin}: {exc}: {' '.join(sql.split())[:200]}")
+
+
+_sql_capture.install(_check_translatable)
+
+
+@pytest.fixture(autouse=True)
+def _application_sql_translates_for_azure():
+    yield
+    if _untranslatable:
+        found = list(_untranslatable)
+        _untranslatable.clear()
+        pytest.fail("Azure SQL cannot run this application SQL:\n" + "\n".join(found))
+
+
 @pytest.fixture
 def make_symlink():
     """Create a symbolic link, or skip where Windows refuses without admin rights."""

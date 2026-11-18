@@ -32,7 +32,9 @@ def _product_modules():
 def test_no_product_module_opens_sqlite_directly():
     offenders = []
     for path in _product_modules():
-        if path == ROOT / "db" / "engine.py":
+        # engine.py opens the audit database; mssql.py opens only an in-memory
+        # SQLite database to build sqlite3.Row objects for Azure SQL rows.
+        if path in (ROOT / "db" / "engine.py", ROOT / "db" / "mssql.py"):
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         sqlite_names = {"sqlite3"}

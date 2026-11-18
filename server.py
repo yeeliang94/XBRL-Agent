@@ -3124,6 +3124,7 @@ async def _lifespan(app: FastAPI):
     # Uvicorn installs its handlers before lifespan begins. Add correlation to
     # those handlers and attach the optional rotating JSONL sink now.
     configure_logging()
+    db_engine.check_production_database()
     init_db(AUDIT_DB_PATH)
     try:
         from agent_tracing import purge_expired_diagnostics

@@ -1,14 +1,17 @@
 """The one place the application opens its database.
 
 Every product module opens the audit database through ``connect`` instead of
-calling ``sqlite3.connect`` itself. Today it always opens the SQLite file. A
-later change adds Azure SQL here, chosen by the ``DATABASE_URL`` secret.
+calling ``sqlite3.connect`` itself.
 
-``connect`` returns a plain ``sqlite3.Connection``: callers still set their own
-SQLite pragmas and row factory, and still use SQLite-only SQL such as
-``BEGIN IMMEDIATE``. Adding Azure SQL must move those into this module or
-change each caller. ``with connect(...) as conn`` still commits without
-closing, exactly as before.
+- ``DATABASE_URL`` unset (laptops, the Windows machine, tests): ``connect``
+  returns a plain ``sqlite3.Connection`` to the file at ``target``, exactly as
+  before. Callers set their own SQLite pragmas and row factory.
+- ``DATABASE_URL`` set (Azure): ``connect`` returns a ``db.mssql.Connection``
+  to Azure SQL. It accepts the same calls and SQLite SQL, and ignores
+  ``target`` except to answer ``PRAGMA database_list``. ``DATABASE_URL`` holds
+  the ODBC connection string as the Azure portal shows it.
+
+``with connect(...) as conn`` commits without closing on both.
 """
 from __future__ import annotations
 
@@ -18,12 +21,42 @@ import sqlite3
 from utils.paths import safe_db_target
 
 
-def connect(target: str | os.PathLike, *, timeout: float = 5.0) -> sqlite3.Connection:
-    """Open the database at ``target`` after checking the path is allowed.
+def database_url() -> str | None:
+    url = os.environ.get("DATABASE_URL", "").strip()
+    return url or None
+
+
+def dialect() -> str:
+    """``"mssql"`` when the app stores data in Azure SQL, else ``"sqlite"``."""
+    return "mssql" if database_url() else "sqlite"
+
+
+def connect(target: str | os.PathLike, *, timeout: float = 5.0):
+    """Open the database. ``target`` is the SQLite file; it must be in an approved folder.
 
     ``timeout`` is how many seconds to wait for another writer's lock, the same
     meaning and default as ``sqlite3.connect``.
     """
+    path = safe_db_target(target)
+    url = database_url()
+    if url:
+        from db import mssql
+
+        return mssql.connect(url, target=path, timeout=timeout)
     # Looked up on the module at call time so tests that patch
     # ``sqlite3.connect`` still intercept every connection.
-    return sqlite3.connect(safe_db_target(target), timeout=timeout)
+    return sqlite3.connect(path, timeout=timeout)
+
+
+def check_production_database() -> None:
+    """Refuse to keep data in a SQLite file on Azure App Service.
+
+    Two App Service containers can share the ``/home`` network drive during a
+    deploy, and SQLite's file locking does not work across them.
+    """
+    from auth import config as auth_config
+
+    if auth_config.is_production() and not database_url():
+        raise RuntimeError(
+            "Azure detected but DATABASE_URL is not set. Refusing to store data in "
+            "SQLite on Azure. Set DATABASE_URL to the Azure SQL ODBC connection string.")

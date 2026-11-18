@@ -1415,8 +1415,8 @@ def upsert_notes_cell(
             "UPDATE notes_cells SET label = ?, html = ?, evidence = ?, "
             "source_pages = ?, updated_at = ?, concept_uuid = ?, "
             "style_source = ?, content_revision = COALESCE(content_revision, 0) + 1, "
-            "invalid_target = CASE WHEN ? THEN 0 ELSE invalid_target END, "
-            "invalid_target_reason = CASE WHEN ? THEN NULL ELSE invalid_target_reason END "
+            "invalid_target = CASE WHEN ? <> 0 THEN 0 ELSE invalid_target END, "
+            "invalid_target_reason = CASE WHEN ? <> 0 THEN NULL ELSE invalid_target_reason END "
             "WHERE id = ?",
             (
                 label, html, evidence, pages_json, now, cuid, style,
@@ -2518,7 +2518,7 @@ def fetch_notes_coverage(
             "reviewer_added, reviewer_verdict, title, page_lo, page_hi "
             "FROM notes_coverage_rows WHERE run_id = ? "
             # NULL subnote_ref (the top-level row) sorts before its children.
-            "ORDER BY note_num, (subnote_ref IS NOT NULL), subnote_ref",
+            "ORDER BY note_num, CASE WHEN subnote_ref IS NULL THEN 0 ELSE 1 END, subnote_ref",
             (run_id,),
         ).fetchall()
     finally:
@@ -3095,11 +3095,14 @@ def _parse_iso_duration(start: str, end: str) -> Optional[float]:
 
 
 def _escape_like(value: str) -> str:
-    """Escape SQL LIKE metachars so users searching for literal `_` or `%`
+    """Escape SQL LIKE metachars so users searching for literal `_`, `%` or `[`
     in a filename get exact matches instead of wildcard behaviour
     (peer-review I9). Pair the returned pattern with `ESCAPE '\\'` in SQL.
     """
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    # `[` is a character set in SQL Server's LIKE (Azure SQL); escaping it is
+    # harmless in SQLite.
+    return (value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            .replace("[", "\\["))
 
 
 def list_runs(

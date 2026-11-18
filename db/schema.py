@@ -2295,6 +2295,15 @@ def init_db(path: str | Path) -> None:
     # ``output/xbrl_agent.db`` without pre-creating the folder themselves.
     safe_path(p.parent).mkdir(parents=True, exist_ok=True)
 
+    url = db_engine.database_url()
+    if url:
+        # Azure SQL has no history to replay: an empty database gets the
+        # generated baseline, an older one gets db/mssql.py's steps.
+        from db import mssql
+
+        mssql.init_schema(url, CURRENT_SCHEMA_VERSION)
+        return
+
     conn = db_engine.connect(str(p))
     try:
         # Foreign keys are off by default in SQLite — turn them on per-conn.

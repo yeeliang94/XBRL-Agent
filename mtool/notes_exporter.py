@@ -139,12 +139,12 @@ def build_notes_fill_doc(
                       AND ts.template_id LIKE ?
                       AND ts.sheet = c.sheet AND ts.row = c.row
                     LIMIT 1) AS primary_concept,
-                   EXISTS(
+                   CASE WHEN EXISTS(
                      SELECT 1 FROM notes_nodes nn
                      WHERE nn.template_id LIKE ?
                        AND nn.sheet = c.sheet AND nn.row = c.row
-                   ) AS has_registered_slot,
-                   EXISTS(
+                   ) THEN 1 ELSE 0 END AS has_registered_slot,
+                   CASE WHEN EXISTS(
                      SELECT 1 FROM notes_nodes nn
                      JOIN template_slots ts
                        ON ts.canonical_target_id = nn.node_uuid
@@ -153,7 +153,7 @@ def build_notes_fill_doc(
                        AND nn.sheet = c.sheet AND nn.row = c.row
                        AND ts.validation_status = 'writable'
                        AND ts.slot_role = 'INPUT'
-                   ) AS has_writable_slot
+                   ) THEN 1 ELSE 0 END AS has_writable_slot
             FROM notes_cells c
             WHERE c.run_id = ?
             ORDER BY sheet, row

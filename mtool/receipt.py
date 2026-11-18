@@ -82,11 +82,11 @@ def snapshot_facts(
                    sa.taxonomy_version, sa.address_version,
                    tc.namespace_uri, tc.local_name, tc.concept_role,
                    tc.data_type, tc.period_type,
-                   EXISTS(
+                   CASE WHEN EXISTS(
                      SELECT 1 FROM template_slots ts
                      WHERE ts.canonical_target_id = f.concept_uuid
-                   ) AS has_template_manifest,
-                   EXISTS(
+                   ) THEN 1 ELSE 0 END AS has_template_manifest,
+                   CASE WHEN EXISTS(
                      SELECT 1 FROM template_slots ts
                      JOIN taxonomy_concepts tc
                        ON tc.source_element_id = ts.taxonomy_element_id
@@ -95,12 +95,12 @@ def snapshot_facts(
                        AND ts.validation_status = 'writable'
                        AND tc.abstract = 0
                        AND tc.concept_role = 'PRIMARY_ITEM'
-                   ) AS has_writable_slot,
-                   EXISTS(
+                   ) THEN 1 ELSE 0 END AS has_writable_slot,
+                   CASE WHEN EXISTS(
                      SELECT 1 FROM concept_edges e
                      WHERE e.parent_uuid = n.concept_uuid
-                   ) AS has_formula_edges,
-                   EXISTS(
+                   ) THEN 1 ELSE 0 END AS has_formula_edges,
+                   CASE WHEN EXISTS(
                      SELECT 1 FROM concept_edges e
                      JOIN concept_nodes child ON child.concept_uuid = e.child_uuid
                      WHERE e.parent_uuid = n.concept_uuid
@@ -110,7 +110,7 @@ def snapshot_facts(
                      JOIN concept_nodes child ON child.concept_uuid = e.child_uuid
                      WHERE e.parent_uuid = n.concept_uuid
                        AND (child.render_row != n.render_row OR child.render_sheet != n.render_sheet)
-                   ) AS horizontal_input_total
+                   ) THEN 1 ELSE 0 END AS horizontal_input_total
             FROM run_concept_facts f
             JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid
             JOIN concept_templates tpl ON tpl.template_id = n.template_id
