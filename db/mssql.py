@@ -44,6 +44,11 @@ LOCK_ERRORS = ("1205", "1222")
 _POOL_MAX_IDLE = 8
 _POOL_MAX_AGE_S = 300.0
 _POOL_PING_AFTER_S = 30.0
+# Callers ask SQLite for 5-second lock waits, sized for writes that take
+# microseconds on a local file. On Azure SQL every statement is a network round
+# trip, so a write transaction holds the lock far longer; wait at least this
+# long, the same as the row-lock wait below.
+MIN_LOCK_WAIT_S = 30.0
 _CONNECT_ATTEMPTS = 4
 
 
@@ -139,7 +144,7 @@ def _open(url: str):
             delay *= 2
     # SQLite gives up on a lock after its timeout instead of waiting forever.
     cur = raw.cursor()
-    cur.execute("SET LOCK_TIMEOUT 30000")
+    cur.execute(f"SET LOCK_TIMEOUT {int(MIN_LOCK_WAIT_S * 1000)}")
     cur.close()
     return raw
 
@@ -372,7 +377,7 @@ class Connection:
         transaction open (error 266). Both values are written in: a fixed
         lock name and a whole number of milliseconds.
         """
-        ms = max(0, int(self._timeout * 1000))
+        ms = int(max(self._timeout, MIN_LOCK_WAIT_S) * 1000)
         _, _, rows = self._run(
             ("BEGIN TRANSACTION; " if begin else "")
             + f"DECLARE @r INT; EXEC @r = sp_getapplock @Resource = N'{WRITE_LOCK}', @LockMode = 'Exclusive', "
