@@ -33,11 +33,13 @@ class FakeServer:
         self.rows: dict[str, tuple[list[str], list[tuple]]] = {}
         self.fail: dict[str, Exception] = {}
         self.opened = 0
+        self.session_locks: dict[str, object] = {}
 
 
 class FakeCursor:
-    def __init__(self, server):
+    def __init__(self, server, raw=None):
         self.server = server
+        self.raw = raw
         self.description = None
         self._sets: list = []
         self.rowcount = -1
@@ -53,7 +55,17 @@ class FakeCursor:
         if "COMMIT TRANSACTION" in sql or "ROLLBACK TRANSACTION" in sql:
             s.depth = 0
         self._sets = []
-        if "sp_getapplock" in sql:
+        if "sp_getapplock" in sql and "'Session'" in sql:
+            owner = s.session_locks.get(params[0])
+            granted = owner is None or owner is self.raw
+            if granted:
+                s.session_locks[params[0]] = self.raw
+            self._sets = [None, (["r"], [(0 if granted else -1,)])]
+        elif "sp_releaseapplock" in sql:
+            s.session_locks.pop(params[0], None)
+        elif "APPLOCK_TEST" in sql:
+            self._sets = [(["free"], [(0 if params[0] in s.session_locks else 1,)])]
+        elif "sp_getapplock" in sql:
             self._sets = [None, (["r"], [(s.lock_result,)])]
         elif sql == "SELECT @@TRANCOUNT":
             self._sets = [(["n"], [(s.depth,)])]
@@ -101,10 +113,13 @@ class FakeRaw:
         self.closed = False
 
     def cursor(self):
-        return FakeCursor(self.server)
+        return FakeCursor(self.server, self)
 
     def close(self):
         self.closed = True
+        for name, owner in list(self.server.session_locks.items()):
+            if owner is self:
+                del self.server.session_locks[name]
 
 
 @pytest.fixture
@@ -211,3 +226,18 @@ def test_sqlite_setup_pragmas_send_nothing_to_the_server(server, tmp_path):
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 5000")
     assert len(server.log) == before
+
+
+def test_a_running_run_is_owned_through_the_shared_database(server, tmp_path):
+    from db import run_ownership
+
+    owner = _connect(tmp_path)
+    run_ownership.claim(owner, 7)
+    run_ownership._held.pop(("mssql", 7))  # look from another process, which shares only the database
+    other = _connect(tmp_path)
+    assert run_ownership.is_live(other, 7)
+    assert not run_ownership.is_live(other, 8)
+    with pytest.raises(BlockingIOError):
+        run_ownership.claim(other, 7)
+    next(raw for raw in list(server.session_locks.values())).close()  # owner process ends
+    assert not run_ownership.is_live(other, 7)

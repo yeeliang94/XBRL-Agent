@@ -517,6 +517,47 @@ def connect(url: str, *, target: str, timeout: float = 5.0) -> Connection:
 
 
 # ---------------------------------------------------------------------------
+# Run ownership (see db/run_ownership.py)
+# ---------------------------------------------------------------------------
+
+def _run_lock_name(run_id: int) -> str:
+    return f"xbrl-run-{int(run_id)}"
+
+
+def hold_run_lock(conn: Connection, run_id: int):
+    """Hold the run's lock on a connection of its own; return that connection.
+
+    Raises BlockingIOError when another process holds it, as the file lock does.
+    """
+    raw = _open(conn._url)
+    try:
+        rows = _exec(raw, "DECLARE @r INT; EXEC @r = sp_getapplock @Resource = ?, @LockMode = 'Exclusive', "
+                          "@LockOwner = 'Session', @LockTimeout = 0; SELECT @r", _run_lock_name(run_id))
+    except Exception:
+        _close_quietly(raw)
+        raise
+    if not rows or rows[0][0] < 0:
+        _close_quietly(raw)
+        raise BlockingIOError(f"run {run_id} is owned by another process")
+    return raw
+
+
+def release_run_lock(raw, run_id: int) -> None:
+    try:
+        _exec(raw, "EXEC sp_releaseapplock @Resource = ?, @LockOwner = 'Session'", _run_lock_name(run_id))
+    except Exception:
+        pass  # closing the connection releases it anyway
+    _close_quietly(raw)
+
+
+def run_lock_held(conn: Connection, run_id: int) -> bool:
+    """True when some process holds the run's lock."""
+    rows = _exec(conn._raw_conn(), "SELECT APPLOCK_TEST('public', ?, 'Exclusive', 'Session')",
+                 _run_lock_name(run_id))
+    return bool(rows) and rows[0][0] == 0
+
+
+# ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
 

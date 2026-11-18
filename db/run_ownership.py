@@ -2,6 +2,10 @@
 
 The OS releases the lock on a crash. Empty lock files remain so a competing
 process always probes the same inode; no PID/age guess or database migration.
+
+On Azure SQL the lock is a named lock in the database, held on a connection
+kept open for the run. App instances share the database, not their disks, and
+the database drops the lock when the owning process dies.
 """
 from __future__ import annotations
 
@@ -14,6 +18,8 @@ _held: dict[tuple[str, int], object] = {}
 
 
 def _key(conn, run_id):
+    if getattr(conn, "dialect", None) == "mssql":
+        return ("mssql", int(run_id))
     path = next((row[2] for row in conn.execute("PRAGMA database_list") if row[1] == "main"), "")
     return (str(Path(path).resolve()), int(run_id)) if path else None
 
@@ -56,6 +62,11 @@ def claim(conn, run_id):
     with _guard:
         if key in _held:
             return
+        if key[0] == "mssql":
+            from db import mssql
+
+            _held[key] = mssql.hold_run_lock(conn, key[1])
+            return
         handle = _open(key)
         try:
             _lock(handle)
@@ -69,7 +80,11 @@ def release(conn, run_id):
     key = _key(conn, run_id)
     with _guard:
         handle = _held.pop(key, None)
-        if handle:
+        if handle and key[0] == "mssql":
+            from db import mssql
+
+            mssql.release_run_lock(handle, key[1])
+        elif handle:
             try:
                 _unlock(handle)
             finally:
@@ -83,6 +98,10 @@ def is_live(conn, run_id):
     with _guard:
         if key in _held:
             return True
+        if key[0] == "mssql":
+            from db import mssql
+
+            return mssql.run_lock_held(conn, key[1])
         with _open(key) as handle:
             try:
                 _lock(handle)
