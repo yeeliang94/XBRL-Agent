@@ -2030,21 +2030,6 @@
   "origin": "correction/reviewer_agent.py"
  },
  {
-  "sql": "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-  "params": 0,
-  "origin": "scripts/export_mssql_schema.py"
- },
- {
-  "sql": "SELECT name, sql FROM sqlite_master WHERE type='table'",
-  "params": 0,
-  "origin": "scripts/export_mssql_schema.py"
- },
- {
-  "sql": "SELECT name, sql FROM sqlite_master WHERE type='trigger' ORDER BY name",
-  "params": 0,
-  "origin": "scripts/export_mssql_schema.py"
- },
- {
   "sql": "SELECT node_kind, COUNT(*) FROM run_agent_turns WHERE run_agent_id = ? GROUP BY node_kind",
   "params": 1,
   "origin": "scripts/report_run_economics.py"
@@ -2448,11 +2433,6 @@
   "sql": "SELECT source_render_version FROM notes_cells WHERE run_id = ? AND sheet = ? AND row = ?",
   "params": 3,
   "origin": "api/notes.py"
- },
- {
-  "sql": "SELECT sql FROM sqlite_master WHERE name=?",
-  "params": 1,
-  "origin": "scripts/export_mssql_schema.py"
  },
  {
   "sql": "SELECT started_at FROM run_review_tasks WHERE run_id = ?",

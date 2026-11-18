@@ -136,8 +136,10 @@ def build() -> str:
                 where = re.search(r"\bWHERE\b(.*)$", sql, re.S | re.I).group(1).strip()
             indexes[t].append({"name": name, "unique": bool(unique), "origin": origin,
                                "terms": terms, "where": where})
-            for term, _desc in terms:
-                for word in re.findall(r"[A-Za-z_]\w*", term):
+            # Columns in an index filter count too: SQL Server refuses
+            # NVARCHAR(MAX) in a filtered index's WHERE clause.
+            for text in [term for term, _desc in terms] + [where or ""]:
+                for word in re.findall(r"[A-Za-z_]\w*", re.sub(r"'(?:[^']|'')*'", "", text)):
                     keyed[t].add(word)
         for fk in fks[t]:
             parent, frm, to = fk[2], fk[3], fk[4]
