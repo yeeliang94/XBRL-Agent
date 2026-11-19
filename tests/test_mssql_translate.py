@@ -27,6 +27,13 @@ def _t(sql):
         "SELECT ( SELECT TOP ( 1) ts.label FROM template_slots ts WHERE ts.row = ?) AS label FROM runs WHERE id = ?",
         (0, 1), id="limit-without-order-becomes-top"),
     pytest.param(
+        "SELECT CASE WHEN n.matrix_col_label IS NOT NULL THEN n.canonical_label || ', ' || n.matrix_col_label "
+        "ELSE n.canonical_label END FROM concept_nodes n WHERE n.concept_uuid = ? || upper(?)",
+        "SELECT CASE WHEN n.matrix_col_label IS NOT NULL THEN CAST( n.canonical_label AS NVARCHAR(MAX)) + "
+        "CAST( N', ' AS NVARCHAR(MAX)) + CAST( n.matrix_col_label AS NVARCHAR(MAX)) ELSE n.canonical_label END "
+        "FROM concept_nodes n WHERE n.concept_uuid = CAST( ? AS NVARCHAR(MAX)) + CAST( upper( ?) AS NVARCHAR(MAX))",
+        (0, 1), id="concatenation-casts-each-term"),
+    pytest.param(
         "SELECT * FROM notes_cleanup_receipts WHERE generation_id IS ? AND sheet IS NOT ?",
         "SELECT * FROM notes_cleanup_receipts WHERE generation_id IS NOT DISTINCT FROM ? "
         "AND sheet IS DISTINCT FROM ?",
@@ -98,6 +105,8 @@ def test_plain_insert_into_an_identity_table_returns_the_new_id():
     pytest.param("SAVEPOINT a", id="savepoint"),
     pytest.param("UPDATE notes_cells AS c SET html = ? WHERE c.id = ?", id="update-alias"),
     pytest.param("UPDATE notes_cells SET html = CASE WHEN ? THEN html END", id="bare-value-condition"),
+    pytest.param("SELECT CASE WHEN a THEN b END || 'x' FROM runs", id="concat-after-end"),
+    pytest.param("SELECT x * a || b FROM runs", id="concat-inside-arithmetic"),
 ])
 def test_unsupported_sql_fails_loudly(sql):
     with pytest.raises(TranslationError):

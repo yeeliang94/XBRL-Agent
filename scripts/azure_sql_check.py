@@ -38,6 +38,9 @@ COMPILE_ERRORS = {102, 105, 156, 170, 174, 189, 195, 207, 208, 209, 1033, 1038, 
                   8116, 8117, 8118, 8120, 8127, 8155, 8156, 10734, 13609}
 # Error numbers caused by running a statement with empty placeholder values.
 VALUE_ERRORS = {515, 547, 2601, 2627, 245, 8114, 8115, 241, 1060, 10744, 13607, 13608}
+# Errors an empty value causes where SQL Server needs a number (LIMIT ?, the
+# length in substr). Such a statement is run again with the value 1.
+NUMBER_NEEDED = {1014, 8116}
 
 
 def _error_number(message: str) -> int | None:
@@ -62,6 +65,20 @@ def build_statements(capture_dir: Path) -> None:
         out.append({"sql": sql, "params": (max(t.order) + 1) if t.order else 0, "origin": origin})
     STATEMENTS.write_text(json.dumps(out, indent=1) + "\n", encoding="utf-8")
     print(f"Wrote {len(out)} statements to {STATEMENTS.relative_to(ROOT)}")
+
+
+def _run_rolled_back(conn, sql: str, values: list) -> str | None:
+    """Run one statement inside a rolled-back transaction; return its error, if any."""
+    conn.execute("BEGIN")
+    try:
+        conn.execute(sql, values).fetchall()
+        return None
+    except sqlite3.IntegrityError:
+        return None
+    except Exception as exc:  # noqa: BLE001 — the caller classifies every failure
+        return str(exc)
+    finally:
+        conn.rollback()
 
 
 def _step(title: str) -> None:
@@ -117,21 +134,16 @@ def run_check() -> int:
     compile_failures, other = [], []
     conn = engine.connect(AUDIT_DB_PATH)
     for item in items:
-        conn.execute("BEGIN")
-        try:
-            conn.execute(item["sql"], [None] * item["params"]).fetchall()
-        except sqlite3.IntegrityError:
+        error = _run_rolled_back(conn, item["sql"], [None] * item["params"])
+        if error and _error_number(error) in NUMBER_NEEDED:
+            error = _run_rolled_back(conn, item["sql"], [1] * item["params"])
+        number = _error_number(error) if error else None
+        if error is None or number in VALUE_ERRORS:
             pass
-        except Exception as exc:  # noqa: BLE001 — classify every failure
-            number = _error_number(str(exc))
-            if number in VALUE_ERRORS:
-                pass
-            elif number in COMPILE_ERRORS or number is None:
-                compile_failures.append((item, str(exc)))
-            else:
-                other.append((item, str(exc)))
-        finally:
-            conn.rollback()
+        elif number in COMPILE_ERRORS or number is None:
+            compile_failures.append((item, error))
+        else:
+            other.append((item, error))
     conn.close()
     print(f"{len(items)} statements: {len(compile_failures)} cannot compile, {len(other)} other errors")
     for item, message in compile_failures + other:

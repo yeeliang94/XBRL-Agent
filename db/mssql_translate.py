@@ -273,6 +273,89 @@ def _rewrite_expressions(items: list) -> list:
     return out
 
 
+def _operand_end(items: list, start: int) -> int:
+    """End (exclusive) of the operand that starts at ``items[start]``."""
+    end = start + 1
+    if isinstance(items[start], Tok) and items[start].kind in ("word", "qid"):
+        while end + 1 < len(items) and _is_op(items[end], ".") and isinstance(items[end + 1], Tok):
+            end += 2
+        if end == start + 1 and end < len(items) and isinstance(items[end], Group) \
+                and items[start].text.upper() not in _KEYWORDS_BEFORE_PAREN:
+            end += 1
+    return end
+
+
+def _operand_start(items: list) -> int:
+    """Start of the operand that ends ``items``."""
+    k = len(items) - 1
+    if (isinstance(items[k], Group) and k > 0 and isinstance(items[k - 1], Tok) and items[k - 1].kind == "word"
+            and items[k - 1].text.upper() not in _KEYWORDS_BEFORE_PAREN):
+        return k - 1
+    while k >= 2 and _is_op(items[k - 1], ".") and isinstance(items[k - 2], Tok) and items[k - 2].kind in ("word", "qid"):
+        k -= 2
+    return k
+
+
+def _as_text(operand: list) -> list:
+    if (len(operand) == 2 and _is_word(operand[0], "CAST") and isinstance(operand[1], Group)
+            and _is_word(operand[1].items[-1], "NVARCHAR(MAX)")):
+        return operand  # the middle term of a || b || c is already text
+    return [_w("CAST"), Group(operand + [_w("AS"), _w("NVARCHAR(MAX)")])]
+
+
+def _rewrite_concat(items: list) -> list:
+    """``a || b`` becomes ``CAST(a AS NVARCHAR(MAX)) + CAST(b AS NVARCHAR(MAX))``.
+
+    Like SQLite, the result is NULL when either side is NULL (SQL Server's
+    default CONCAT_NULL_YIELDS_NULL); the casts stop ``+`` adding numbers.
+    ``||`` binds tighter than any other operator in SQLite, so its operands
+    are the single terms next to it.
+    """
+    out: list = []
+    i = 0
+    while i < len(items):
+        node = items[i]
+        if isinstance(node, Group):
+            out.append(Group(_rewrite_concat(node.items)))
+            i += 1
+            continue
+        if not _is_op(node, "||"):
+            out.append(node)
+            i += 1
+            continue
+        if not out or i + 1 >= len(items):
+            raise TranslationError("'||' needs a value on both sides")
+        start = _operand_start(out)
+        left = out[start:]
+        del out[start:]
+        end = _operand_end(items, i + 1)
+        right = _rewrite_concat(items[i + 1:end])
+        before = out[-1] if out else None
+        after = items[end] if end < len(items) else None
+        if not (_plain_term(left) and _plain_term(right)) or _arithmetic(before) or _arithmetic(after):
+            raise TranslationError("'||' is supported only between plain terms, outside arithmetic")
+        # A "concat" token renders as + and marks a chain a || b || c as ours.
+        out.extend(_as_text(left) + [Tok("concat", "+")] + _as_text(right))
+        i = end
+    return out
+
+
+def _plain_term(operand: list) -> bool:
+    first = operand[0]
+    if isinstance(first, Group):
+        return True
+    if any(isinstance(n, Tok) and n.kind == "qid" for n in operand):
+        return False
+    if first.kind == "word":
+        return first.text.upper() not in _KEYWORDS_BEFORE_PAREN and first.text.upper() not in ("NULL", "CAST") \
+            or _is_word(first, "CAST") and len(operand) == 2
+    return first.kind in ("str", "num", "param")
+
+
+def _arithmetic(node) -> bool:
+    return isinstance(node, Tok) and node.kind == "op" and node.text in ("*", "/", "%", "+", "-", "~", "&", "|", "<<", ">>")
+
+
 def _rewrite_function(name: str, args: list[list]) -> list | None:
     if name == "DATETIME":
         if len(args) != 1:
@@ -537,6 +620,7 @@ def _translate_cached(sql: str, key: _TablesKey) -> Translation:
     _refuse_non_portable(tokens)
     items = _nest(tokens)
     items = _rewrite_expressions(items)
+    items = _rewrite_concat(items)
     items = _rewrite_limits(items)
     returns_identity = False
     if first in ("INSERT", "REPLACE"):
