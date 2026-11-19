@@ -37,6 +37,25 @@ def _now() -> str:
     )
 
 
+def _parents_first(seen: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """The concepts in their parse order, except that each comes after its parent.
+
+    SQLite can defer the parent check to COMMIT; Azure SQL checks each row as
+    it is written, so a child must not be written before its parent.
+    """
+    ordered: list[dict[str, Any]] = []
+    placed: set[str] = set()
+    for c in seen.values():
+        chain = []
+        node = c
+        while node is not None and node["concept_uuid"] not in placed:
+            chain.append(node)
+            placed.add(node["concept_uuid"])
+            node = seen.get(node.get("parent_uuid") or "")
+        ordered.extend(reversed(chain))
+    return ordered
+
+
 def import_template(db_path: str | Path, json_path: str | Path) -> str:
     """Import a concept-tree JSON into the v4 DB tables.
 
@@ -133,7 +152,7 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
             (retired_at, template_id),
         )
 
-        for c in seen.values():
+        for c in _parents_first(seen):
             uid = c["concept_uuid"]
             rk = c.get("render_key") or {}
             conn.execute(

@@ -21,9 +21,10 @@ How SQLite features map:
   the application supplies.
 - A unique index on a column that may be empty (NULL) ignores empty rows, as
   SQLite does.
-- ON DELETE CASCADE / SET NULL links become delete triggers, because SQL Server
-  refuses tables reachable by more than one cascade path. Links without an
-  action stay real foreign keys.
+- Every link is a real foreign key, so a row whose parent is missing is
+  refused. ON DELETE CASCADE / SET NULL is done by an INSTEAD OF DELETE
+  trigger on the parent, because SQL Server refuses tables reachable by more
+  than one cascade path.
 - The run-activity triggers are rebuilt in SQL Server's form.
 """
 from __future__ import annotations
@@ -222,7 +223,27 @@ def build() -> str:
                 unique_keys.append(tuple(plain))
         meta[t] = (tuple(c[1] for c in columns[t]), identity, tuple(unique_keys))
 
-    # Foreign keys: links without an action stay constraints; cascades become triggers.
+    statements.extend(link_statements(tables, fks, pk))
+
+    statements.extend(_activity_triggers(db, columns))
+    statements.append(
+        "CREATE VIEW [sqlite_master] AS SELECT CAST(N'table' AS NVARCHAR(10)) COLLATE "
+        f"{TEXT_COLLATION} AS [type], CAST(name AS {KEY_TEXT}) COLLATE {TEXT_COLLATION} AS [name], "
+        f"CAST(name AS {KEY_TEXT}) COLLATE {TEXT_COLLATION} AS [tbl_name] FROM sys.tables")
+
+    return _module(CURRENT_SCHEMA_VERSION, meta, statements)
+
+
+def link_statements(tables: list[str], fks: dict, pk: dict) -> list[str]:
+    """Every link becomes a foreign key; a parent with dependants gets a delete trigger.
+
+    SQL Server refuses ON DELETE CASCADE where a table is reachable by more
+    than one cascade path, so the keys carry no action and an INSTEAD OF
+    DELETE trigger removes (or empties the link of) the dependants before the
+    parent row. The keys still refuse a row whose parent does not exist, as
+    SQLite does. A dependant's own delete runs its trigger in turn.
+    """
+    statements: list[str] = []
     on_delete: dict[str, list[str]] = defaultdict(list)
     for t in tables:
         groups: dict[int, list[tuple]] = defaultdict(list)
@@ -232,13 +253,11 @@ def build() -> str:
             parent = parts[0][2]
             frm = [p[3] for p in parts]
             to = [p[4] or pk[parent][i] for i, p in enumerate(parts)]
+            statements.append(
+                f"ALTER TABLE [{t}] WITH CHECK ADD CONSTRAINT [fk_{t}_{fk_id}] "
+                "FOREIGN KEY (" + ", ".join(f"[{c}]" for c in frm) + f") REFERENCES [{parent}] ("
+                + ", ".join(f"[{c}]" for c in to) + ")")
             action = parts[0][6].upper()
-            if action == "NO ACTION":
-                statements.append(
-                    f"ALTER TABLE [{t}] ADD CONSTRAINT [fk_{t}_{fk_id}] FOREIGN KEY ("
-                    + ", ".join(f"[{c}]" for c in frm) + f") REFERENCES [{parent}] ("
-                    + ", ".join(f"[{c}]" for c in to) + ")")
-                continue
             match = " AND ".join(f"d.[{b}] = c.[{a}]" for a, b in zip(frm, to))
             if action == "CASCADE":
                 on_delete[parent].append(
@@ -247,20 +266,15 @@ def build() -> str:
                 sets = ", ".join(f"[{a}] = NULL" for a in frm)
                 on_delete[parent].append(
                     f"UPDATE c SET {sets} FROM [{t}] c WHERE EXISTS (SELECT 1 FROM deleted d WHERE {match});")
-            else:
+            elif action != "NO ACTION":
                 raise SystemExit(f"Unsupported ON DELETE {action} on {t}")
     for parent in sorted(on_delete):
+        own = " AND ".join(f"d.[{c}] = p.[{c}]" for c in pk[parent])
         statements.append(
-            f"CREATE TRIGGER [{parent}_on_delete] ON [{parent}] AFTER DELETE AS\nBEGIN\n    SET NOCOUNT ON;\n    "
-            + "\n    ".join(on_delete[parent]) + "\nEND")
-
-    statements.extend(_activity_triggers(db, columns))
-    statements.append(
-        "CREATE VIEW [sqlite_master] AS SELECT CAST(N'table' AS NVARCHAR(10)) COLLATE "
-        f"{TEXT_COLLATION} AS [type], CAST(name AS {KEY_TEXT}) COLLATE {TEXT_COLLATION} AS [name], "
-        f"CAST(name AS {KEY_TEXT}) COLLATE {TEXT_COLLATION} AS [tbl_name] FROM sys.tables")
-
-    return _module(CURRENT_SCHEMA_VERSION, meta, statements)
+            f"CREATE TRIGGER [{parent}_on_delete] ON [{parent}] INSTEAD OF DELETE AS\nBEGIN\n    SET NOCOUNT ON;\n    "
+            + "\n    ".join(on_delete[parent])
+            + f"\n    DELETE p FROM [{parent}] p WHERE EXISTS (SELECT 1 FROM deleted d WHERE {own});\nEND")
+    return statements
 
 
 _TRIGGER_RE = re.compile(

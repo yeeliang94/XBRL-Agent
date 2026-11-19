@@ -93,3 +93,30 @@ def test_import_is_idempotent(db_path: Path, parsed_json: Path) -> None:
 
     assert nodes_first == nodes_second
     assert edges_first == edges_second
+
+
+class _ImmediateLinkChecks(sqlite3.Connection):
+    """A SQLite connection that checks each link as it is written, like Azure SQL."""
+
+    def execute(self, sql, *args):
+        if "defer_foreign_keys" in sql:
+            return self.cursor()
+        return super().execute(sql, *args)
+
+
+def test_import_writes_each_parent_before_its_children(
+    db_path: Path, parsed_json: Path, monkeypatch
+) -> None:
+    """Azure SQL cannot defer the parent check to COMMIT, so parse order must not matter."""
+    payload = json.loads(parsed_json.read_text(encoding="utf-8"))
+    payload["concepts"].reverse()  # children now come before their parents
+    assert any(c["parent_uuid"] for c in payload["concepts"])
+    parsed_json.write_text(json.dumps(payload), encoding="utf-8")
+
+    from db import engine
+
+    monkeypatch.setattr(engine, "connect",
+                        lambda target, timeout=5.0: sqlite3.connect(str(target), factory=_ImmediateLinkChecks))
+    import_template(db_path, parsed_json)
+
+    assert _count(db_path, "concept_nodes") == len({c["concept_uuid"] for c in payload["concepts"]})

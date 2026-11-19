@@ -32,6 +32,7 @@ import time
 from typing import Any, Iterable, Sequence
 
 from db import mssql_translate as tr
+from db import mssql_v57
 
 log = logging.getLogger(__name__)
 
@@ -575,7 +576,7 @@ def run_lock_held(conn: Connection, run_id: int) -> bool:
 # needs a matching step here, keyed by the version it produces; the baseline in
 # db/mssql_baseline.py covers new, empty databases.
 FIRST_AZURE_VERSION = 56
-MIGRATIONS: dict[int, tuple[str, ...]] = {}
+MIGRATIONS: dict[int, tuple[str, ...]] = {57: mssql_v57.STATEMENTS}
 
 
 def _exec(raw, sql: str, *params) -> list:

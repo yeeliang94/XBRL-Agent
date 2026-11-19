@@ -679,8 +679,10 @@ SQLite SQL (`db/mssql_translate.py`). A new Azure database gets
 `scripts/export_mssql_schema.py`; never edit it by hand. Every schema change
 therefore also (1) regenerates the baseline and (2) adds a SQL Server step to
 `db/mssql.py::MIGRATIONS` keyed by the new version, for databases already on
-Azure. `tests/test_mssql_schema.py` fails until both are done. Cascading
-deletes are delete triggers there, and every write transaction takes one
+Azure. `tests/test_mssql_schema.py` fails until both are done. Every link
+is a foreign key there; cascading deletes are INSTEAD OF DELETE triggers on
+the parent (v57). SQL Server checks each link as the row is written, with no
+`defer_foreign_keys`, so write a parent before its children. Every write transaction takes one
 database-wide lock so read-then-write code keeps SQLite's one-writer rule.
 After query changes, refresh `scripts/azure_sql_statements.json` (see
 `scripts/sql_capture_plugin.py`) and run `scripts/azure_sql_check.py` on Azure.
