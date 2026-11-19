@@ -45,9 +45,21 @@ class FakeCursor:
         self.description = None
         self._sets: list = []
         self.rowcount = -1
+        self._sizes: list = []
+
+    def setinputsizes(self, sizes):
+        self._sizes = list(sizes)
 
     def execute(self, sql, *params):
         s = self.server
+        sizes, self._sizes = self._sizes, []
+        for i, v in enumerate(params):
+            if (isinstance(v, str) and len(v.encode("utf-16-le")) > 4000
+                    and (i >= len(sizes) or sizes[i] is None)):
+                # Unsized text over 4,000 UTF-16 bytes goes as ntext, which
+                # SQL Server will not compare with an NVARCHAR(MAX) column.
+                raise FakeError("42000", "The data types nvarchar(max) and ntext are incompatible "
+                                         "in the equal to operator. (402)")
         s.log.append(sql)
         for key, exc in s.fail.items():
             if key in sql:
@@ -139,7 +151,8 @@ def server(monkeypatch):
         return FakeRaw(srv)
 
     fake = SimpleNamespace(connect=connect, Error=FakeError, IntegrityError=FakeIntegrityError,
-                           DataError=type("DataError", (FakeError,), {}), pooling=True)
+                           DataError=type("DataError", (FakeError,), {}), pooling=True,
+                           SQL_WVARCHAR=-9)
     monkeypatch.setattr(mssql, "_pyodbc", lambda: fake)
     monkeypatch.setenv("DATABASE_URL", "Driver={ODBC Driver 18 for SQL Server};Server=tcp:x;")
     # An unclosed connection returns to the pool when collected; keep that
@@ -248,3 +261,14 @@ def test_a_running_run_is_owned_through_the_shared_database(server, tmp_path):
         run_ownership.claim(other, 7)
     next(raw for raw in list(server.session_locks.values())).close()  # owner process ends
     assert not run_ownership.is_live(other, 7)
+
+
+@pytest.mark.parametrize("html", ["x" * 2001, "😀" * 1001, "<p>" + "x" * 300_000 + "</p>"],
+                         ids=["2001-characters", "1001-emoji", "300k-characters"])
+def test_long_text_is_sent_as_nvarchar_max_so_comparisons_work(server, tmp_path, html):
+    """The notes formatter compares a whole note's HTML; the driver switches at 4,000 UTF-16 bytes."""
+    conn = _connect(tmp_path)
+    conn.execute("UPDATE notes_cells SET html = ? WHERE id = ? AND html = ?", (html, 1, html))
+    conn.commit()
+    assert any(s.startswith("UPDATE notes_cells") for s in server.log)
+

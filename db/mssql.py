@@ -224,6 +224,29 @@ def _bind(params, order: Sequence[int]) -> list:
     return [_param(v) for v in tr.reorder(list(params), order)]
 
 
+# The driver sends text over 4,000 bytes in UTF-16 (2,000 ordinary characters,
+# 1,000 emoji) as the old ntext type, which SQL Server refuses to compare with
+# an NVARCHAR(MAX) column (error 402: "nvarchar(max) and ntext are incompatible
+# in the equal to operator").
+_LONG_TEXT_BYTES = 4000
+
+
+def _is_long_text(v) -> bool:
+    # A character is at most 4 UTF-16 bytes, so 1,000 characters or fewer never
+    # qualify and need no encoding.
+    return (isinstance(v, str) and len(v) > _LONG_TEXT_BYTES // 4
+            and len(v.encode("utf-16-le")) > _LONG_TEXT_BYTES)
+
+
+def _set_long_text_sizes(cur, rows: Sequence[Sequence]) -> None:
+    """Send long text as NVARCHAR(MAX) instead of ntext. Shorter values keep the default."""
+    width = max((len(r) for r in rows), default=0)
+    long_cols = {i for r in rows for i, v in enumerate(r) if _is_long_text(v)}
+    if long_cols:
+        pyodbc = _pyodbc()
+        cur.setinputsizes([(pyodbc.SQL_WVARCHAR, 0, 0) if i in long_cols else None for i in range(width)])
+
+
 def _map_error(exc: BaseException) -> sqlite3.Error:
     pyodbc = _pyodbc()
     text = _redact(_error_codes(exc))
@@ -326,7 +349,11 @@ class Connection:
         """
         cur = self._raw_conn().cursor()
         try:
-            cur.execute(sql, *params) if params else cur.execute(sql)
+            if params:
+                _set_long_text_sizes(cur, [params])
+                cur.execute(sql, *params)
+            else:
+                cur.execute(sql)
             rowcount, description, rows = -1, None, None
             while True:
                 if cur.description is not None:
@@ -477,6 +504,7 @@ class Cursor:
             conn._before_write()
         cur = conn._raw_conn().cursor()
         try:
+            _set_long_text_sizes(cur, rows)
             cur.executemany(t.sql, rows)
             self.rowcount = cur.rowcount
         except Exception as exc:
