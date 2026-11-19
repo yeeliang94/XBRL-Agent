@@ -5,14 +5,14 @@
   "origin": "concept_model/importer.py"
  },
  {
+  "sql": "\n                        INSERT INTO run_concept_conflicts(\n                            run_id, concept_uuid, period, entity_scope,\n                            kind, residual, detail, status, created_at, dimension_key\n                        ) SELECT ?, ?, ?, ?, 'partial_state', ?, ?, 'open', ?, ?\n                        WHERE NOT EXISTS (\n                            SELECT 1 FROM run_concept_conflicts WHERE run_id = ?\n                            AND concept_uuid = ? AND period = ? AND entity_scope = ?\n                            AND dimension_key = ? AND kind = 'partial_state' AND status = 'open')\n                        ",
+  "params": 13,
+  "origin": "concept_model/cascade.py"
+ },
+ {
   "sql": "\n                        INSERT INTO run_concept_conflicts(\n                            run_id, concept_uuid, period, entity_scope,\n                            kind, residual, detail, status, created_at, dimension_key\n                        ) VALUES (?, ?, ?, ?, 'parent_child_disagree',\n                                  NULL, ?, 'open', ?, ?)\n                        ",
   "params": 7,
   "origin": "concept_model/facts_api.py"
- },
- {
-  "sql": "\n                        INSERT INTO run_concept_conflicts(\n                            run_id, concept_uuid, period, entity_scope,\n                            kind, residual, detail, status, created_at, dimension_key\n                        ) VALUES (?, ?, ?, ?, 'partial_state', ?, ?, 'open', ?, ?)\n                        ",
-  "params": 8,
-  "origin": "concept_model/cascade.py"
  },
  {
   "sql": "\n                    INSERT INTO concept_fact_events(\n                        run_id, concept_uuid, period, entity_scope,\n                        actor, turn, ts, before_json, after_json, dimension_key\n                    ) VALUES (?, ?, ?, ?, 'cascade', NULL, ?, ?, ?, ?)\n                    ",
@@ -377,7 +377,7 @@
  {
   "sql": "DELETE FROM notes_cells WHERE run_id = ? AND sheet = ? AND row = ?",
   "params": 3,
-  "origin": "notes/review_move.py"
+  "origin": "api/notes.py"
  },
  {
   "sql": "DELETE FROM notes_cells WHERE run_id = ? AND sheet NOT IN ('Report-Auditors', 'Report-Directors', 'Report-StatementByDirectors')",
@@ -488,6 +488,11 @@
   "sql": "DELETE FROM runs WHERE status = 'draft' AND (session_id IS NULL OR session_id NOT IN (?))",
   "params": 1,
   "origin": "db/repository.py"
+ },
+ {
+  "sql": "DELETE FROM template_imports WHERE source_path = ?",
+  "params": 1,
+  "origin": "concept_model/bootstrap.py"
  },
  {
   "sql": "DELETE FROM template_manifest_exceptions WHERE template_id = ?",
@@ -785,6 +790,11 @@
   "origin": "scripts/audit_field_roundtrip.py"
  },
  {
+  "sql": "INSERT INTO template_imports(source_path, template_id, fingerprint, imported_at) VALUES (?, ?, ?, ?)",
+  "params": 4,
+  "origin": "concept_model/bootstrap.py"
+ },
+ {
   "sql": "INSERT OR IGNORE INTO concept_edges(parent_uuid, child_uuid, coefficient) VALUES (?, ?, ?)",
   "params": 3,
   "origin": "concept_model/importer.py"
@@ -887,7 +897,7 @@
  {
   "sql": "SELECT * FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
   "params": 3,
-  "origin": "notes/agent.py"
+  "origin": "notes/cleanup_repository.py"
  },
  {
   "sql": "SELECT * FROM notes_cleanup_receipts WHERE run_id=? AND sheet=? AND row=? AND generation_id IS ?",
@@ -1120,6 +1130,11 @@
   "origin": "server.py"
  },
  {
+  "sql": "SELECT 1 FROM template_imports t WHERE t.source_path = ? AND t.fingerprint = ? AND t.template_id = ? AND (EXISTS (SELECT 1 FROM concept_templates c WHERE c.template_id = t.template_id) OR EXISTS (SELECT 1 FROM notes_nodes n WHERE n.template_id = t.template_id))",
+  "params": 3,
+  "origin": "concept_model/bootstrap.py"
+ },
+ {
   "sql": "SELECT 1 FROM template_slots WHERE template_id LIKE ? AND sheet = ? LIMIT 1",
   "params": 2,
   "origin": "concept_model/facts_api.py"
@@ -1297,7 +1312,7 @@
  {
   "sql": "SELECT DISTINCT sheet FROM notes_cells WHERE run_id = ?",
   "params": 1,
-  "origin": "mtool/notes_exporter.py"
+  "origin": "api/notes.py"
  },
  {
   "sql": "SELECT DISTINCT sheet, row FROM notes_block_placements WHERE generation_id = ? AND sheet = ? AND active = 1",
@@ -1812,7 +1827,7 @@
  {
   "sql": "SELECT id FROM notes_review_flags WHERE run_id=? AND finding_id=? AND status='open'",
   "params": 2,
-  "origin": "notes/source_write.py"
+  "origin": "notes/agent.py"
  },
  {
   "sql": "SELECT id FROM notes_source_generations WHERE run_id = ? AND status = 'active'",
@@ -1827,7 +1842,7 @@
  {
   "sql": "SELECT id FROM run_agents WHERE run_id = ? AND statement_type = ? ORDER BY id DESC LIMIT 1",
   "params": 2,
-  "origin": "db/repository.py"
+  "origin": "api/reviewer.py"
  },
  {
   "sql": "SELECT id FROM run_concept_conflicts WHERE id = ?",
@@ -1835,7 +1850,7 @@
   "origin": "concept_model/concepts_routes.py"
  },
  {
-  "sql": "SELECT id FROM run_concept_conflicts WHERE run_id = ? AND concept_uuid = ? AND period = ? AND entity_scope = ? AND dimension_key = ? AND kind = 'partial_state' AND status = 'open'",
+  "sql": "SELECT id FROM run_concept_conflicts WHERE run_id = ? AND concept_uuid = ? AND period = ? AND entity_scope = ? AND dimension_key = ? AND kind = 'partial_state' AND status = 'open' ORDER BY id",
   "params": 5,
   "origin": "concept_model/cascade.py"
  },
@@ -1873,6 +1888,11 @@
   "sql": "SELECT id, category, reasoning, status, human_answer FROM reviewer_flags WHERE run_id = ? AND status IN ('open', 'answered') ORDER BY id",
   "params": 1,
   "origin": "server.py"
+ },
+ {
+  "sql": "SELECT id, concept_uuid FROM run_concept_conflicts WHERE run_id = ? AND period = ? AND entity_scope = ? AND dimension_key = ? AND kind = 'partial_state' AND status = 'open' ORDER BY id",
+  "params": 4,
+  "origin": "concept_model/cascade.py"
  },
  {
   "sql": "SELECT id, concept_uuid, invalid_target FROM notes_cells WHERE run_id = ?",
@@ -2062,7 +2082,7 @@
  {
   "sql": "SELECT notes_integrity_mode FROM runs WHERE id = ?",
   "params": 1,
-  "origin": "mtool/preflight.py"
+  "origin": "db/repository.py"
  },
  {
   "sql": "SELECT notes_verdicts_json FROM runs WHERE id = ?",
@@ -2352,7 +2372,7 @@
  {
   "sql": "SELECT sheet, row, label FROM notes_cells WHERE run_id = ?",
   "params": 1,
-  "origin": "notes/coverage_navigation.py"
+  "origin": "api/notes.py"
  },
  {
   "sql": "SELECT sheet, row, label, content_origin, source_diverged_at FROM notes_cells WHERE run_id = ? AND source_rendered_sha256 IS NOT NULL AND current_html_sha256 IS NOT NULL AND current_html_sha256 != source_rendered_sha256 ORDER BY sheet, row",
@@ -2840,7 +2860,7 @@
   "origin": "api/preparation.py"
  },
  {
-  "sql": "UPDATE run_concept_conflicts SET residual = ?, detail = ? WHERE id = ?",
+  "sql": "UPDATE run_concept_conflicts SET residual = ?, detail = ? WHERE id = ? AND status = 'open'",
   "params": 3,
   "origin": "concept_model/cascade.py"
  },

@@ -422,8 +422,14 @@ def writable_html_targets(conn: sqlite3.Connection, *, family_prefix: str | None
 
 
 
-def persist_template_manifest(db_path: str | Path, path_value: str | Path) -> int:
-    """Replace one template's v41 taxonomy/slot manifest atomically."""
+def persist_template_manifest(db_path: str | Path, path_value: str | Path, *, force: bool = False) -> int:
+    """Replace one template's v41 taxonomy/slot manifest atomically.
+
+    Skipped when the stored manifest has the same workbook bytes and version,
+    unless ``force``: the startup bootstrap passes it once it has found that
+    what the template parses to has changed (a parser or taxonomy rule) while
+    the workbook bytes have not.
+    """
     path = Path(path_value).resolve()
     fingerprint = _workbook_fingerprint(path)
     template_id = derive_template_id(path)
@@ -436,7 +442,8 @@ def persist_template_manifest(db_path: str | Path, path_value: str | Path) -> in
         (template_id,),
     ).fetchone()
     if (
-        existing
+        not force
+        and existing
         and int(existing[0] or 0) > 0
         and existing[1] == existing[2] == MANIFEST_VERSION
         and existing[3] == existing[4] == fingerprint

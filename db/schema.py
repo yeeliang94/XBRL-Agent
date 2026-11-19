@@ -251,7 +251,9 @@ from pathlib import Path
 # v57 changes nothing in SQLite. On Azure SQL every link between tables
 # becomes a foreign key, so a row whose parent was deleted is refused there
 # too (db/mssql_v57.py).
-CURRENT_SCHEMA_VERSION = 57
+# v58 records each imported template's fingerprint so server startup skips
+# templates that have not changed.
+CURRENT_SCHEMA_VERSION = 58
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -1815,6 +1817,18 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         content_type   TEXT NOT NULL,
         size_bytes     INTEGER NOT NULL,
         sha256         TEXT NOT NULL
+    )
+    """,
+
+    # v58: the fingerprint of each template the startup bootstrap imported
+    # (template file plus the import code). An unchanged template is not
+    # imported again; on Azure SQL every re-import is thousands of round trips.
+    """
+    CREATE TABLE IF NOT EXISTS template_imports (
+        source_path  TEXT PRIMARY KEY,
+        template_id  TEXT NOT NULL,
+        fingerprint  TEXT NOT NULL,
+        imported_at  TEXT NOT NULL
     )
     """,
 )
@@ -3958,6 +3972,18 @@ def init_db(path: str | Path) -> None:
                 latest = conn.execute("SELECT version FROM schema_version").fetchone()[0]
                 if latest < 57:
                     conn.execute("UPDATE schema_version SET version = 57")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v57 -> v58: template_imports is created by _CREATE_STATEMENTS above.
+        if current_version is not None and current_version < 58:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                latest = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+                if latest < 58:
+                    conn.execute("UPDATE schema_version SET version = 58")
                 conn.commit()
             except Exception:
                 conn.rollback()

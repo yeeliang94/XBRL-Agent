@@ -146,6 +146,11 @@ def test_reimport_is_idempotent(imported_db):
     finally:
         conn.close()
 
+    # Forget the recorded fingerprints so the second pass really re-imports.
+    conn = _conn(db)
+    conn.execute("DELETE FROM template_imports")
+    conn.commit()
+    conn.close()
     import_all_notes_templates(db)  # second pass
 
     conn = _conn(db)

@@ -535,30 +535,46 @@ def _run_lock_name(run_id: int) -> str:
     return f"xbrl-run-{int(run_id)}"
 
 
-def hold_run_lock(conn: Connection, run_id: int):
-    """Hold the run's lock on a connection of its own; return that connection.
+def hold_session_lock(conn: Connection, resource: str, *, timeout_ms: int):
+    """Hold a named lock on a connection of its own; return that connection.
 
-    Raises BlockingIOError when another process holds it, as the file lock does.
+    Raises BlockingIOError when another process holds it past ``timeout_ms``.
+    The database releases it if the holding process dies.
     """
     raw = _open(conn._url)
     try:
         rows = _exec(raw, "DECLARE @r INT; EXEC @r = sp_getapplock @Resource = ?, @LockMode = 'Exclusive', "
-                          "@LockOwner = 'Session', @LockTimeout = 0; SELECT @r", _run_lock_name(run_id))
+                          "@LockOwner = 'Session', @LockTimeout = ?; SELECT @r", resource, int(timeout_ms))
     except Exception:
         _close_quietly(raw)
         raise
     if not rows or rows[0][0] < 0:
         _close_quietly(raw)
-        raise BlockingIOError(f"run {run_id} is owned by another process")
+        raise BlockingIOError(f"{resource} is held by another process")
     return raw
 
 
-def release_run_lock(raw, run_id: int) -> None:
+def release_session_lock(raw, resource: str) -> None:
     try:
-        _exec(raw, "EXEC sp_releaseapplock @Resource = ?, @LockOwner = 'Session'", _run_lock_name(run_id))
+        _exec(raw, "EXEC sp_releaseapplock @Resource = ?, @LockOwner = 'Session'", resource)
     except Exception:
         pass  # closing the connection releases it anyway
     _close_quietly(raw)
+
+
+def hold_run_lock(conn: Connection, run_id: int):
+    """Hold the run's lock on a connection of its own; return that connection.
+
+    Raises BlockingIOError when another process holds it, as the file lock does.
+    """
+    try:
+        return hold_session_lock(conn, _run_lock_name(run_id), timeout_ms=0)
+    except BlockingIOError:
+        raise BlockingIOError(f"run {run_id} is owned by another process") from None
+
+
+def release_run_lock(raw, run_id: int) -> None:
+    release_session_lock(raw, _run_lock_name(run_id))
 
 
 def run_lock_held(conn: Connection, run_id: int) -> bool:
@@ -576,7 +592,18 @@ def run_lock_held(conn: Connection, run_id: int) -> bool:
 # needs a matching step here, keyed by the version it produces; the baseline in
 # db/mssql_baseline.py covers new, empty databases.
 FIRST_AZURE_VERSION = 56
-MIGRATIONS: dict[int, tuple[str, ...]] = {57: mssql_v57.STATEMENTS}
+MIGRATIONS: dict[int, tuple[str, ...]] = {
+    57: mssql_v57.STATEMENTS,
+    58: (
+        "CREATE TABLE [template_imports] (\n"
+        "    [source_path] NVARCHAR(850) COLLATE Latin1_General_100_BIN2 NOT NULL,\n"
+        "    [template_id] NVARCHAR(MAX) COLLATE Latin1_General_100_BIN2 NOT NULL,\n"
+        "    [fingerprint] NVARCHAR(MAX) COLLATE Latin1_General_100_BIN2 NOT NULL,\n"
+        "    [imported_at] NVARCHAR(MAX) COLLATE Latin1_General_100_BIN2 NOT NULL,\n"
+        "    CONSTRAINT [pk_template_imports] PRIMARY KEY NONCLUSTERED ([source_path])\n"
+        ")",
+    ),
+}
 
 
 def _exec(raw, sql: str, *params) -> list:

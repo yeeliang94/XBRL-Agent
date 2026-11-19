@@ -70,16 +70,20 @@ def value_kind(concept_id: str, standard: str) -> str:
     return next(f.kind for report in REPORTS for f in fields(report, standard) if f.concept == concept_id)
 
 
-def import_templates(db_path) -> None:
-    from concept_model.notes_parser import parse_notes_template
-    from concept_model.notes_importer import import_notes_template
-    from concept_model.filing_targets import persist_template_manifest
+def report_templates():
+    """(template file, sheet, which parsed nodes to keep) for every report template.
 
+    ``concept_model.bootstrap.import_report_templates`` imports them.
+    """
     for standard in ("mfrs", "mpers"):
         for level in ("company", "group"):
             for report, (_, _, sheet) in REPORTS.items():
-                path = template_path(report, standard, level)
-                template_id, nodes = parse_notes_template(str(path), sheet)
-                html_ids = {f.concept for f in fields(report, standard) if f.kind == "html"}
-                import_notes_template(db_path, template_id, [n for n in nodes if n.taxonomy_element_id in html_ids])
-                persist_template_manifest(db_path, path)
+                html_ids = frozenset(f.concept for f in fields(report, standard) if f.kind == "html")
+                yield (template_path(report, standard, level), sheet,
+                       lambda node, html_ids=html_ids: node.taxonomy_element_id in html_ids)
+
+
+def import_templates(db_path) -> None:
+    from concept_model.bootstrap import import_report_templates
+
+    import_report_templates(db_path)
