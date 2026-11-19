@@ -1293,13 +1293,14 @@ def log_run_event(
     event_type: str,
     payload: dict[str, Any] | None = None,
     phase: str | None = None,
+    ts: str | None = None,
 ) -> int:
-    """Append one low-volume coordinator/run event."""
+    """Append one low-volume coordinator/run event. ``ts`` as in ``log_event``."""
     cur = conn.execute(
         "INSERT INTO run_events(run_id, ts, event_type, phase, payload_json) "
         "VALUES (?, ?, ?, ?, ?)",
         (
-            run_id, _now(), event_type, phase,
+            run_id, ts or _now(), event_type, phase,
             json.dumps(payload or {}, ensure_ascii=False, default=str),
         ),
     )
