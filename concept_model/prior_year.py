@@ -374,7 +374,7 @@ def guidance(db_path, run_id, template_id=None) -> str:
             return ""
         query = (
             "SELECT n.concept_uuid,n.canonical_label,n.render_sheet,f.entity_scope,f.dimension_key,f.value "
-            "FROM run_concept_facts f JOIN concept_nodes n USING(concept_uuid) "
+            "FROM run_concept_facts f JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid "
             "WHERE f.run_id=? AND f.source=?"
         )
         args = [run_id, SOURCE]
@@ -461,7 +461,7 @@ def compare_value(
     with db_engine.connect(db_path, timeout=5) as conn:
         dims = instance_key(conn, concept_uuid, dimensions or {})
         row = conn.execute(
-            "SELECT f.value FROM run_concept_facts f JOIN concept_nodes n USING(concept_uuid) "
+            "SELECT f.value FROM run_concept_facts f JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid "
             "WHERE f.run_id=? AND f.concept_uuid=? AND f.period='PY' AND f.entity_scope=? "
             "AND f.dimension_key=? AND f.source IN (?, 'cascade') AND (? IS NULL OR n.template_id=?)",
             (
@@ -648,7 +648,7 @@ def check_results(db_path, run_id):
             return []
         facts = conn.execute(
             f"SELECT f.concept_uuid,f.entity_scope,f.dimension_key,{_REVIEW_LABEL_SQL} FROM run_concept_facts f "
-            "JOIN concept_nodes n USING(concept_uuid) WHERE f.run_id=? AND f.source=?",
+            "JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid WHERE f.run_id=? AND f.source=?",
             (run_id, SOURCE),
         ).fetchall()
         comparisons = {

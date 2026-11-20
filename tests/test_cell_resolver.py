@@ -299,12 +299,17 @@ def test_non_numeric_value_rejects_one_cell_without_aborting_batch(db):
     assert [r[0] for r in rows] == [9_078_749.0]
 
 
-def test_prepared_source_evidence_is_enriched_after_write(db, tmp_path):
+@pytest.mark.parametrize("cell_by_cell", [False, True])
+def test_prepared_source_evidence_is_enriched_after_write(db, tmp_path, monkeypatch, cell_by_cell):
     """The agent keeps the ordinary write_facts shape; projection enriches a
-    clear page/value/label match behind the canonical seam.
+    clear page/value/label match behind the canonical seam, on both save routes.
     """
     db_path, run_id, template_id, _gr = db
+    from concept_model import write_snapshot
     from concept_model.cell_resolver import project_writes
+
+    if cell_by_cell:
+        monkeypatch.setattr(write_snapshot, "take", lambda *a, **k: None)
 
     with sqlite3.connect(db_path) as conn:
         label, row = conn.execute(
@@ -356,3 +361,198 @@ def test_prepared_source_evidence_is_enriched_after_write(db, tmp_path):
         ).fetchone()
     assert receipt == ("direct", "verified", "unassessed")
     assert term == (3, "555")
+
+
+# --- saving a batch: prepared on a copy, then written in one go -------------
+
+_TIMESTAMPS = {"id", "ts", "updated_at", "created_at", "resolved_at", "receipt_id"}
+
+
+def _saved_state(db_path, run_id) -> dict:
+    """Everything a batch saves for the run, without row ids and timestamps."""
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        state = {}
+        for table in ("run_concept_facts", "concept_fact_events",
+                      "fact_source_receipts", "run_concept_conflicts"):
+            rows = conn.execute(f"SELECT * FROM {table} WHERE run_id=?", (run_id,)).fetchall()
+            state[table] = sorted(
+                json.dumps({k: r[k] for k in r.keys() if k not in _TIMESTAMPS}, sort_keys=True)
+                for r in rows)
+        terms = conn.execute(
+            "SELECT r.concept_uuid, r.period, t.* FROM fact_source_terms t "
+            "JOIN fact_source_receipts r ON r.id = t.receipt_id WHERE r.run_id=?", (run_id,),
+        ).fetchall()
+        state["fact_source_terms"] = sorted(
+            json.dumps({k: r[k] for k in r.keys() if k not in _TIMESTAMPS}, sort_keys=True)
+            for r in terms)
+        return state
+    finally:
+        conn.close()
+
+
+def _mixed_batches(db_path, run_id, co_id):
+    """Two batches covering every kind of outcome a cell can have."""
+    from concept_model.facts_api import FactWrite, apply_fact
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        leaves = [r[0] for r in conn.execute(
+            "SELECT render_row FROM concept_nodes WHERE template_id=? "
+            "AND render_sheet='SOFP-CuNonCu' AND kind='LEAF' ORDER BY render_row LIMIT 4",
+            (co_id,))]
+        # A total with a direct leaf child, marked "breakdown not disclosed":
+        # writing the child afterwards must raise a disagreement.
+        parent_uuid, child_row = conn.execute(
+            "SELECT p.concept_uuid, c.render_row FROM concept_edges e "
+            "JOIN concept_nodes p ON p.concept_uuid = e.parent_uuid "
+            "JOIN concept_nodes c ON c.concept_uuid = e.child_uuid "
+            "WHERE p.template_id=? AND p.kind='COMPUTED' AND c.kind='LEAF' "
+            "AND c.render_sheet='SOFP-CuNonCu' ORDER BY c.render_row DESC LIMIT 1",
+            (co_id,)).fetchone()
+        formula_row = conn.execute(
+            "SELECT render_row FROM concept_nodes WHERE template_id=? "
+            "AND render_sheet='SOFP-CuNonCu' AND kind='COMPUTED' ORDER BY render_row LIMIT 1",
+            (co_id,)).fetchone()[0]
+        apply_fact(conn, run_id, FactWrite(
+            concept_uuid=parent_uuid, period="CY", entity_scope="Company", value=500.0,
+            value_status="observed", children_status="aggregate_only", actor="test"))
+    finally:
+        conn.close()
+
+    def cell(row, value, **extra):
+        return {"sheet": "SOFP-CuNonCu", "row": row, "col": 2, "value": value,
+                "evidence": f"Page {row}", **extra}
+
+    receipt = {
+        "transform": "sum", "arithmetic_status": "verified", "semantic_status": "needs_review",
+        "rationale": "two source lines", "target_label": "x",
+        "terms": [
+            {"source_term_id": "t1", "source_page": 3, "source_block_id": "b1",
+             "row_label": "a", "column_label": "2025", "raw_value": "60",
+             "numeric_value": 60.0, "coefficient": 1.0},
+            {"source_term_id": "t2", "source_page": 3, "source_block_id": "b1",
+             "row_label": "b", "column_label": "2025", "raw_value": "40",
+             "numeric_value": 40.0, "coefficient": 1.0},
+        ],
+    }
+    first = [
+        cell(leaves[0], 100.0, source_receipt=receipt),
+        cell(leaves[1], 200.0, source_evidence_error="two candidate lines"),
+        cell(leaves[2], 300.0),
+        cell(child_row, 50.0),
+        cell(formula_row, 999.0),              # refused: formula row
+        cell(leaves[3], "see note 4"),         # refused: text in a number
+        {"sheet": "SOFP-CuNonCu", "row": 1, "col": 2, "value": "2025"},  # no concept
+    ]
+    second = [
+        cell(leaves[0], 110.0),                # replaces a value and its receipt
+        cell(leaves[2], 300.0, source_receipt={**receipt, "semantic_status": "verified"}),
+        cell(child_row, 55.0),                 # disagreement already open
+    ]
+    return first, second
+
+
+def test_a_batch_saves_the_same_rows_prepared_or_cell_by_cell(db, tmp_path, monkeypatch):
+    """The prepared save is a faster route to the same database, not a new rule set."""
+    from concept_model import cell_resolver, write_snapshot
+    from db.schema import init_db
+
+    db_path, run_id, co_id, _gr = db
+    other = tmp_path / "cell_by_cell.db"
+    init_db(other)
+    assert _import(other, CO_SOFP, group=False) == co_id
+    conn = sqlite3.connect(str(other))
+    other_run = conn.execute(
+        "INSERT INTO runs(created_at, pdf_filename, status, started_at) "
+        "VALUES ('2026-05-25T00:00:00Z', 'x.pdf', 'running', '2026-05-25T00:00:00Z')").lastrowid
+    conn.commit()
+    conn.close()
+    assert other_run == run_id
+
+    prepared = []
+    for batch in _mixed_batches(db_path, run_id, co_id):
+        prepared.append(cell_resolver.project_writes(db_path, run_id, co_id, batch))
+
+    monkeypatch.setattr(write_snapshot, "take", lambda *a, **k: None)
+    cell_by_cell = []
+    for batch in _mixed_batches(other, run_id, co_id):
+        cell_by_cell.append(cell_resolver.project_writes(other, run_id, co_id, batch))
+
+    assert prepared == cell_by_cell
+    assert prepared[0].projected == 4 and len(prepared[0].rejected) == 2
+    assert _saved_state(db_path, run_id) == _saved_state(other, run_id)
+    saved = _saved_state(db_path, run_id)
+    assert len(saved["run_concept_facts"]) == 5
+    assert any("parent_child_disagree" in row for row in saved["run_concept_conflicts"])
+    assert any("source_evidence_unresolved" in row for row in saved["run_concept_conflicts"])
+
+
+def test_a_value_changed_by_someone_else_while_preparing_is_not_lost_from_history(db, monkeypatch):
+    """Another writer lands between the preparation and the save: prepare again."""
+    from concept_model import cell_resolver, write_snapshot
+
+    db_path, run_id, co_id, _gr = db
+    conn = sqlite3.connect(str(db_path))
+    leaf = conn.execute(
+        "SELECT render_row FROM concept_nodes WHERE template_id=? "
+        "AND render_sheet='SOFP-CuNonCu' AND kind='LEAF' ORDER BY render_row LIMIT 1",
+        (co_id,)).fetchone()[0]
+    conn.close()
+    write = {"sheet": "SOFP-CuNonCu", "row": leaf, "col": 2, "value": 1.0, "evidence": "p1"}
+    cell_resolver.project_writes(db_path, run_id, co_id, [write])
+
+    real_take = write_snapshot.take
+    interfered = []
+
+    def take_then_interfere(conn, template_id, run_id_, *, with_facts):
+        snapshot = real_take(conn, template_id, run_id_, with_facts=with_facts)
+        if not interfered:
+            interfered.append(True)
+            other = sqlite3.connect(str(db_path))
+            other.execute("UPDATE run_concept_facts SET value = 777 WHERE run_id=?", (run_id,))
+            other.commit()
+            other.close()
+        return snapshot
+
+    monkeypatch.setattr(write_snapshot, "take", take_then_interfere)
+    result = cell_resolver.project_writes(db_path, run_id, co_id, [{**write, "value": 2.0}])
+
+    assert result.projected == 1
+    conn = sqlite3.connect(str(db_path))
+    value = conn.execute("SELECT value FROM run_concept_facts WHERE run_id=?", (run_id,)).fetchone()[0]
+    before = [json.loads(r[0])["value"] if r[0] else None for r in conn.execute(
+        "SELECT before_json FROM concept_fact_events WHERE run_id=? ORDER BY id", (run_id,))]
+    conn.close()
+    assert value == 2.0
+    assert before == [None, 777]
+
+
+def test_a_busy_database_is_tried_again_instead_of_failing_the_batch(db, monkeypatch):
+    from concept_model import cell_resolver
+
+    db_path, run_id, co_id, _gr = db
+    conn = sqlite3.connect(str(db_path))
+    leaf = conn.execute(
+        "SELECT render_row FROM concept_nodes WHERE template_id=? "
+        "AND render_sheet='SOFP-CuNonCu' AND kind='LEAF' ORDER BY render_row LIMIT 1",
+        (co_id,)).fetchone()[0]
+    conn.close()
+    real = cell_resolver._project_prepared
+    busy = [sqlite3.OperationalError("database is locked")]
+
+    def busy_once(*args, **kwargs):
+        if busy:
+            raise busy.pop()
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(cell_resolver, "_project_prepared", busy_once)
+    monkeypatch.setattr(cell_resolver, "_RETRY_DELAY_S", 0)
+    result = cell_resolver.project_writes(
+        db_path, run_id, co_id,
+        [{"sheet": "SOFP-CuNonCu", "row": leaf, "col": 2, "value": 5.0, "evidence": "p1"}])
+
+    assert result.projected == 1
+    assert _saved_state(db_path, run_id)["run_concept_facts"]

@@ -1,0 +1,319 @@
+"""An Azure SQL connection keeps the SQLite behaviour the application relies on.
+
+The SQL Server driver is replaced by a recording fake: there is no SQL Server
+in the test environment. The cases cover what callers observe: one writer at a
+time, ``database is locked`` on a lock timeout, rows readable by name, new row
+ids, SQLite exception classes, and the commit/rollback lifecycle.
+"""
+from __future__ import annotations
+
+import decimal
+import gc
+import sqlite3
+from types import SimpleNamespace
+
+import pytest
+
+from db import engine, mssql
+
+
+class FakeError(Exception):
+    pass
+
+
+class FakeIntegrityError(FakeError):
+    pass
+
+
+class FakeServer:
+    """Records batches and answers the few SQL Server behaviours the wrapper relies on."""
+
+    def __init__(self):
+        self.log: list[str] = []
+        self.depth = 0
+        self.lock_result = 0
+        self.rows: dict[str, tuple[list[str], list[tuple]]] = {}
+        self.fail: dict[str, Exception] = {}
+        self.opened = 0
+        self.session_locks: dict[str, object] = {}
+
+
+class FakeCursor:
+    def __init__(self, server, raw=None):
+        self.server = server
+        self.raw = raw
+        self.description = None
+        self._sets: list = []
+        self.rowcount = -1
+        self._sizes: list = []
+
+    def setinputsizes(self, sizes):
+        self._sizes = list(sizes)
+
+    def execute(self, sql, *params):
+        s = self.server
+        sizes, self._sizes = self._sizes, []
+        for i, v in enumerate(params):
+            if (isinstance(v, str) and len(v.encode("utf-16-le")) > 4000
+                    and (i >= len(sizes) or sizes[i] is None)):
+                # Unsized text over 4,000 UTF-16 bytes goes as ntext, which
+                # SQL Server will not compare with an NVARCHAR(MAX) column.
+                raise FakeError("42000", "The data types nvarchar(max) and ntext are incompatible "
+                                         "in the equal to operator. (402)")
+        s.log.append(sql)
+        for key, exc in s.fail.items():
+            if key in sql:
+                raise exc
+        if params and "BEGIN TRANSACTION" in sql and "COMMIT" not in sql:
+            # SQL Server runs a parameterized batch as a procedure call and
+            # refuses one that leaves a transaction open.
+            raise FakeError("25000", "Transaction count after EXECUTE indicates a mismatching "
+                                     "number of BEGIN and COMMIT statements. (266)")
+        if "BEGIN TRANSACTION" in sql:
+            s.depth += 1
+        if "COMMIT TRANSACTION" in sql or "ROLLBACK TRANSACTION" in sql:
+            s.depth = 0
+        self._sets = []
+        if "sp_getapplock" in sql and "'Session'" in sql:
+            owner = s.session_locks.get(params[0])
+            granted = owner is None or owner is self.raw
+            if granted:
+                s.session_locks[params[0]] = self.raw
+            self._sets = [None, (["r"], [(0 if granted else -1,)])]
+        elif "sp_releaseapplock" in sql:
+            s.session_locks.pop(params[0], None)
+        elif "APPLOCK_TEST" in sql:
+            self._sets = [(["free"], [(0 if params[0] in s.session_locks else 1,)])]
+        elif "sp_getapplock" in sql:
+            self._sets = [None, (["r"], [(s.lock_result,)])]
+        elif sql == "SELECT @@TRANCOUNT":
+            self._sets = [(["n"], [(s.depth,)])]
+        elif "SCOPE_IDENTITY" in sql:
+            self._sets = [None, (["id"], [(42,)])]
+        else:
+            for key, (names, rows) in s.rows.items():
+                if key in sql:
+                    self._sets = [(names, list(rows))]
+                    break
+        self.rowcount = 1 if not self._sets or self._sets[0] is None else -1
+        self._load()
+        return self
+
+    def executemany(self, sql, rows):
+        self.server.log.append(f"MANY {len(rows)}: {sql}")
+        self.rowcount = len(rows)
+
+    def _load(self):
+        current = self._sets[0] if self._sets else None
+        self.description = None if current is None else [(n,) for n in current[0]]
+        self._data = [] if current is None else list(current[1])
+
+    def nextset(self):
+        if len(self._sets) <= 1:
+            return False
+        self._sets.pop(0)
+        self._load()
+        return True
+
+    def fetchone(self):
+        return self._data.pop(0) if self._data else None
+
+    def fetchall(self):
+        rows, self._data = self._data, []
+        return rows
+
+    def close(self):
+        self._sets = []
+
+
+class FakeRaw:
+    def __init__(self, server):
+        self.server = server
+        self.closed = False
+
+    def cursor(self):
+        return FakeCursor(self.server, self)
+
+    def close(self):
+        self.closed = True
+        for name, owner in list(self.server.session_locks.items()):
+            if owner is self:
+                del self.server.session_locks[name]
+
+
+@pytest.fixture
+def server(monkeypatch):
+    srv = FakeServer()
+
+    def connect(url, autocommit, timeout):
+        assert autocommit is True
+        srv.opened += 1
+        return FakeRaw(srv)
+
+    fake = SimpleNamespace(connect=connect, Error=FakeError, IntegrityError=FakeIntegrityError,
+                           DataError=type("DataError", (FakeError,), {}), pooling=True,
+                           SQL_WVARCHAR=-9)
+    monkeypatch.setattr(mssql, "_pyodbc", lambda: fake)
+    monkeypatch.setenv("DATABASE_URL", "Driver={ODBC Driver 18 for SQL Server};Server=tcp:x;")
+    # An unclosed connection returns to the pool when collected; keep that
+    # from carrying one test's fake server into the next.
+    gc.collect()
+    mssql._pool.clear()
+    yield srv
+    gc.collect()
+    mssql._pool.clear()
+
+
+def _connect(tmp_path):
+    return engine.connect(str(tmp_path / "xbrl_agent.db"))
+
+
+def test_database_url_switches_the_shared_connection_to_azure_sql(server, tmp_path):
+    conn = _connect(tmp_path)
+    assert isinstance(conn, mssql.Connection)
+    assert engine.dialect() == "mssql"
+    assert conn.execute("PRAGMA database_list").fetchall() == [(0, "main", str(tmp_path / "xbrl_agent.db"))]
+
+
+def test_a_write_takes_the_single_writer_lock_and_commit_releases_it(server, tmp_path):
+    conn = _connect(tmp_path)
+    conn.execute("SELECT id FROM runs WHERE id = ?", (1,))
+    assert not conn.in_transaction
+    conn.execute("UPDATE runs SET status = ? WHERE id = ?", ("done", 1))
+    assert conn.in_transaction
+    lock = next(s for s in server.log if "sp_getapplock" in s)
+    assert lock.startswith("BEGIN TRANSACTION; ")
+    assert server.log.index(lock) < next(i for i, s in enumerate(server.log) if s.startswith("UPDATE runs"))
+    conn.execute("UPDATE runs SET status = ? WHERE id = ?", ("done", 2))
+    assert sum("sp_getapplock" in s for s in server.log) == 1
+    conn.commit()
+    assert not conn.in_transaction
+    assert server.log[-1] == "COMMIT TRANSACTION"
+
+
+def test_lock_timeout_raises_database_is_locked_and_leaves_no_transaction(server, tmp_path):
+    server.lock_result = -1
+    conn = _connect(tmp_path)
+    with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+        conn.execute("BEGIN IMMEDIATE")
+    assert not conn.in_transaction
+    assert server.depth == 0
+
+
+def test_rows_read_by_name_like_sqlite_rows(server, tmp_path):
+    server.rows["FROM runs"] = (["id", "status", "cost"], [(7, "done", decimal.Decimal("1.50"))])
+    conn = _connect(tmp_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT id, status, cost FROM runs").fetchone()
+    assert isinstance(row, sqlite3.Row)
+    assert dict(row) == {"id": 7, "status": "done", "cost": 1.5}
+    assert row[0] == 7
+    conn.row_factory = None
+    assert conn.execute("SELECT id, status, cost FROM runs").fetchall() == [(7, "done", 1.5)]
+
+
+def test_insert_reports_the_new_row_id(server, tmp_path):
+    conn = _connect(tmp_path)
+    cur = conn.execute("INSERT INTO runs(pdf_filename, status, created_at) VALUES (?, ?, ?)", ("a.pdf", "draft", "t"))
+    assert cur.lastrowid == 42
+
+
+def test_constraint_violation_raises_sqlite_integrity_error(server, tmp_path):
+    server.fail["INSERT INTO runs"] = FakeIntegrityError("23000", "[23000] Violation of UNIQUE KEY (2627)")
+    conn = _connect(tmp_path)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO runs(pdf_filename, status, created_at) VALUES (?, ?, ?)", ("a", "b", "c"))
+
+
+def test_with_block_rolls_back_on_error_and_close_reuses_the_server_connection(server, tmp_path):
+    conn = _connect(tmp_path)
+    with pytest.raises(RuntimeError):
+        with conn:
+            conn.execute("DELETE FROM runs WHERE id = ?", (1,))
+            raise RuntimeError("boom")
+    assert server.log[-1] == "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION"
+    conn.execute("DELETE FROM runs WHERE id = ?", (1,))
+    conn.close()
+    assert server.log[-1] == "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION"
+    _connect(tmp_path).close()
+    assert server.opened == 1
+
+
+def test_sqlite_setup_pragmas_send_nothing_to_the_server(server, tmp_path):
+    conn = _connect(tmp_path)
+    before = len(server.log)
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    assert len(server.log) == before
+
+
+def test_a_running_run_is_owned_through_the_shared_database(server, tmp_path):
+    from db import run_ownership
+
+    owner = _connect(tmp_path)
+    run_ownership.claim(owner, 7)
+    run_ownership._held.pop(("mssql", 7))  # look from another process, which shares only the database
+    other = _connect(tmp_path)
+    assert run_ownership.is_live(other, 7)
+    assert not run_ownership.is_live(other, 8)
+    with pytest.raises(BlockingIOError):
+        run_ownership.claim(other, 7)
+    next(raw for raw in list(server.session_locks.values())).close()  # owner process ends
+    assert not run_ownership.is_live(other, 7)
+
+
+@pytest.mark.parametrize("html", ["x" * 2001, "😀" * 1001, "<p>" + "x" * 300_000 + "</p>"],
+                         ids=["2001-characters", "1001-emoji", "300k-characters"])
+def test_long_text_is_sent_as_nvarchar_max_so_comparisons_work(server, tmp_path, html):
+    """The notes formatter compares a whole note's HTML; the driver switches at 4,000 UTF-16 bytes."""
+    conn = _connect(tmp_path)
+    conn.execute("UPDATE notes_cells SET html = ? WHERE id = ? AND html = ?", (html, 1, html))
+    conn.commit()
+    assert any(s.startswith("UPDATE notes_cells") for s in server.log)
+
+
+
+def test_a_batch_of_writes_travels_in_one_request_under_the_writer_lock(server, tmp_path):
+    conn = _connect(tmp_path)
+    engine.run_batch(conn, [
+        ("UPDATE runs SET status = ? WHERE id = ?", ("done", 1)),
+        ("INSERT INTO run_events(run_id, ts, event_type, phase, payload_json) VALUES (?, ?, ?, ?, ?)",
+         (1, "t", "x", None, "{}")),
+        ("DELETE FROM run_events WHERE run_id = ?", (2,)),
+    ])
+    sent = [s for s in server.log if "UPDATE runs" in s]
+    assert len(sent) == 1
+    assert "INSERT INTO run_events" in sent[0] and "DELETE FROM run_events" in sent[0]
+    assert sum("sp_getapplock" in s for s in server.log) == 1
+    assert conn.in_transaction
+    conn.commit()
+    assert server.log[-1] == "COMMIT TRANSACTION"
+
+
+def test_a_large_batch_is_split_below_the_servers_parameter_limit(server, tmp_path):
+    conn = _connect(tmp_path)
+    engine.run_batch(conn, [("UPDATE runs SET status = ? WHERE id = ?", ("done", i)) for i in range(1500)])
+    sent = [s for s in server.log if "UPDATE runs" in s]
+    assert sum(s.count("UPDATE runs") for s in sent) == 1500
+    assert len(sent) > 1 and all(s.count("?") <= 2000 for s in sent)
+
+
+def test_every_request_of_a_split_batch_ends_its_last_statement(server, tmp_path):
+    # SQL Server refuses an upsert (MERGE) that is not closed with a semicolon,
+    # and a split can land right after one.
+    upsert = ("INSERT INTO run_concept_facts(run_id, concept_uuid, period, entity_scope, value, "
+              "value_status, dimension_key) VALUES (?, ?, ?, ?, ?, ?, ?) "
+              "ON CONFLICT(run_id, concept_uuid, period, entity_scope, dimension_key) "
+              "DO UPDATE SET value = excluded.value")
+    conn = _connect(tmp_path)
+    engine.run_batch(conn, [(upsert, (1, f"c{i}", "CY", "Company", 1.0, "observed", "")) for i in range(450)])
+    sent = [s for s in server.log if "MERGE INTO run_concept_facts" in s]
+    assert len(sent) > 1
+    assert all(s.rstrip().endswith(";") for s in sent)
+
+
+def test_a_batch_refuses_statements_that_read(server, tmp_path):
+    conn = _connect(tmp_path)
+    with pytest.raises(sqlite3.ProgrammingError):
+        engine.run_batch(conn, [("SELECT id FROM runs WHERE id = ?", (1,))])

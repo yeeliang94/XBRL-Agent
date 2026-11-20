@@ -47,7 +47,7 @@ def test_health_is_public_and_real(client):
     # ...and is reachable without a session.
     r = client.get("/api/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+    assert r.json() == {"status": "ok", "database": "sqlite"}
 
 
 def test_auth_endpoints_are_exempt(client):

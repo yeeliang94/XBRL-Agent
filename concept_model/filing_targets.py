@@ -422,8 +422,14 @@ def writable_html_targets(conn: sqlite3.Connection, *, family_prefix: str | None
 
 
 
-def persist_template_manifest(db_path: str | Path, path_value: str | Path) -> int:
-    """Replace one template's v41 taxonomy/slot manifest atomically."""
+def persist_template_manifest(db_path: str | Path, path_value: str | Path, *, force: bool = False) -> int:
+    """Replace one template's v41 taxonomy/slot manifest atomically.
+
+    Skipped when the stored manifest has the same workbook bytes and version,
+    unless ``force``: the startup bootstrap passes it once it has found that
+    what the template parses to has changed (a parser or taxonomy rule) while
+    the workbook bytes have not.
+    """
     path = Path(path_value).resolve()
     fingerprint = _workbook_fingerprint(path)
     template_id = derive_template_id(path)
@@ -436,7 +442,8 @@ def persist_template_manifest(db_path: str | Path, path_value: str | Path) -> in
         (template_id,),
     ).fetchone()
     if (
-        existing
+        not force
+        and existing
         and int(existing[0] or 0) > 0
         and existing[1] == existing[2] == MANIFEST_VERSION
         and existing[3] == existing[4] == fingerprint
@@ -554,18 +561,18 @@ def persist_template_manifest(db_path: str | Path, path_value: str | Path) -> in
             # and physical slot; never infer identity from the stored label.
             conn.execute(
                 """
-                UPDATE notes_cells AS c
+                UPDATE notes_cells
                 SET concept_uuid = (
                       SELECT nn.node_uuid FROM notes_nodes nn
                       WHERE nn.template_id = ?
-                        AND nn.sheet = c.sheet AND nn.row = c.row
+                        AND nn.sheet = notes_cells.sheet AND nn.row = notes_cells.row
                         AND nn.kind = 'LEAF' AND nn.slot_role = 'INPUT'
                     ),
                     invalid_target = 0,
                     invalid_target_reason = NULL
                 WHERE EXISTS (
                     SELECT 1 FROM runs r
-                    WHERE r.id = c.run_id
+                    WHERE r.id = notes_cells.run_id
                       AND LOWER(COALESCE(
                         json_extract(r.run_config_json, '$.filing_standard'),
                         'mfrs'
@@ -578,7 +585,7 @@ def persist_template_manifest(db_path: str | Path, path_value: str | Path) -> in
                   AND EXISTS (
                     SELECT 1 FROM notes_nodes nn
                     WHERE nn.template_id = ?
-                      AND nn.sheet = c.sheet AND nn.row = c.row
+                      AND nn.sheet = notes_cells.sheet AND nn.row = notes_cells.row
                       AND nn.kind = 'LEAF' AND nn.slot_role = 'INPUT'
                   )
                 """,

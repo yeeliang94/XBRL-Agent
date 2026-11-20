@@ -3124,6 +3124,7 @@ async def _lifespan(app: FastAPI):
     # Uvicorn installs its handlers before lifespan begins. Add correlation to
     # those handlers and attach the optional rotating JSONL sink now.
     configure_logging()
+    db_engine.check_production_database()
     init_db(AUDIT_DB_PATH)
     try:
         from agent_tracing import purge_expired_diagnostics
@@ -5443,6 +5444,7 @@ async def run_multi_agent_stream(
     init_db(AUDIT_DB_PATH)
 
     db_conn: Optional[sqlite3.Connection] = None
+    event_writer = None
     run_id: Optional[int] = None
     # Tracks whether we've already written a terminal status to the runs
     # row. Prevents the finally block from clobbering an earlier-set state.
@@ -5578,6 +5580,9 @@ async def run_multi_agent_stream(
     artifact_current = True
 
     try:
+        if db_conn is not None:
+            from db.event_writer import EventWriter
+            event_writer = EventWriter(AUDIT_DB_PATH)
         # --- Phase 3 fix: validate & construct INSIDE the outer try so
         # any failure path runs through the except block and marks the
         # runs row as failed. Previously these exits happened before the
@@ -5789,7 +5794,6 @@ async def run_multi_agent_stream(
         # Mirrors db/recorder.py's _COARSE_EVENT_TYPES — deltas stay live-only,
         # while one bounded thinking_end row retains each completed provider
         # summary for History replay.
-        _persist_disabled: Set[int] = set()
         _COARSE_EVENT_TYPES_SET = frozenset({
             "status", "tool_call", "tool_result", "thinking_end", "error", "complete",
         })
@@ -5903,8 +5907,18 @@ async def run_multi_agent_stream(
                 logger.warning("event_queue full; SYSTEM error dropped")
 
         def persist_event(evt: dict) -> None:
-            if db_conn is None:
+            # Events are saved by a background writer so a busy database
+            # never makes the server's event loop wait (db/event_writer.py).
+            if db_conn is None or event_writer is None:
                 return
+            # Saving an event used to commit the run connection too, and some
+            # writes (run incidents) rely on that. Keep doing so; with nothing
+            # pending it costs no database call.
+            if db_conn.in_transaction:
+                try:
+                    db_conn.commit()
+                except Exception:
+                    logger.warning("Failed to commit pending run writes", exc_info=True)
             event_type = str(evt.get("event", ""))
             # Coordinator events and agent events have different allowlists.
             # Check their union here, then route on the presence of an agent
@@ -5923,46 +5937,21 @@ async def run_multi_agent_stream(
             if not isinstance(agent_id_raw, str) or not agent_id_raw:
                 if event_type not in _RUN_EVENT_TYPES_SET or run_id is None:
                     return
-                try:
-                    phase_raw = data.get("phase") or data.get("stage")
-                    phase = phase_raw if isinstance(phase_raw, str) else None
-                    repo.log_run_event(
-                        db_conn,
-                        run_id=run_id,
-                        event_type=event_type,
-                        payload=data,
-                        phase=phase,
-                    )
-                    db_conn.commit()
-                except Exception:
-                    logger.warning(
-                        "Failed to persist run event %s for run %s",
-                        event_type, run_id, exc_info=True,
-                    )
+                phase_raw = data.get("phase") or data.get("stage")
+                phase = phase_raw if isinstance(phase_raw, str) else None
+                event_writer.run_event(
+                    run_id=run_id, event_type=event_type, payload=data, phase=phase,
+                )
                 return
             if event_type not in _COARSE_EVENT_TYPES_SET:
                 return
             rai = run_agent_ids_by_agent_id.get(agent_id_raw.lower())
-            if rai is None or rai in _persist_disabled:
+            if rai is None:
                 return
-            try:
-                phase = data.get("phase") if isinstance(data.get("phase"), str) else None
-                repo.log_event(
-                    db_conn,
-                    run_agent_id=rai,
-                    event_type=event_type,
-                    payload=data,
-                    phase=phase,
-                )
-                db_conn.commit()
-            except Exception:
-                # Stop trying for this agent — one failure likely means the
-                # DB is wedged and we shouldn't spam warnings on every event.
-                logger.warning(
-                    "persist_event disabled for run_agent %s after error",
-                    rai, exc_info=True,
-                )
-                _persist_disabled.add(rai)
+            phase = data.get("phase") if isinstance(data.get("phase"), str) else None
+            event_writer.agent_event(
+                run_agent_id=rai, event_type=event_type, payload=data, phase=phase,
+            )
 
         # Event bridge: concurrent agents push events into this queue,
         # and the SSE generator drains it in real time. None = all done.
@@ -8781,6 +8770,10 @@ async def run_multi_agent_stream(
                 db_conn.close()
             except Exception:
                 pass
+        if event_writer is not None:
+            # Off the event loop: the writer may still be saving queued events.
+            # Last, so a cancellation here cannot skip releasing the run.
+            await asyncio.to_thread(event_writer.close)
 
 
 # ---------------------------------------------------------------------------

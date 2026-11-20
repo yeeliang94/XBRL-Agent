@@ -443,3 +443,62 @@ def test_cascade_writes_audit_events_for_computed_facts(seeded_db) -> None:
     assert any(e[0] == "cascade" for e in events), (
         f"no cascade audit event for computed parent; got {events}"
     )
+
+
+def test_overlapping_recomputes_keep_one_open_conflict(seeded_db, monkeypatch) -> None:
+    """Two agents verify at once, so two recomputes can overlap on one run.
+    One that read the open conflicts before the other committed its new
+    conflict must not add a second open row for the same imbalance."""
+    import concept_model.cascade as cascade
+
+    db, run_id = seeded_db
+    parent = _uuid_for_row(db, "SOFP-Sub-CuNonCu", 39)
+    _seed_fact(db, run_id, parent, value=50000.0,
+               value_status="observed", children_status="itemised")
+    conn = sqlite3.connect(str(db))
+    try:
+        children = [r[0] for r in conn.execute(
+            "SELECT child_uuid FROM concept_edges WHERE parent_uuid = ?", (parent,))]
+    finally:
+        conn.close()
+    _seed_fact(db, run_id, children[0], value=20000.0)
+    _seed_fact(db, run_id, children[1], value=27000.0)
+
+    real_connect = cascade.db_engine.connect
+
+    class _OtherRecomputeCommitsAfterRead:
+        def __init__(self, inner):
+            self._inner = inner
+            self._raced = False
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def execute(self, sql, *args):
+            cur = self._inner.execute(sql, *args)
+            if not self._raced and "SELECT id, concept_uuid FROM run_concept_conflicts" in sql:
+                self._raced = True
+                rows = cur.fetchall()
+                other = sqlite3.connect(str(db))
+                other.execute(
+                    "INSERT INTO run_concept_conflicts(run_id, concept_uuid, period, entity_scope, "
+                    "kind, residual, detail, status, created_at, dimension_key) "
+                    "VALUES (?, ?, 'CY', 'Company', 'partial_state', 3000.0, 'other', 'open', "
+                    "'2026-05-21T00:00:00Z', '')", (run_id, parent))
+                other.commit()
+                other.close()
+                return type("Rows", (), {"fetchall": lambda _self: rows})()
+            return cur
+
+    monkeypatch.setattr(cascade.db_engine, "connect",
+                        lambda *a, **k: _OtherRecomputeCommitsAfterRead(real_connect(*a, **k)))
+    recompute_after_turn(db, run_id)
+
+    conn = sqlite3.connect(str(db))
+    try:
+        open_count = conn.execute(
+            "SELECT COUNT(*) FROM run_concept_conflicts WHERE run_id = ? AND concept_uuid = ? "
+            "AND kind = 'partial_state' AND status = 'open'", (run_id, parent)).fetchone()[0]
+    finally:
+        conn.close()
+    assert open_count == 1

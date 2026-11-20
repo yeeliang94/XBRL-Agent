@@ -222,8 +222,8 @@ def _slot_writes(conn, template_ids, level: str, standard: str,
                tc.namespace_uri, tc.local_name, tc.concept_role,
                tc.data_type, tc.period_type
         FROM concept_nodes n
-        JOIN concept_targets t USING(concept_uuid)
-        LEFT JOIN concept_semantic_addresses sa USING(concept_uuid)
+        JOIN concept_targets t ON t.concept_uuid = n.concept_uuid
+        LEFT JOIN concept_semantic_addresses sa ON sa.concept_uuid = n.concept_uuid
         LEFT JOIN taxonomy_concepts tc ON tc.source_element_id = sa.primary_concept
         WHERE n.is_current = 1 AND n.kind IN ('LEAF', 'MATRIX_CELL', 'COMPUTED')
         """ + f"AND n.template_id IN ({','.join('?' * len(ids))})",

@@ -160,11 +160,11 @@ def export_run_to_xlsx(
             # retained earnings, so clear only the current template's targets.
             py_targets = conn.execute(
                 "SELECT t.target_sheet, t.target_row, t.target_col "
-                "FROM concept_targets t JOIN concept_nodes n USING(concept_uuid) "
+                "FROM concept_targets t JOIN concept_nodes n ON n.concept_uuid = t.concept_uuid "
                 "WHERE t.period = 'PY' AND n.is_current = 1 AND (? IS NULL OR n.template_id = ?) "
                 "UNION SELECT a.alias_sheet, a.alias_row, t.target_col "
-                "FROM concept_render_aliases a JOIN concept_nodes n USING(concept_uuid) "
-                "JOIN concept_targets t USING(concept_uuid) "
+                "FROM concept_render_aliases a JOIN concept_nodes n ON n.concept_uuid = a.concept_uuid "
+                "JOIN concept_targets t ON t.concept_uuid = a.concept_uuid "
                 "WHERE t.period = 'PY' AND n.is_current = 1 AND (? IS NULL OR n.template_id = ?)",
                 (template_id, template_id, template_id, template_id),
             ).fetchall()

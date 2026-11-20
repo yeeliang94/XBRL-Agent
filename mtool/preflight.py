@@ -142,7 +142,7 @@ def _coverage_state(conn: sqlite3.Connection,
     rows = conn.execute(
         "SELECT note_num, subnote_ref, status, reviewer_verdict, title "
         "FROM notes_coverage_rows WHERE run_id = ? "
-        "ORDER BY note_num, (subnote_ref IS NOT NULL), subnote_ref",
+        "ORDER BY note_num, CASE WHEN subnote_ref IS NULL THEN 0 ELSE 1 END, subnote_ref",
         (run_id,),
     ).fetchall()
     if not rows:

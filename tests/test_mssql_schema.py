@@ -1,0 +1,54 @@
+"""The SQL Server tables stay in step with the SQLite schema.
+
+``db/mssql_baseline.py`` is generated from the SQLite schema. A schema change
+that skips regenerating it, or skips the matching step for databases already
+on Azure, would leave Azure SQL missing columns that the code writes.
+"""
+from __future__ import annotations
+
+from db import mssql, mssql_baseline
+from db.schema import CURRENT_SCHEMA_VERSION
+from scripts import export_mssql_schema
+
+
+def test_checked_in_baseline_matches_the_sqlite_schema():
+    assert export_mssql_schema.OUTPUT.read_text(encoding="utf-8") == export_mssql_schema.build(), (
+        "SQLite schema changed: run `venv/bin/python scripts/export_mssql_schema.py`")
+
+
+def test_every_schema_version_after_the_first_azure_deploy_has_a_sql_server_step():
+    assert mssql_baseline.BASELINE_VERSION == CURRENT_SCHEMA_VERSION
+    missing = [v for v in range(mssql.FIRST_AZURE_VERSION + 1, CURRENT_SCHEMA_VERSION + 1)
+               if v not in mssql.MIGRATIONS]
+    assert missing == [], f"Add SQL Server steps to db/mssql.py MIGRATIONS for versions {missing}"
+
+
+def test_every_sqlite_link_is_a_foreign_key_on_azure_sql():
+    """Without a key, Azure SQL accepts a row whose parent was deleted; SQLite refuses it."""
+    import re
+
+    from db import mssql_v57
+
+    db = export_mssql_schema._sqlite_schema()
+    links = {f"fk_{t}_{fk[0]}" for (t,) in db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        for fk in db.execute(f"PRAGMA foreign_key_list('{t}')")}
+
+    def keys(statements):
+        return {m for s in statements for m in re.findall(r"ADD CONSTRAINT \[(fk_\w+)\] FOREIGN KEY", s)}
+
+    def delete_triggers(statements):
+        return sorted(s for s in statements if s.startswith("CREATE TRIGGER") and "_on_delete]" in s)
+
+    assert keys(mssql_baseline.STATEMENTS) == links
+    # A v56 database already had the links without a delete action as keys.
+    no_action = {f"fk_{t}_{fk[0]}" for (t,) in db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        for fk in db.execute(f"PRAGMA foreign_key_list('{t}')") if fk[6].upper() == "NO ACTION"}
+    assert keys(mssql_v57.STATEMENTS) | no_action == links
+    # An upgraded database cascades deletes exactly as a new one does.
+    triggers = delete_triggers(mssql_baseline.STATEMENTS)
+    assert triggers and all("INSTEAD OF DELETE" in s for s in triggers)
+    assert delete_triggers(mssql_v57.STATEMENTS) == triggers
+    dropped = sorted(s.split("[")[1].rstrip("]") for s in mssql_v57.STATEMENTS if s.startswith("DROP TRIGGER"))
+    assert dropped == sorted(s.split("[")[1].split("]")[0] for s in triggers)

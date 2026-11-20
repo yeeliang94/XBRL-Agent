@@ -90,22 +90,20 @@ def recompute_after_turn(db_path: str | Path, run_id: int) -> None:
 
         from concept_model.periods import run_periods
         periods = run_periods(conn, run_id)
+        # Read the formula tree once, before any write. Reading it per scope
+        # re-read every template's nodes and edges while this transaction
+        # held the write lock from the previous scope's writes.
+        formulas = _load_formulas(conn)
         for period, entity_scope, dims in scope_pairs:
             if period not in periods:
                 continue
-            _recompute_scope(conn, run_id, period, entity_scope, dims)
+            _recompute_scope(conn, run_id, period, entity_scope, dims, formulas)
         conn.commit()
     finally:
         conn.close()
 
 
-def _recompute_scope(
-    conn: sqlite3.Connection,
-    run_id: int,
-    period: str,
-    entity_scope: str,
-    dims: str = "",
-) -> None:
+def _load_formulas(conn) -> tuple[dict[str, str], dict[str, list[tuple[str, float]]]]:
     # Recomputable concept rows, keyed by uuid. A concept is recomputable
     # when it owns a formula — i.e. has outgoing edges. For linear
     # statements that's every COMPUTED row. For SOCIE matrix templates the
@@ -133,6 +131,19 @@ def _recompute_scope(
             (child_uuid, float(coef))
         )
 
+    return computed, edges_by_parent
+
+
+def _recompute_scope(
+    conn: sqlite3.Connection,
+    run_id: int,
+    period: str,
+    entity_scope: str,
+    dims: str = "",
+    formulas: tuple[dict[str, str], dict[str, list[tuple[str, float]]]] | None = None,
+) -> None:
+    computed, edges_by_parent = formulas if formulas is not None else _load_formulas(conn)
+
     # Preload every fact for this scope ONCE, keyed by concept_uuid, and read
     # from this dict inside the fixed-point loop instead of issuing a SELECT
     # per parent + per child on every pass. The loop's own writes update this
@@ -153,6 +164,30 @@ def _recompute_scope(
             (run_id, period, entity_scope, dims),
         ).fetchall()
     }
+
+    # Open partial_state conflicts for this scope, read once. Closing or
+    # updating one is then a write only when one exists: on Azure SQL each
+    # statement is a network round trip, and an unconditional close per
+    # parent per pass held the write lock for many seconds per recompute.
+    open_conflicts: dict[str, int] = {}
+    for conflict_id, concept_uuid in conn.execute(
+        "SELECT id, concept_uuid FROM run_concept_conflicts WHERE run_id = ? "
+        "AND period = ? AND entity_scope = ? AND dimension_key = ? "
+        "AND kind = 'partial_state' AND status = 'open' ORDER BY id",
+        (run_id, period, entity_scope, dims),
+    ).fetchall():
+        open_conflicts.setdefault(concept_uuid, conflict_id)
+
+    def _resolve_open_conflict(parent_uuid: str, now: str) -> None:
+        if open_conflicts.pop(parent_uuid, None) is None:
+            return
+        conn.execute(
+            "UPDATE run_concept_conflicts SET status = 'resolved', "
+            "resolved_at = ? WHERE run_id = ? AND concept_uuid = ? "
+            "AND period = ? AND entity_scope = ? AND dimension_key = ? "
+            "AND kind = 'partial_state' AND status = 'open'",
+            (now, run_id, parent_uuid, period, entity_scope, dims),
+        )
 
     # Iterate to a fixed point — each pass aggregates parents whose
     # children are all known.
@@ -236,13 +271,7 @@ def _recompute_scope(
                         _value_json(None), dims,
                     ),
                 )
-                conn.execute(
-                    "UPDATE run_concept_conflicts SET status = 'resolved', "
-                    "resolved_at = ? WHERE run_id = ? AND concept_uuid = ? "
-                    "AND period = ? AND entity_scope = ? AND dimension_key = ? "
-                    "AND kind = 'partial_state' AND status = 'open'",
-                    (now, run_id, parent_uuid, period, entity_scope, dims),
-                )
+                _resolve_open_conflict(parent_uuid, now)
                 # Keep the in-memory snapshot in lock-step with the DB write
                 # so a later pass / parent sees the blanked value.
                 if parent_fact is not None:
@@ -262,35 +291,47 @@ def _recompute_scope(
                 # conflict already exists for this (run, concept,
                 # period, scope), update its residual in place instead
                 # of inserting a fresh row.
-                existing = conn.execute(
-                    "SELECT id FROM run_concept_conflicts WHERE run_id = ? "
-                    "AND concept_uuid = ? AND period = ? AND entity_scope = ? AND dimension_key = ? "
-                    "AND kind = 'partial_state' AND status = 'open'",
-                    (run_id, parent_uuid, period, entity_scope, dims),
-                ).fetchone()
+                existing = open_conflicts.get(parent_uuid)
                 detail = (
                     f"observed parent={parent_fact['value']} but children "
                     f"sum to {total}; residual={residual}"
                 )
-                if existing is not None:
-                    conn.execute(
-                        "UPDATE run_concept_conflicts SET residual = ?, "
-                        "detail = ? WHERE id = ?",
-                        (residual, detail, existing[0]),
-                    )
-                else:
+                # The cached id can be stale when another recompute or a user
+                # changed the row since it was read, so each write re-checks
+                # the open row under the write lock it takes.
+                updated = existing is not None and conn.execute(
+                    "UPDATE run_concept_conflicts SET residual = ?, "
+                    "detail = ? WHERE id = ? AND status = 'open'",
+                    (residual, detail, existing),
+                ).rowcount > 0
+                if not updated:
+                    open_conflicts.pop(parent_uuid, None)
                     conn.execute(
                         """
                         INSERT INTO run_concept_conflicts(
                             run_id, concept_uuid, period, entity_scope,
                             kind, residual, detail, status, created_at, dimension_key
-                        ) VALUES (?, ?, ?, ?, 'partial_state', ?, ?, 'open', ?, ?)
+                        ) SELECT ?, ?, ?, ?, 'partial_state', ?, ?, 'open', ?, ?
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM run_concept_conflicts WHERE run_id = ?
+                            AND concept_uuid = ? AND period = ? AND entity_scope = ?
+                            AND dimension_key = ? AND kind = 'partial_state' AND status = 'open')
                         """,
                         (
                             run_id, parent_uuid, period, entity_scope,
                             residual, detail, _now(), dims,
+                            run_id, parent_uuid, period, entity_scope, dims,
                         ),
                     )
+                    row = conn.execute(
+                        "SELECT id FROM run_concept_conflicts WHERE run_id = ? "
+                        "AND concept_uuid = ? AND period = ? AND entity_scope = ? "
+                        "AND dimension_key = ? AND kind = 'partial_state' AND status = 'open' "
+                        "ORDER BY id",
+                        (run_id, parent_uuid, period, entity_scope, dims),
+                    ).fetchone()
+                    if row is not None:
+                        open_conflicts[parent_uuid] = int(row[0])
                 # We do NOT overwrite the observed parent — the user
                 # decides which side to trust via the reconciliation
                 # queue.
@@ -305,13 +346,7 @@ def _recompute_scope(
             # totals — the conflict was a phantom that the old self-lock bug
             # raised against the cascade's own prior write. Close it so the
             # reconciliation queue reflects reality (peer-review + self-lock fix).
-            conn.execute(
-                "UPDATE run_concept_conflicts SET status = 'resolved', "
-                "resolved_at = ? WHERE run_id = ? AND concept_uuid = ? "
-                "AND period = ? AND entity_scope = ? AND dimension_key = ? "
-                "AND kind = 'partial_state' AND status = 'open'",
-                (_now(), run_id, parent_uuid, period, entity_scope, dims),
-            )
+            _resolve_open_conflict(parent_uuid, _now())
 
             # Write the recomputed value back.  If we wrote a row that
             # didn't exist before, mark it changed so the outer loop
