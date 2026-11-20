@@ -272,3 +272,48 @@ def test_long_text_is_sent_as_nvarchar_max_so_comparisons_work(server, tmp_path,
     conn.commit()
     assert any(s.startswith("UPDATE notes_cells") for s in server.log)
 
+
+
+def test_a_batch_of_writes_travels_in_one_request_under_the_writer_lock(server, tmp_path):
+    conn = _connect(tmp_path)
+    engine.run_batch(conn, [
+        ("UPDATE runs SET status = ? WHERE id = ?", ("done", 1)),
+        ("INSERT INTO run_events(run_id, ts, event_type, phase, payload_json) VALUES (?, ?, ?, ?, ?)",
+         (1, "t", "x", None, "{}")),
+        ("DELETE FROM run_events WHERE run_id = ?", (2,)),
+    ])
+    sent = [s for s in server.log if "UPDATE runs" in s]
+    assert len(sent) == 1
+    assert "INSERT INTO run_events" in sent[0] and "DELETE FROM run_events" in sent[0]
+    assert sum("sp_getapplock" in s for s in server.log) == 1
+    assert conn.in_transaction
+    conn.commit()
+    assert server.log[-1] == "COMMIT TRANSACTION"
+
+
+def test_a_large_batch_is_split_below_the_servers_parameter_limit(server, tmp_path):
+    conn = _connect(tmp_path)
+    engine.run_batch(conn, [("UPDATE runs SET status = ? WHERE id = ?", ("done", i)) for i in range(1500)])
+    sent = [s for s in server.log if "UPDATE runs" in s]
+    assert sum(s.count("UPDATE runs") for s in sent) == 1500
+    assert len(sent) > 1 and all(s.count("?") <= 2000 for s in sent)
+
+
+def test_every_request_of_a_split_batch_ends_its_last_statement(server, tmp_path):
+    # SQL Server refuses an upsert (MERGE) that is not closed with a semicolon,
+    # and a split can land right after one.
+    upsert = ("INSERT INTO run_concept_facts(run_id, concept_uuid, period, entity_scope, value, "
+              "value_status, dimension_key) VALUES (?, ?, ?, ?, ?, ?, ?) "
+              "ON CONFLICT(run_id, concept_uuid, period, entity_scope, dimension_key) "
+              "DO UPDATE SET value = excluded.value")
+    conn = _connect(tmp_path)
+    engine.run_batch(conn, [(upsert, (1, f"c{i}", "CY", "Company", 1.0, "observed", "")) for i in range(450)])
+    sent = [s for s in server.log if "MERGE INTO run_concept_facts" in s]
+    assert len(sent) > 1
+    assert all(s.rstrip().endswith(";") for s in sent)
+
+
+def test_a_batch_refuses_statements_that_read(server, tmp_path):
+    conn = _connect(tmp_path)
+    with pytest.raises(sqlite3.ProgrammingError):
+        engine.run_batch(conn, [("SELECT id FROM runs WHERE id = ?", (1,))])

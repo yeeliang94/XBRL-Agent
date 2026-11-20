@@ -25,7 +25,8 @@ _ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "..")) + os.sep
 _seen: set = set()
 _listeners: list[Callable[[str, str], None]] = []
 _real_connect = sqlite3.connect
-_SQLITE_ONLY = {os.path.join("db", "schema.py"), os.path.join("scripts", "export_mssql_schema.py")}
+_SQLITE_ONLY = {os.path.join("db", "schema.py"), os.path.join("scripts", "export_mssql_schema.py"),
+                os.path.join("db", "scratch.py")}
 
 
 def _origin():
@@ -46,7 +47,8 @@ def _record(sql) -> None:
         return
     origin = _origin()
     # The SQLite schema code and its SQL Server exporter read SQLite's own
-    # catalogue; the application never runs them against Azure SQL.
+    # catalogue; the application never runs them against Azure SQL. Nor does
+    # it run db/scratch.py, an in-memory SQLite copy of a few rows.
     if origin is None or origin in _SQLITE_ONLY:
         return
     _seen.add(sql)

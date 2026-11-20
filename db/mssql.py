@@ -51,6 +51,9 @@ _POOL_PING_AFTER_S = 30.0
 # long, the same as the row-lock wait below.
 MIN_LOCK_WAIT_S = 30.0
 _CONNECT_ATTEMPTS = 4
+# SQL Server accepts 2,100 parameters in one request; stay under it.
+_BATCH_MAX_PARAMS = 2000
+_BATCH_MAX_STATEMENTS = 200
 
 
 def _pyodbc():
@@ -288,6 +291,37 @@ class Connection:
 
     def executemany(self, sql: str, seq_of_parameters: Iterable) -> "Cursor":
         return self.cursor().executemany(sql, seq_of_parameters)
+
+    def run_batch(self, statements: Iterable[tuple[str, Sequence]]) -> None:
+        """Run write statements in as few round trips as the server allows.
+
+        One statement per round trip keeps the write lock for the whole list.
+        Here the statements travel together, in order, inside the caller's
+        transaction. Nothing is returned: no rows, row counts or new ids.
+        """
+        parts: list[str] = []
+        args: list = []
+
+        def send() -> None:
+            if parts:
+                # Every statement is terminated: SQL Server requires it after MERGE.
+                self._run(";\n".join(parts) + ";", args)
+                parts.clear()
+                args.clear()
+
+        for sql, params in statements:
+            t = tr.translate(sql, _tables())
+            if t.kind != "sql" or not t.is_write:
+                raise sqlite3.ProgrammingError("run_batch() takes write statements only")
+            bound = _bind(params, t.order)
+            if len(bound) > _BATCH_MAX_PARAMS:
+                raise sqlite3.ProgrammingError("too many parameters for one statement")
+            self._before_write()
+            if len(args) + len(bound) > _BATCH_MAX_PARAMS or len(parts) >= _BATCH_MAX_STATEMENTS:
+                send()
+            parts.append(t.sql.strip().rstrip(";").rstrip())
+            args.extend(bound)
+        send()
 
     def commit(self) -> None:
         if self._in_tx:

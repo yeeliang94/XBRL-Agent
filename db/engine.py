@@ -48,6 +48,21 @@ def connect(target: str | os.PathLike, *, timeout: float = 5.0):
     return sqlite3.connect(path, timeout=timeout)
 
 
+def run_batch(conn, statements) -> None:
+    """Run ``(sql, parameters)`` write statements in order, in the open transaction.
+
+    On Azure SQL they travel in as few round trips as possible, so the write
+    lock is held for a moment instead of one round trip per statement. On
+    SQLite they run one by one, as before. No results are returned.
+    """
+    batch = getattr(conn, "run_batch", None)
+    if batch is not None:
+        batch(statements)
+        return
+    for sql, params in statements:
+        conn.execute(sql, params)
+
+
 def check_production_database() -> None:
     """Refuse to keep data in a SQLite file on Azure App Service.
 

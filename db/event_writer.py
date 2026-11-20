@@ -4,8 +4,11 @@ The run orchestrator streams events from the server's event loop. Writing
 them there made the whole server wait whenever another writer held the
 database lock: up to 5 seconds on SQLite, longer on Azure SQL, where every
 statement is a network round trip. Events are history, not state, so they are
-queued and written in order by one thread with its own connection. A write
-that fails is retried; a single lost event no longer stops an agent's history.
+queued and written in order by one thread with its own connection. Events
+that arrive within about a second of each other are saved together: one
+transaction, and on Azure SQL one request.
+A write that fails is retried; a single lost event no longer stops an agent's
+history.
 """
 from __future__ import annotations
 
@@ -22,13 +25,28 @@ from db import repository as repo
 logger = logging.getLogger(__name__)
 
 _ATTEMPTS = 3
+_GROUP_MAX = 200
 _STOP = object()
 
 
+class _Statements:
+    """Stands in for a connection to collect the inserts of a group of events."""
+
+    lastrowid = 0  # the save functions return the new row id; nothing here uses it
+
+    def __init__(self) -> None:
+        self.collected: list[tuple[str, tuple]] = []
+
+    def execute(self, sql: str, parameters=()) -> "_Statements":
+        self.collected.append((sql, tuple(parameters)))
+        return self
+
+
 class EventWriter:
-    def __init__(self, db_path, *, retry_delay_s: float = 1.0) -> None:
+    def __init__(self, db_path, *, retry_delay_s: float = 1.0, group_window_s: float = 1.0) -> None:
         self._db_path = str(db_path)
         self._retry_delay_s = retry_delay_s
+        self._group_window_s = group_window_s
         self._queue: queue.Queue = queue.Queue()
         self._thread = threading.Thread(target=self._loop, name="run-event-writer", daemon=True)
         self._thread.start()
@@ -60,17 +78,51 @@ class EventWriter:
             conn.execute("PRAGMA busy_timeout = 5000")
         except Exception:
             logger.exception("run event writer could not open the database; events will not be saved")
-        while True:
-            item = self._queue.get()
-            if item is _STOP:
-                break
-            if conn is not None:
-                self._write(conn, *item)
+        stopping = False
+        while not stopping:
+            group = [self._queue.get()]
+            # Wait a moment for more, so a run's steady stream of events costs
+            # one save (and one turn at the write lock) per moment, not per
+            # event. Closing the writer ends the wait at once.
+            deadline = time.monotonic() + self._group_window_s
+            while _STOP not in group and len(group) < _GROUP_MAX:
+                try:
+                    group.append(self._queue.get(timeout=max(0.0, deadline - time.monotonic())))
+                except queue.Empty:
+                    break
+            if _STOP in group:
+                stopping = True
+                group = group[:group.index(_STOP)]
+            if conn is not None and group:
+                self._write_group(conn, group)
         if conn is not None:
             try:
                 conn.close()
             except Exception:
                 pass
+
+    def _write_group(self, conn, group: list) -> None:
+        for attempt in range(1, _ATTEMPTS + 1) if len(group) > 1 else ():
+            try:
+                statements = _Statements()
+                for write, kwargs in group:
+                    write(statements, **kwargs)
+                db_engine.run_batch(conn, statements.collected)
+                conn.commit()
+                return
+            except Exception as exc:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                # A busy database: try the whole group again. Anything else:
+                # save them one at a time, so one event that cannot be saved
+                # does not take the rest.
+                if attempt == _ATTEMPTS or not isinstance(exc, sqlite3.OperationalError):
+                    break
+                time.sleep(self._retry_delay_s * attempt)
+        for write, kwargs in group:
+            self._write(conn, write, kwargs)
 
     def _write(self, conn, write: Callable[..., Any], kwargs: dict) -> None:
         for attempt in range(1, _ATTEMPTS + 1):

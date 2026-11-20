@@ -684,6 +684,12 @@ is a foreign key there; cascading deletes are INSTEAD OF DELETE triggers on
 the parent (v57). SQL Server checks each link as the row is written, with no
 `defer_foreign_keys`, so write a parent before its children. Every write transaction takes one
 database-wide lock so read-then-write code keeps SQLite's one-writer rule.
+Each statement is a network round trip there, so hold that lock briefly:
+`project_writes` prepares a batch of figures on an in-memory copy of the rows
+it reads (`concept_model/write_snapshot.py`, `db/scratch.py`), confirms under
+the lock that nothing it relied on changed, and sends the writes together
+with `db.engine.run_batch`. A write prepared this way addresses rows by their
+keys, never by a row id read earlier.
 After query changes, refresh `scripts/azure_sql_statements.json` (see
 `scripts/sql_capture_plugin.py`) and run `scripts/azure_sql_check.py` on Azure.
 
