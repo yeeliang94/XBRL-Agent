@@ -317,3 +317,98 @@ def test_a_batch_refuses_statements_that_read(server, tmp_path):
     conn = _connect(tmp_path)
     with pytest.raises(sqlite3.ProgrammingError):
         engine.run_batch(conn, [("SELECT id FROM runs WHERE id = ?", (1,))])
+
+
+def _lock_timeout_ms(server) -> int:
+    lock = next(s for s in reversed(server.log) if "sp_getapplock" in s)
+    return int(lock.split("@LockTimeout = ")[1].split(";")[0])
+
+
+def test_background_work_waits_patiently_for_its_turn_to_write(server, tmp_path):
+    conn = _connect(tmp_path)
+    conn.execute("UPDATE runs SET status = ? WHERE id = ?", ("done", 1))
+    assert _lock_timeout_ms(server) == int(mssql.PATIENT_LOCK_WAIT_S * 1000)
+
+
+def test_a_web_request_keeps_a_short_wait_and_a_run_it_starts_is_patient_again(server, tmp_path):
+    with engine.lock_wait(30.0):
+        conn = _connect(tmp_path)
+        conn.execute("UPDATE runs SET status = ? WHERE id = ?", ("done", 1))
+        assert _lock_timeout_ms(server) == 30_000
+        conn.rollback()
+        engine.set_lock_wait(None)  # what the run orchestrator does
+        conn.execute("UPDATE runs SET status = ? WHERE id = ?", ("done", 1))
+        assert _lock_timeout_ms(server) == int(mssql.PATIENT_LOCK_WAIT_S * 1000)
+
+
+def test_a_run_started_by_a_web_request_is_patient_on_every_step_of_its_stream(server, tmp_path):
+    """The progress stream pulls each step of a run in a new task. Each must
+    wait patiently, as must the tasks and threads the run starts."""
+    import asyncio
+
+    import server as app_server
+
+    seen = []
+
+    async def run():
+        for _ in range(3):
+            seen.append(engine.lock_wait_seconds())
+            seen.append(await asyncio.to_thread(engine.lock_wait_seconds))
+            seen.append(await asyncio.create_task(asyncio.to_thread(engine.lock_wait_seconds)))
+            yield {"event": "status", "data": {}}
+
+    async def request():
+        with engine.lock_wait(30.0):  # what the request middleware sets
+            return [frame async for frame in app_server.sse_stream_with_keepalive(run())]
+
+    frames = asyncio.run(request())
+    assert len(frames) == 3
+    assert seen == [None] * 9
+
+
+def test_code_on_the_event_loop_never_waits_longer_than_before(server, tmp_path):
+    import asyncio
+
+    async def write():
+        conn = _connect(tmp_path)
+        conn.execute("UPDATE runs SET status = ? WHERE id = ?", ("done", 1))
+
+    asyncio.run(write())
+    assert _lock_timeout_ms(server) == int(mssql.MIN_LOCK_WAIT_S * 1000)
+
+
+def test_a_read_azure_refuses_as_too_busy_is_repeated(server, tmp_path, monkeypatch):
+    monkeypatch.setattr(mssql, "_BUSY_RETRY_DELAYS_S", (0.0, 0.0))
+    refusals = [FakeError("42000", "The service is currently busy. (40501)")] * 2
+    real_execute = FakeCursor.execute
+
+    def busy_twice(self, sql, *params):
+        if sql.startswith("SELECT id FROM runs") and refusals:
+            raise refusals.pop()
+        return real_execute(self, sql, *params)
+
+    monkeypatch.setattr(FakeCursor, "execute", busy_twice)
+    conn = _connect(tmp_path)
+    conn.execute("SELECT id FROM runs WHERE id = ?", (1,))
+    assert not refusals
+
+
+def test_too_busy_inside_a_save_is_reported_as_busy_for_the_caller_to_repeat(server, tmp_path, monkeypatch):
+    monkeypatch.setattr(mssql, "_BUSY_RETRY_DELAYS_S", (0.0,))
+    server.fail["UPDATE runs"] = FakeError("42000", "Resource ID : 1. The request limit is reached. (10928)")
+    conn = _connect(tmp_path)
+    with pytest.raises(sqlite3.OperationalError, match="database is busy") as caught:
+        conn.execute("UPDATE runs SET status = ? WHERE id = ?", ("done", 1))
+    assert engine.is_busy(caught.value)
+    assert sum("UPDATE runs" in s for s in server.log) == 1
+
+
+def test_an_error_that_only_quotes_a_busy_number_is_not_treated_as_busy(server, tmp_path, monkeypatch):
+    monkeypatch.setattr(mssql, "_BUSY_RETRY_DELAYS_S", (0.0,))
+    server.fail["SELECT id FROM runs"] = FakeError(
+        "22003", "Arithmetic overflow converting 14060 to data type smallint. (8115)")
+    conn = _connect(tmp_path)
+    with pytest.raises(sqlite3.OperationalError) as caught:
+        conn.execute("SELECT id FROM runs WHERE id = ?", (1,))
+    assert not engine.is_busy(caught.value)
+    assert sum("SELECT id FROM runs" in s for s in server.log) == 1

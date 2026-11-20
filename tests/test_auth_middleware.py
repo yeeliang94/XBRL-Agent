@@ -81,3 +81,15 @@ def test_no_api_route_ships_unguarded(client):
         guarded = middleware.is_guarded(path)
         is_exempt = path.startswith("/api/auth/") or path == "/api/health"
         assert guarded == (not is_exempt), f"{path}: guarded={guarded}, exempt={is_exempt}"
+
+
+def test_a_busy_database_during_the_sign_in_check_answers_busy_not_an_error(client, monkeypatch):
+    import sqlite3
+
+    def busy(*args, **kwargs):
+        raise sqlite3.OperationalError("database is busy: (40501)")
+
+    monkeypatch.setattr(middleware, "resolve_session", busy)
+    r = client.get("/api/runs")
+    assert r.status_code == 503
+    assert r.json()["detail"] == "The database is busy. Please try again in a moment."

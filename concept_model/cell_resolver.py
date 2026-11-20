@@ -224,20 +224,28 @@ def project_writes(
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
+        # One time allowance for the whole save, however many attempts it
+        # takes, so the agent's step does not time out while a save waits.
+        deadline = time.monotonic() + _SAVE_BUDGET_S
+        outer = db_engine.lock_wait_seconds()
         for attempt in range(1, _SAVE_ATTEMPTS + 1):
+            remaining = max(1.0, deadline - time.monotonic())
             try:
-                return _project(conn, run_id, template_id, writes, source_catalog)
+                with db_engine.lock_wait(remaining if outer is None else min(outer, remaining)):
+                    return _project(conn, run_id, template_id, writes, source_catalog)
             except sqlite3.OperationalError as exc:
                 conn.rollback()
                 # The save is all-or-nothing, so a busy database is safe to
                 # try again; anything else fails the same way next time.
-                if attempt == _SAVE_ATTEMPTS or not _is_busy(exc):
+                pause = _RETRY_DELAY_S * attempt
+                if (attempt == _SAVE_ATTEMPTS or not db_engine.is_busy(exc)
+                        or time.monotonic() + pause >= deadline):
                     raise
                 logger.warning(
                     "project_writes: database busy (attempt %d of %d), retrying",
                     attempt, _SAVE_ATTEMPTS,
                 )
-                time.sleep(_RETRY_DELAY_S * attempt)
+                time.sleep(pause)
             except Exception:
                 conn.rollback()
                 raise
@@ -246,13 +254,9 @@ def project_writes(
 
 
 _SAVE_ATTEMPTS = 3
+_SAVE_BUDGET_S = 120.0
 _PREPARED_ATTEMPTS = 2
 _RETRY_DELAY_S = 1.0
-
-
-def _is_busy(exc: BaseException) -> bool:
-    text = str(exc).lower()
-    return "locked" in text or "busy" in text
 
 
 def _project(conn, run_id: int, template_id: str, writes: list, source_catalog) -> ProjectionResult:

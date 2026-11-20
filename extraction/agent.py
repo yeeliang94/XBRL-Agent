@@ -9,6 +9,7 @@ hints from scout.
 
 import json
 import logging
+import threading
 import os
 import re
 from contextlib import nullcontext
@@ -163,6 +164,16 @@ class ExtractionDeps:
         # concept, e.g. row-1 date cells) stays advisory, never fatal.
         self.projection_failed: bool = False
         self.projection_error: Optional[str] = None
+        # Writes that reached the workbook but not the database because the
+        # database was too busy. Nothing of such a save lands, so the exact
+        # lost writes are known and the next write_facts saves them first;
+        # once they land, a failure that only ever was "busy" is cleared.
+        self.unsaved_writes: list = []
+        self.projection_failed_for_good: bool = False
+        # write_facts calls may run in parallel. Taking the unsaved writes,
+        # saving, and clearing them is one step, so one call cannot clear
+        # another call's dropped figures.
+        self.projection_lock = threading.Lock()
         # Item 23 (face coverage receipts): the scout's face_line_refs for this
         # statement (advisory expectation list). Populated from page_hints in
         # the factory. `face_coverage_receipt` holds the agent's submitted
@@ -223,7 +234,32 @@ def _is_force_save_allowed(deps: "ExtractionDeps") -> bool:
     return iter_based or attempts_fallback
 
 
+_UNSAVED_MESSAGE = (
+    "The database was too busy to save your figures. They are in the workbook "
+    "but NOT saved yet, so totals cannot be verified and the statement cannot "
+    "be finalised. Call the same tool again; the unsaved figures are saved "
+    "first."
+)
+
+
+class _NoNewWrites:
+    resolved_writes: list = []
+
+
+def _save_unsaved_writes(deps: "ExtractionDeps") -> Optional[str]:
+    """Save figures an earlier busy database dropped. The busy message if it is still busy."""
+    if not deps.unsaved_writes:
+        return None
+    _project_facts_if_canonical(deps, _NoNewWrites)
+    return _UNSAVED_MESSAGE if deps.unsaved_writes else None
+
+
 def _project_facts_if_canonical(deps: "ExtractionDeps", result) -> Optional[str]:
+    with deps.projection_lock:
+        return _project_facts_locked(deps, result)
+
+
+def _project_facts_locked(deps: "ExtractionDeps", result) -> Optional[str]:
     """Project a write_facts result's resolved writes into run_concept_facts.
 
     The fact store is the primary, transactional truth (rewrite Phase 4.1).
@@ -242,25 +278,33 @@ def _project_facts_if_canonical(deps: "ExtractionDeps", result) -> Optional[str]
     """
     if not (deps.run_id is not None and deps.db_path and deps.template_id):
         return None
-    if not result.resolved_writes:
+    writes = [*deps.unsaved_writes, *result.resolved_writes]
+    if not writes:
         return None
-    # The fatal flag is STICKY for the run (peer-review): once a projection
+    # The fatal flag is STICKY for the run (peer-review), with one exception
+    # below: a save the database was too busy to take, whose exact writes are
+    # kept in ``deps.unsaved_writes`` and saved again. Otherwise, once a projection
     # CALL has failed, facts from that batch are absent from the DB, and a
     # later write_facts only projects ITS OWN resolved_writes — a subsequent
     # partial correction (or a write of only unmapped cells) would otherwise
     # clear the flag while the earlier batch's facts are still missing. We
     # cannot cheaply prove a retry re-covered every lost fact, so we fail
-    # closed: do NOT reset projection_failed here. Projection failures should
-    # essentially never happen (local sqlite, same process), so the rare
-    # false-negative on a fully-recovered transient error is an acceptable
-    # price for never silently shipping a half-populated success.
+    # closed: do NOT reset projection_failed here.
+    #
+    # The statement also counts as failed WHILE the save is running. A save
+    # can wait on a busy database for longer than the agent's step limit; the
+    # coordinator then stops the agent while this thread is still waiting,
+    # and must not report figures that have not been saved as a success.
+    earlier = (deps.projection_failed, deps.projection_error)
+    deps.projection_failed = True
+    deps.projection_error = "the save had not finished when the agent stopped"
     try:
         from concept_model.cell_resolver import project_writes
         proj = project_writes(
             deps.db_path,
             deps.run_id,
             deps.template_id,
-            result.resolved_writes,
+            writes,
             filing_level=deps.filing_level,
             source_pdf_path=deps.pdf_path,
         )
@@ -271,11 +315,27 @@ def _project_facts_if_canonical(deps: "ExtractionDeps", result) -> Optional[str]
         )
         deps.projection_failed = True
         deps.projection_error = f"{type(e).__name__}: {e}"
+        from db import engine as db_engine
+        if db_engine.is_busy(e):
+            # The save is all-or-nothing, so none of these writes landed.
+            # Keep them: the statement stays failed unless they are saved.
+            deps.unsaved_writes = writes
+            return _UNSAVED_MESSAGE
+        deps.projection_failed_for_good = True
+        deps.unsaved_writes = []  # nothing can recover them now
         return (
             "Canonical projection FAILED: the fact store write did not land "
             "(see logs). This run cannot finalise — the download renders from "
             "the database, so a missing projection means missing data."
         )
+
+    deps.projection_failed, deps.projection_error = earlier
+    if deps.unsaved_writes:
+        # Every write a busy database dropped has now been saved.
+        deps.unsaved_writes = []
+        if not deps.projection_failed_for_good:
+            deps.projection_failed = False
+            deps.projection_error = None
 
     if proj.has_gaps:
         logger.warning(
@@ -317,7 +377,8 @@ def _project_facts_if_canonical(deps: "ExtractionDeps", result) -> Optional[str]
     if deps.face_line_refs:
         from openpyxl.utils import get_column_letter
 
-        for write in result.resolved_writes:
+        # ``writes`` includes figures recovered from an earlier busy save.
+        for write in writes:
             cell = (
                 str(write.get("sheet") or ""),
                 int(write.get("row")),
@@ -1498,6 +1559,11 @@ def create_extraction_agent(
     @agent.tool
     def verify_totals(ctx: RunContext[ExtractionDeps]) -> str:
         """Verify the filled workbook — checks balance/consistency for this statement."""
+        # Verification reads the saved figures; figures still unsaved would
+        # show up as imbalances that are not in the statement.
+        unsaved = _save_unsaved_writes(ctx.deps)
+        if unsaved:
+            return unsaved
         filled_path = ctx.deps.filled_path
         if not filled_path:
             # Per-statement workbook (multi-agent) takes priority over legacy shared name
@@ -1560,6 +1626,10 @@ def create_extraction_agent(
         Never use it to skip legitimate corrections.
         """
         ctx.deps.save_attempts += 1
+        unsaved = _save_unsaved_writes(ctx.deps)
+        if unsaved:
+            ctx.deps.last_save_error = unsaved
+            return unsaved
         gate_error = _check_save_gate(
             ctx.deps, acknowledge_unresolved, unresolved_reason
         )

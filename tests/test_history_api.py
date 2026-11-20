@@ -934,3 +934,18 @@ def test_diagnostics_zip_marks_oversized_traces_without_truncating_them(api_env,
         assert any(item["file"] == "traces/SOFP_conversation_trace.json" and "oversized" in item["reason"]
                    for item in json.loads(archive.read("manifest.json"))["unavailable"])
         assert json.loads(archive.read("run.json"))["run"]["id"] == run_id
+
+
+def test_a_request_the_database_is_too_busy_for_is_told_to_try_again(api_env, monkeypatch):
+    """A person gets a plain "busy" answer, not a server error."""
+    client, _, _ = api_env
+    from db import repository as repo
+
+    def busy(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(repo, "list_runs", busy)
+    r = client.get("/api/runs")
+    assert r.status_code == 503
+    assert r.json()["detail"] == "The database is busy. Please try again in a moment."
+    assert r.headers["Retry-After"] == "5"

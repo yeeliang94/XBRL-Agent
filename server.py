@@ -7,6 +7,8 @@ Run mode: POST /api/run/{session_id} with RunConfigRequest body.
 Orchestrates N sub-agents via coordinator, merges workbooks, runs
 cross-checks, and persists results to SQLite audit DB.
 """
+import sqlite3
+
 from db import engine as db_engine
 from utils.paths import safe_entry_path, safe_path
 # Force UTF-8 on Windows (avoids charmap codec errors with Unicode text from PDFs)
@@ -5163,9 +5165,26 @@ def _validate_and_build_run(
 _DRAIN_TASKS: set = set()
 
 
+def _background_task(coro) -> "asyncio.Task":
+    """Start run work that outlives or outweighs the web request that began it.
+
+    A new task copies the request's settings, including its short wait for a
+    busy database (``_short_database_waits``). A run is background work: its
+    task, and every task and thread started from it, waits patiently instead
+    (db/mssql.py).
+    """
+    import contextvars
+
+    context = contextvars.copy_context()
+    context.run(db_engine.set_lock_wait, None)
+    # A task copies the context it is created in. (create_task(context=...)
+    # would say the same thing but needs Python 3.11.)
+    return context.run(asyncio.ensure_future, coro)
+
+
 def _spawn_drain(agen, pending) -> "asyncio.Task":
     """Schedule a background drain and pin a strong reference until it finishes."""
-    task = asyncio.ensure_future(_drain_generator_to_completion(agen, pending))
+    task = _background_task(_drain_generator_to_completion(agen, pending))
     _DRAIN_TASKS.add(task)
     task.add_done_callback(_DRAIN_TASKS.discard)
     return task
@@ -5295,7 +5314,7 @@ async def sse_stream_with_keepalive(agen, *, auth_session_id: Optional[str] = No
     """
     interval = _sse_keepalive_interval()
     last_check = time.monotonic()
-    pending = asyncio.ensure_future(agen.__anext__())
+    pending = _background_task(agen.__anext__())
     # True until the generator finishes on its own; left True on an early exit
     # so the finally hands the still-running run to the background drain.
     detach = True
@@ -5335,7 +5354,7 @@ async def sse_stream_with_keepalive(agen, *, auth_session_id: Optional[str] = No
                 return
             # Start the next pull before yielding so the run keeps progressing
             # while the client consumes this frame.
-            pending = asyncio.ensure_future(agen.__anext__())
+            pending = _background_task(agen.__anext__())
             # Re-check expiry at most once per interval even on an active stream
             # so a run streaming to a walked-away user still closes on timeout.
             now = time.monotonic()
@@ -9093,7 +9112,12 @@ async def _auth_guard(request: Request, call_next):
     _maybe_log_proxy_header_diag(request)
 
     cookie_value = request.cookies.get(auth_config.cookie_name())
-    conn = _open_audit_conn()
+    try:
+        conn = _open_audit_conn()
+    except sqlite3.OperationalError as exc:
+        if not db_engine.is_busy(exc):
+            raise
+        return _busy_response(request, exc)
     try:
         session, _status = auth_mw.resolve_session(conn, cookie_value)
         if session is None:
@@ -9109,7 +9133,17 @@ async def _auth_guard(request: Request, call_next):
         # — skipping the write on back-to-back requests avoids one UPDATE per
         # API call on the busy run page.
         if auth_mw.counts_as_activity(path, request.method) and auth_sessions.should_bump_activity(session):
-            repo.touch_auth_session(conn, session.session_id)
+            try:
+                # This runs on the event loop: do not make every request wait
+                # behind a busy database to record "last seen".
+                with db_engine.lock_wait(_SESSION_TOUCH_LOCK_WAIT_S):
+                    repo.touch_auth_session(conn, session.session_id)
+                    conn.commit()
+            except sqlite3.OperationalError as exc:
+                if not db_engine.is_busy(exc):
+                    raise
+                logger.warning("database busy: session activity time not updated")
+                conn.rollback()
         conn.commit()
         # An admin-issued temporary password unlocks only /api/auth/* (exempt
         # above), so the person must choose their own before anything else.
@@ -9122,6 +9156,11 @@ async def _auth_guard(request: Request, call_next):
                     "reason": "password_change_required",
                 },
             )
+    except sqlite3.OperationalError as exc:
+        # Exception handlers do not see errors raised in middleware.
+        if not db_engine.is_busy(exc):
+            raise
+        return _busy_response(request, exc)
     finally:
         conn.close()
     # Make the identity available to downstream handlers (audit/attribution).
@@ -9267,6 +9306,35 @@ async def _security_headers(request: Request, call_next):
     response.headers.setdefault("Content-Security-Policy", _CONTENT_SECURITY_POLICY)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     return response
+
+
+# A person waiting on a click is told the database is busy after this long;
+# background work waits far longer (db/mssql.py PATIENT_LOCK_WAIT_S).
+_REQUEST_LOCK_WAIT_S = 30.0
+_SESSION_TOUCH_LOCK_WAIT_S = 2.0
+
+
+@app.middleware("http")
+async def _short_database_waits(request: Request, call_next):
+    with db_engine.lock_wait(_REQUEST_LOCK_WAIT_S):
+        return await call_next(request)
+
+
+@app.exception_handler(sqlite3.OperationalError)
+async def _database_busy(request: Request, exc: sqlite3.OperationalError):
+    """Answer "busy, try again" when a request could not get its turn to save."""
+    if not db_engine.is_busy(exc):
+        raise exc
+    return _busy_response(request, exc)
+
+
+def _busy_response(request: Request, exc: BaseException) -> JSONResponse:
+    logger.warning("database busy on %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "The database is busy. Please try again in a moment."},
+        headers={"Retry-After": "5"},
+    )
 
 
 def mount_spa(app, dist_directory: Path) -> None:

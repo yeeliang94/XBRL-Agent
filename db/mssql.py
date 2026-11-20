@@ -23,14 +23,17 @@ Differences from SQLite that remain:
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import decimal
 import logging
+import re
 import sqlite3
 import threading
 import time
 from typing import Any, Iterable, Sequence
 
+from db import engine as db_engine
 from db import mssql_translate as tr
 from db import mssql_v57
 
@@ -41,6 +44,8 @@ SCHEMA_LOCK = "xbrl-agent-schema"
 # Azure SQL's documented transient sign-in errors: the database is starting,
 # moving, or busy. Opening a connection retries them.
 TRANSIENT_ERRORS = ("40613", "40197", "40501", "49918", "10928", "10929", "4060", "4221")
+# The same, plus a dropped connection, when they interrupt a statement.
+BUSY_ERRORS = TRANSIENT_ERRORS + ("49919", "49920", "08S01")
 LOCK_ERRORS = ("1205", "1222")
 _POOL_MAX_IDLE = 8
 _POOL_MAX_AGE_S = 300.0
@@ -50,6 +55,15 @@ _POOL_PING_AFTER_S = 30.0
 # trip, so a write transaction holds the lock far longer; wait at least this
 # long, the same as the row-lock wait below.
 MIN_LOCK_WAIT_S = 30.0
+# Background work (agents, reviewers, the event writer) waits this long for
+# its turn at the write lock. Nothing has been written when a save is waiting
+# for the lock, so waiting costs time and no data; giving up fails a run.
+# It stays under the agents' per-step time limit (coordinator.FACE_TURN_TIMEOUT).
+PATIENT_LOCK_WAIT_S = 120.0
+_SLOW_LOCK_WAIT_LOG_S = 10.0
+# Waits, in seconds, before repeating a statement Azure SQL refused because it
+# was too busy. Only statements outside a transaction are repeated.
+_BUSY_RETRY_DELAYS_S = (2.0, 4.0, 8.0, 16.0)
 _CONNECT_ATTEMPTS = 4
 # SQL Server accepts 2,100 parameters in one request; stay under it.
 _BATCH_MAX_PARAMS = 2000
@@ -250,6 +264,33 @@ def _set_long_text_sizes(cur, rows: Sequence[Sequence]) -> None:
         cur.setinputsizes([(pyodbc.SQL_WVARCHAR, 0, 0) if i in long_cols else None for i in range(width)])
 
 
+# The driver reports the server's error number in brackets, "(40501)", and the
+# connection state as its first value. Matching those, not any digits in the
+# text, keeps an error that merely quotes such a number from looking "busy".
+_BUSY_NUMBER = re.compile(r"\((%s)\)" % "|".join(c for c in BUSY_ERRORS if c.isdigit()))
+
+
+def _is_busy_error(exc: BaseException) -> bool:
+    args = getattr(exc, "args", ())
+    return bool(args and str(args[0]) == "08S01") or bool(_BUSY_NUMBER.search(_error_codes(exc)))
+
+
+def _on_server_loop() -> bool:
+    """True when this code runs on the server's event loop (the main thread's).
+
+    Waiting there stops every request and every run's progress stream, so
+    code on that loop never waits longer than it did before. A reviewer or
+    formatter thread with a loop of its own holds up only itself.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        return False
+    try:
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        return False
+
+
 def _map_error(exc: BaseException) -> sqlite3.Error:
     pyodbc = _pyodbc()
     text = _redact(_error_codes(exc))
@@ -257,6 +298,8 @@ def _map_error(exc: BaseException) -> sqlite3.Error:
         return sqlite3.IntegrityError(text)
     if any(code in text for code in LOCK_ERRORS):
         return sqlite3.OperationalError(f"database is locked: {text}")
+    if _is_busy_error(exc):
+        return sqlite3.OperationalError(f"database is busy: {text}")
     if isinstance(exc, pyodbc.DataError):
         return sqlite3.DataError(text)
     return sqlite3.OperationalError(text)
@@ -380,7 +423,31 @@ class Connection:
         Everything is read before returning. Without MARS a connection holds
         one open result at a time, and SQLite callers often read one row and
         move on to the next statement.
+
+        A statement outside a transaction that Azure SQL refuses because it is
+        too busy is repeated after a pause. Those are reads and the batch that
+        opens a write transaction; neither has changed anything. Inside a
+        transaction the error is raised as "database is busy", for the caller
+        that owns the whole save to repeat it.
         """
+        # A web request (it sets its own lock wait) answers "busy" at once
+        # rather than holding a request thread through the pauses.
+        repeatable = (not self._in_tx and not _on_server_loop()
+                      and db_engine.lock_wait_seconds() is None)
+        for delay in (*_BUSY_RETRY_DELAYS_S, None):
+            try:
+                return self._run_once(sql, params)
+            except Exception as exc:
+                self._sync_after_error()
+                if delay is None or not repeatable or not _is_busy_error(exc):
+                    raise _map_error(exc) from exc
+                log.warning("Azure SQL is busy (%s); repeating the statement in %.0fs",
+                            _redact(_error_codes(exc))[:200], delay)
+                self._recover_for_repeat()
+                time.sleep(delay)
+        raise AssertionError("unreachable")
+
+    def _run_once(self, sql: str, params: Sequence) -> tuple[int, Any, list | None]:
         cur = self._raw_conn().cursor()
         try:
             if params:
@@ -398,14 +465,23 @@ class Connection:
                 if not cur.nextset():
                     break
             return rowcount, description, rows
-        except Exception as exc:
-            self._sync_after_error()
-            raise _map_error(exc) from exc
         finally:
             try:
                 cur.close()
             except Exception:
                 pass
+
+    def _recover_for_repeat(self) -> None:
+        """Leave no half-open transaction, and replace a dropped connection."""
+        try:
+            cur = self._raw_conn().cursor()
+            cur.execute("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
+            cur.close()
+        except Exception:
+            _close_quietly(self._raw)
+            self._raw, self._opened = _open(self._url), time.monotonic()
+        self._in_tx = False
+        self._locked = False
 
     def _sync_after_error(self) -> None:
         try:
@@ -439,7 +515,9 @@ class Connection:
         transaction open (error 266). Both values are written in: a fixed
         lock name and a whole number of milliseconds.
         """
-        ms = int(max(self._timeout, MIN_LOCK_WAIT_S) * 1000)
+        wait_s = self._lock_wait_s()
+        ms = int(wait_s * 1000)
+        started = time.monotonic()
         _, _, rows = self._run(
             ("BEGIN TRANSACTION; " if begin else "")
             + f"DECLARE @r INT; EXEC @r = sp_getapplock @Resource = N'{WRITE_LOCK}', @LockMode = 'Exclusive', "
@@ -447,11 +525,28 @@ class Connection:
         if begin:
             self._in_tx = True
         result = rows[0][0] if rows else None
+        waited = time.monotonic() - started
         if result is None or result < 0:
             if begin:
                 self.rollback()
+            log.warning("gave up waiting for the Azure SQL write lock after %.0fs", waited)
             raise sqlite3.OperationalError("database is locked")
+        if waited > _SLOW_LOCK_WAIT_LOG_S:
+            log.warning("waited %.0fs for the Azure SQL write lock", waited)
         self._locked = True
+
+    def _lock_wait_s(self) -> float:
+        """How long this write may wait for its turn.
+
+        One request to the server waits the whole time, so the save keeps its
+        place in the queue. Code on the event loop and web requests keep the
+        short wait; background work waits patiently.
+        """
+        chosen = db_engine.lock_wait_seconds()
+        if chosen is not None:
+            return chosen
+        short = max(self._timeout, MIN_LOCK_WAIT_S)
+        return short if _on_server_loop() else max(short, PATIENT_LOCK_WAIT_S)
 
     def _before_write(self) -> None:
         """Make sure a transaction is open and holds the write lock."""

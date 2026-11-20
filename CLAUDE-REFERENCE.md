@@ -689,7 +689,16 @@ Each statement is a network round trip there, so hold that lock briefly:
 it reads (`concept_model/write_snapshot.py`, `db/scratch.py`), confirms under
 the lock that nothing it relied on changed, and sends the writes together
 with `db.engine.run_batch`. A write prepared this way addresses rows by their
-keys, never by a row id read earlier.
+keys, never by a row id read earlier. A save that must wait for the lock
+waits: background work (agents, reviewers, the event writer) up to
+`db/mssql.py::PATIENT_LOCK_WAIT_S`; a web request (`db.engine.lock_wait`, set
+by the `_short_database_waits` middleware) and code on the server's event loop keep the
+short wait, and a request that still cannot save gets a 503 "busy" answer.
+A run started by a request is background work: start its tasks with
+`server._background_task`, which clears the request's short wait.
+A statement Azure refuses as too busy is repeated only outside a
+transaction; inside one it is raised as "database is busy"
+(`db.engine.is_busy`) for the owner of the whole save to repeat.
 After query changes, refresh `scripts/azure_sql_statements.json` (see
 `scripts/sql_capture_plugin.py`) and run `scripts/azure_sql_check.py` on Azure.
 

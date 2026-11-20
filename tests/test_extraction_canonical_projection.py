@@ -308,7 +308,7 @@ def test_projection_call_failure_is_fatal(canonical_env, tmp_path, monkeypatch):
     import concept_model.cell_resolver as cr
 
     def _boom(*a, **k):
-        raise sqlite3.OperationalError("database is locked")
+        raise sqlite3.OperationalError("no such table: run_concept_facts")
 
     monkeypatch.setattr(cr, "project_writes", _boom)
 
@@ -316,6 +316,49 @@ def test_projection_call_failure_is_fatal(canonical_env, tmp_path, monkeypatch):
     assert deps.projection_failed is True
     assert deps.projection_error and "OperationalError" in deps.projection_error
     assert warning is not None and "FAILED" in warning
+
+    # Not a busy database: nothing proves a later write re-covers the loss.
+    monkeypatch.undo()
+    assert _project_facts_if_canonical(deps, _fill(tmp_path, leaf, value=1.0)) is None
+    assert deps.projection_failed is True
+
+
+def test_figures_a_busy_database_dropped_are_saved_by_the_next_write(
+        canonical_env, tmp_path, monkeypatch):
+    """A busy database saves none of a batch, so the lost writes are known.
+    The statement stays failed until the next write_facts lands them too."""
+    db_path, run_id, template_id, leaf = canonical_env
+    deps = _deps(tmp_path, run_id=run_id, db_path=str(db_path), template_id=template_id)
+    deps.face_line_refs = [{"label": "Trade receivables"}]
+
+    import concept_model.cell_resolver as cr
+
+    def _busy(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(cr, "project_writes", _busy)
+    warning = _project_facts_if_canonical(deps, _fill(tmp_path, leaf, value=4321.0))
+    assert deps.projection_failed is True
+    assert "NOT saved yet" in warning
+
+    monkeypatch.undo()
+    conn = sqlite3.connect(str(db_path))
+    other_leaf = conn.execute(
+        "SELECT render_row FROM concept_nodes WHERE template_id=? AND kind='LEAF' "
+        "AND render_sheet=(SELECT render_sheet FROM concept_nodes WHERE template_id=? "
+        "AND render_row=? LIMIT 1) AND render_row<>? ORDER BY render_row LIMIT 1",
+        (template_id, template_id, leaf, leaf)).fetchone()[0]
+    conn.close()
+    assert _project_facts_if_canonical(deps, _fill(tmp_path, other_leaf, value=7.0)) is None
+    assert deps.projection_failed is False and deps.projection_error is None
+
+    conn = sqlite3.connect(str(db_path))
+    saved = sorted(r[0] for r in conn.execute(
+        "SELECT value FROM run_concept_facts WHERE run_id=?", (run_id,)))
+    conn.close()
+    assert saved == [7.0, 4321.0]
+    # The recovered figure counts as written for the coverage receipt too.
+    assert {f"SOFP-CuNonCu!B{leaf}", f"SOFP-CuNonCu!B{other_leaf}"} <= deps.face_written_targets
 
 
 def test_prior_projection_failure_is_sticky(canonical_env, tmp_path):
@@ -335,3 +378,49 @@ def test_prior_projection_failure_is_sticky(canonical_env, tmp_path):
     # ...but the run is still doomed: the earlier batch never landed.
     assert deps.projection_failed is True
     assert deps.projection_error == "sqlite3.OperationalError: database is locked"
+
+
+def test_verifying_or_finalising_first_saves_figures_a_busy_database_dropped(
+        canonical_env, tmp_path, monkeypatch):
+    """Recovery does not depend on the agent choosing to write again."""
+    from extraction.agent import _save_unsaved_writes
+    import concept_model.cell_resolver as cr
+
+    db_path, run_id, template_id, leaf = canonical_env
+    deps = _deps(tmp_path, run_id=run_id, db_path=str(db_path), template_id=template_id)
+
+    def _busy(*a, **k):
+        raise sqlite3.OperationalError("database is busy: (40501)")
+
+    monkeypatch.setattr(cr, "project_writes", _busy)
+    _project_facts_if_canonical(deps, _fill(tmp_path, leaf, value=4321.0))
+    assert "NOT saved yet" in _save_unsaved_writes(deps)  # still busy
+    assert deps.projection_failed is True
+
+    monkeypatch.undo()
+    assert _save_unsaved_writes(deps) is None
+    assert deps.projection_failed is False
+    conn = sqlite3.connect(str(db_path))
+    assert conn.execute("SELECT value FROM run_concept_facts WHERE run_id=?", (run_id,)).fetchall() == [(4321.0,)]
+    conn.close()
+
+
+def test_a_statement_counts_as_failed_while_its_save_is_still_running(
+        canonical_env, tmp_path, monkeypatch):
+    """The coordinator can stop an agent whose save is still waiting on the
+    database; it must not report those unsaved figures as a success."""
+    import concept_model.cell_resolver as cr
+
+    db_path, run_id, template_id, leaf = canonical_env
+    deps = _deps(tmp_path, run_id=run_id, db_path=str(db_path), template_id=template_id)
+    real = cr.project_writes
+    seen = {}
+
+    def watching(*a, **k):
+        seen["during"] = (deps.projection_failed, deps.projection_error)
+        return real(*a, **k)
+
+    monkeypatch.setattr(cr, "project_writes", watching)
+    assert _project_facts_if_canonical(deps, _fill(tmp_path, leaf, value=1.0)) is None
+    assert seen["during"][0] is True and "had not finished" in seen["during"][1]
+    assert deps.projection_failed is False and deps.projection_error is None

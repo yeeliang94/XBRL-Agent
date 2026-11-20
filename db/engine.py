@@ -15,8 +15,10 @@ calling ``sqlite3.connect`` itself.
 """
 from __future__ import annotations
 
+import contextvars
 import os
 import sqlite3
+from contextlib import contextmanager
 
 from utils.paths import safe_db_target
 
@@ -46,6 +48,38 @@ def connect(target: str | os.PathLike, *, timeout: float = 5.0):
     # Looked up on the module at call time so tests that patch
     # ``sqlite3.connect`` still intercept every connection.
     return sqlite3.connect(path, timeout=timeout)
+
+
+# How long the work in progress may wait for another writer on Azure SQL.
+# Unset means background work: wait patiently (see db/mssql.py). A web request
+# sets a short wait so a person is told "busy" instead of watching a spinner.
+_lock_wait: contextvars.ContextVar[float | None] = contextvars.ContextVar("db_lock_wait", default=None)
+
+
+def lock_wait_seconds() -> float | None:
+    return _lock_wait.get()
+
+
+def set_lock_wait(seconds: float | None) -> None:
+    """Set the wait for this task and everything it starts. ``None`` = patient."""
+    _lock_wait.set(seconds)
+
+
+@contextmanager
+def lock_wait(seconds: float | None):
+    token = _lock_wait.set(seconds)
+    try:
+        yield
+    finally:
+        _lock_wait.reset(token)
+
+
+def is_busy(exc: BaseException) -> bool:
+    """True for "the database could not take this now": safe to try again later."""
+    if not isinstance(exc, sqlite3.OperationalError):
+        return False
+    text = str(exc).lower()
+    return "locked" in text or "busy" in text
 
 
 def run_batch(conn, statements) -> None:
