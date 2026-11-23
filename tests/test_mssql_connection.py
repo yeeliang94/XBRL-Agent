@@ -191,13 +191,17 @@ def test_a_write_takes_the_single_writer_lock_and_commit_releases_it(server, tmp
     assert server.log[-1] == "COMMIT TRANSACTION"
 
 
-def test_lock_timeout_raises_database_is_locked_and_leaves_no_transaction(server, tmp_path):
+def test_lock_timeout_raises_database_is_locked_and_leaves_no_transaction(server, tmp_path, caplog):
     server.lock_result = -1
     conn = _connect(tmp_path)
-    with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+    with caplog.at_level("WARNING", logger="db.mssql"), \
+            pytest.raises(sqlite3.OperationalError, match="database is locked"):
         conn.execute("BEGIN IMMEDIATE")
     assert not conn.in_transaction
     assert server.depth == 0
+    # The save that gave up is named, so it can be matched to the one holding the lock.
+    assert any("gave up" in r.getMessage() and "test_lock_timeout_raises" in r.getMessage()
+               for r in caplog.records)
 
 
 def test_rows_read_by_name_like_sqlite_rows(server, tmp_path):
@@ -338,3 +342,20 @@ def test_saving_without_the_writer_lock_is_refused_for_other_tables(server, tmp_
     with pytest.raises(sqlite3.ProgrammingError):
         engine.run_batch(conn, [("UPDATE runs SET status = ? WHERE id = ?", ("done", 1))], append_only=True)
     assert not any("UPDATE runs" in s for s in server.log)
+
+
+def test_a_long_hold_on_the_writer_lock_is_logged_with_the_code_that_took_it(server, tmp_path, monkeypatch, caplog):
+    # "database is locked" on Azure only names the save that gave up. The log
+    # must also name the save that kept the lock, so the slow one can be found.
+    monkeypatch.setattr(mssql, "SLOW_LOCK_LOG_S", 0.0)
+    conn = _connect(tmp_path)
+    with caplog.at_level("WARNING", logger="db.mssql"):
+        conn.execute("UPDATE runs SET status = ? WHERE id = ?", ("done", 1))
+        conn.execute("UPDATE runs SET status = ? WHERE id = ?", ("done", 2))
+        conn.commit()
+    assert any("waited" in r.getMessage() for r in caplog.records)
+    held = [r.getMessage() for r in caplog.records if "held" in r.getMessage()]
+    assert len(held) == 1
+    assert "then committed" in held[0]
+    assert "tests/test_mssql_connection.py" in held[0]
+    assert "test_a_long_hold_on_the_writer_lock_is_logged" in held[0]

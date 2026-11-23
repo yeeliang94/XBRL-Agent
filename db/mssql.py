@@ -26,10 +26,12 @@ from __future__ import annotations
 import datetime as _dt
 import decimal
 import logging
+import os
 import re
 import sqlite3
 import threading
 import time
+import traceback
 from typing import Any, Iterable, Sequence
 
 from db import mssql_translate as tr
@@ -51,6 +53,12 @@ _POOL_PING_AFTER_S = 30.0
 # trip, so a write transaction holds the lock far longer; wait at least this
 # long, the same as the row-lock wait below.
 MIN_LOCK_WAIT_S = 30.0
+# A save that holds the write lock, or waits for it, longer than this is
+# logged with the code that asked for it, so a run's "database is locked"
+# errors can be traced to the save that kept everyone else waiting.
+SLOW_LOCK_LOG_S = 5.0
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + os.sep
+_DB_DIR = os.path.join(_REPO_ROOT, "db") + os.sep
 _CONNECT_ATTEMPTS = 4
 # New-record-only telemetry tables that may be written without the write lock
 # (see Connection.run_batch). Nothing reads them in order to write elsewhere.
@@ -255,12 +263,26 @@ def _set_long_text_sizes(cur, rows: Sequence[Sequence]) -> None:
         cur.setinputsizes([(pyodbc.SQL_WVARCHAR, 0, 0) if i in long_cols else None for i in range(width)])
 
 
+def _caller() -> str:
+    """The application code (outside db/) that is saving: "notes/source_write.py:696 write_cell_from_blocks"."""
+    frames = [f for f in traceback.extract_stack()[:-2]
+              if f.filename.startswith(_REPO_ROOT) and not f.filename.startswith(_DB_DIR)
+              and "site-packages" not in f.filename]
+    if not frames:
+        return "unknown"
+    # The nearest two app frames: the save itself and what called it.
+    return " <- ".join(f"{f.filename[len(_REPO_ROOT):]}:{f.lineno} {f.name}" for f in reversed(frames[-2:]))
+
+
 def _map_error(exc: BaseException) -> sqlite3.Error:
     pyodbc = _pyodbc()
     text = _redact(_error_codes(exc))
     if isinstance(exc, pyodbc.IntegrityError):
         return sqlite3.IntegrityError(text)
     if any(code in text for code in LOCK_ERRORS):
+        # A row-lock timeout or deadlock, not the write lock: name the save
+        # that gave up, as the write-lock waits are named.
+        log.warning("Azure SQL row lock: gave up (%s); asked by %s", text[:120], _caller())
         return sqlite3.OperationalError(f"database is locked: {text}")
     if isinstance(exc, pyodbc.DataError):
         return sqlite3.DataError(text)
@@ -279,6 +301,9 @@ class Connection:
         self._timeout = float(timeout)
         self._in_tx = False
         self._locked = False
+        self._lock_since = 0.0
+        self._lock_trips = 0
+        self._lock_caller = ""
         self.row_factory = None
         self.dialect = "mssql"
 
@@ -345,12 +370,14 @@ class Connection:
     def commit(self) -> None:
         if self._in_tx:
             self._run("COMMIT TRANSACTION")
+            self._lock_released("committed")
             self._in_tx = False
             self._locked = False
 
     def rollback(self) -> None:
         if self._in_tx:
             self._run("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
+            self._lock_released("rolled back")
             self._in_tx = False
             self._locked = False
 
@@ -358,7 +385,9 @@ class Connection:
         raw, self._raw = self._raw, None
         if raw is None:
             return
+        self._lock_released("closed")
         self._in_tx = False
+        self._locked = False
         try:
             # Always, even when this wrapper thinks no transaction is open: a
             # failed batch can leave one (and the write lock) on the server.
@@ -400,6 +429,8 @@ class Connection:
         one open result at a time, and SQLite callers often read one row and
         move on to the next statement.
         """
+        if self._locked:
+            self._lock_trips += 1
         cur = self._raw_conn().cursor()
         try:
             if params:
@@ -435,6 +466,7 @@ class Connection:
             return
         self._in_tx = bool(depth)
         if not depth:
+            self._lock_released("ended by an error")
             self._locked = False
 
     def _begin(self, *, immediate: bool) -> None:
@@ -459,6 +491,7 @@ class Connection:
         lock name and a whole number of milliseconds.
         """
         ms = int(max(self._timeout, MIN_LOCK_WAIT_S) * 1000)
+        started = time.monotonic()
         _, _, rows = self._run(
             ("BEGIN TRANSACTION; " if begin else "")
             + f"DECLARE @r INT; EXEC @r = sp_getapplock @Resource = N'{WRITE_LOCK}', @LockMode = 'Exclusive', "
@@ -466,11 +499,27 @@ class Connection:
         if begin:
             self._in_tx = True
         result = rows[0][0] if rows else None
+        waited = time.monotonic() - started
         if result is None or result < 0:
             if begin:
                 self.rollback()
+            log.warning("Azure SQL write lock: gave up after waiting %.1fs; asked by %s",
+                        waited, _caller())
             raise sqlite3.OperationalError("database is locked")
         self._locked = True
+        self._lock_since = time.monotonic()
+        self._lock_trips = 0
+        self._lock_caller = _caller()
+        if waited > SLOW_LOCK_LOG_S:
+            log.warning("Azure SQL write lock: waited %.1fs; asked by %s", waited, self._lock_caller)
+
+    def _lock_released(self, how: str) -> None:
+        if not self._locked:
+            return
+        held = time.monotonic() - self._lock_since
+        if held > SLOW_LOCK_LOG_S:
+            log.warning("Azure SQL write lock: held %.1fs over %d requests, then %s; taken by %s",
+                        held, self._lock_trips, how, self._lock_caller)
 
     def _before_write(self) -> None:
         """Make sure a transaction is open and holds the write lock."""
@@ -555,6 +604,8 @@ class Cursor:
             return self
         if t.is_write:
             conn._before_write()
+        if conn._locked:
+            conn._lock_trips += 1
         cur = conn._raw_conn().cursor()
         try:
             _set_long_text_sizes(cur, rows)
