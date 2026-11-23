@@ -331,11 +331,13 @@ def start_saving() -> CopySaver:
     live, copies, _outcome = _restored
     me = container_id()
     # Startup itself writes (migrations, the bootstrap admin, failed-run
-    # cleanup), so the first copy is always due. Everything that can fail is
-    # done before the claim, so a failure leaves saving with the old owner.
+    # cleanup), so the first copy is always due. The saver is ready before
+    # the claim, so a failure leaves saving with the old owner. The local
+    # marker changes only after the claim succeeds: if the claim fails, the
+    # marker still names the owner, and a retry keeps this disk's database.
     saver = CopySaver(live, copies, me, dirty=True)
-    safe_entry_path(live.parent / SAVED_BY_FILE).write_text(me, encoding="utf-8")
     claim(copies, me)
+    safe_entry_path(live.parent / SAVED_BY_FILE).write_text(me, encoding="utf-8")
     _remove_stale_parts(copies)
     saver.start()
     _saver = saver

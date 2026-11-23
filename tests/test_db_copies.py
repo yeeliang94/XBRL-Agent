@@ -360,3 +360,23 @@ def test_a_copy_with_damaged_compressed_data_is_skipped(tmp_path, folder):
     fresh = tmp_path / "fresh" / "xbrl_agent.db"
     assert copies.restore(fresh, folder) == "restored"
     assert _runs(fresh) == ["real.pdf"]
+
+
+def test_a_claim_that_fails_does_not_make_the_next_start_discard_this_disk(tmp_path, folder, monkeypatch):
+    live = _live(tmp_path)
+    names = iter(["first-start", "retry"])
+    monkeypatch.setattr(copies, "container_id", lambda: next(names))
+    try:
+        _start_saving_on(live, folder).save_if_changed()
+    finally:
+        copies.stop()
+    _add_run(live, "after-last-copy.pdf")  # newer than every copy
+
+    copies.restore_at_startup(live, folder)
+    monkeypatch.setattr(copies, "claim", _refuse)  # /home refuses the write
+    with pytest.raises(OSError):
+        copies.start_saving()
+    monkeypatch.undo()
+
+    assert copies.restore(live, folder) == "kept"
+    assert _runs(live) == ["after-last-copy.pdf"]
