@@ -62,9 +62,15 @@ _DB_DIR = os.path.join(_REPO_ROOT, "db") + os.sep
 _CONNECT_ATTEMPTS = 4
 # New-record-only telemetry tables that may be written without the write lock
 # (see Connection.run_batch). Nothing reads them in order to write elsewhere.
-LOCK_FREE_WRITES = frozenset({("INSERT", "agent_events"), ("INSERT", "run_events"),
-                              ("UPDATE", "auth_sessions")})
-_WRITE_TARGET = re.compile(r"\s*(INSERT\s+INTO|UPDATE)\s+(\w+)\b", re.IGNORECASE)
+# (statement, table, the one column an UPDATE sets). Each reads nothing first
+# and its rows are only ever overwritten with "now".
+LOCK_FREE_WRITES = frozenset({
+    ("INSERT", "agent_events", None), ("INSERT", "run_events", None),
+    ("UPDATE", "auth_sessions", "last_seen_at"), ("UPDATE", "runs", "updated_at"),
+})
+_WRITE_TARGET = re.compile(
+    r"\s*(?:(INSERT)\s+INTO\s+(\w+)\b|(UPDATE)\s+(\w+)\s+SET\s+(\w+)\s*=[^,]*?\sWHERE\b)",
+    re.IGNORECASE | re.DOTALL)
 # SQL Server accepts 2,100 parameters in one request; stay under it.
 _BATCH_MAX_PARAMS = 2000
 _BATCH_MAX_STATEMENTS = 200
@@ -286,7 +292,7 @@ def _on_main_loop() -> bool:
         return False
 
 
-def _map_error(exc: BaseException) -> sqlite3.Error:
+def _map_error(exc: BaseException, *, quiet: bool = False) -> sqlite3.Error:
     pyodbc = _pyodbc()
     text = _redact(_error_codes(exc))
     if isinstance(exc, pyodbc.IntegrityError):
@@ -294,7 +300,8 @@ def _map_error(exc: BaseException) -> sqlite3.Error:
     if any(code in text for code in LOCK_ERRORS):
         # A row-lock timeout or deadlock, not the write lock: name the save
         # that gave up, as the write-lock waits are named.
-        log.warning("Azure SQL row lock: gave up (%s); asked by %s", text[:120], _caller())
+        if not quiet:
+            log.warning("Azure SQL row lock: gave up (%s); asked by %s", text[:120], _caller())
         return sqlite3.OperationalError(f"database is locked: {text}")
     if isinstance(exc, pyodbc.DataError):
         return sqlite3.DataError(text)
@@ -316,6 +323,7 @@ class Connection:
         self._lock_since = 0.0
         self._lock_trips = 0
         self._lock_caller = ""
+        self._quiet_lock_errors = False
         self.row_factory = None
         self.dialect = "mssql"
 
@@ -334,7 +342,8 @@ class Connection:
     def executemany(self, sql: str, seq_of_parameters: Iterable) -> "Cursor":
         return self.cursor().executemany(sql, seq_of_parameters)
 
-    def run_batch(self, statements: Iterable[tuple[str, Sequence]], *, lock_free: bool = False) -> None:
+    def run_batch(self, statements: Iterable[tuple[str, Sequence]], *, lock_free: bool = False,
+                  row_lock_wait_ms: int | None = None) -> None:
         """Run write statements in as few round trips as the server allows.
 
         One statement per round trip keeps the write lock for the whole list.
@@ -342,12 +351,16 @@ class Connection:
         transaction. Nothing is returned: no rows, row counts or new ids.
 
         ``lock_free`` is for writes listed in ``LOCK_FREE_WRITES``: new
-        telemetry records and the login session's last-seen time. They read
-        nothing first and touch one row each, so they do not need the
+        telemetry records, a login's last-seen time and a run's activity time.
+        They read nothing first and only record "now", so they do not need the
         database-wide write lock that keeps read-then-write saves one at a
         time; SQL Server's own row locks are enough. They then do not queue
         for that lock. A run event still checks its run's row, which a save in
         progress for the same run holds until it commits.
+
+        ``row_lock_wait_ms`` waits that long, not the usual 30 s, for a row
+        another transaction holds, and gives up quietly: for writes that are
+        better skipped than waited for.
         """
         parts: list[str] = []
         args: list = []
@@ -355,7 +368,15 @@ class Connection:
         def send() -> None:
             if parts:
                 # Every statement is terminated: SQL Server requires it after MERGE.
-                self._run(";\n".join(parts) + ";", args)
+                sql = ";\n".join(parts) + ";"
+                if row_lock_wait_ms is not None:
+                    sql = (f"SET LOCK_TIMEOUT {int(row_lock_wait_ms)};\n{sql}\n"
+                           f"SET LOCK_TIMEOUT {int(MIN_LOCK_WAIT_S * 1000)};")
+                self._quiet_lock_errors = row_lock_wait_ms is not None
+                try:
+                    self._run(sql, args)
+                finally:
+                    self._quiet_lock_errors = False
                 parts.clear()
                 args.clear()
 
@@ -370,7 +391,10 @@ class Connection:
                 self._before_write()
             else:
                 target = _WRITE_TARGET.match(sql)
-                if target is None or (target.group(1).split()[0].upper(), target.group(2)) not in LOCK_FREE_WRITES:
+                key = None if target is None else (
+                    ("INSERT", target.group(2), None) if target.group(1)
+                    else ("UPDATE", target.group(4), target.group(5)))
+                if key not in LOCK_FREE_WRITES:
                     raise sqlite3.ProgrammingError("lock_free takes only the writes in LOCK_FREE_WRITES")
                 if not self._in_tx:
                     self._begin(immediate=False)
@@ -462,13 +486,26 @@ class Connection:
                     break
             return rowcount, description, rows
         except Exception as exc:
+            quiet = self._quiet_lock_errors
             self._sync_after_error()
-            raise _map_error(exc) from exc
+            if quiet:
+                # The short row-lock wait above may have been cut off mid-batch;
+                # put the usual wait back for this connection's next request.
+                self._restore_lock_timeout()
+            raise _map_error(exc, quiet=quiet) from exc
         finally:
             try:
                 cur.close()
             except Exception:
                 pass
+
+    def _restore_lock_timeout(self) -> None:
+        try:
+            cur = self._raw_conn().cursor()
+            cur.execute(f"SET LOCK_TIMEOUT {int(MIN_LOCK_WAIT_S * 1000)}")
+            cur.close()
+        except Exception:
+            pass
 
     def _sync_after_error(self) -> None:
         try:

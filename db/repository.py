@@ -1296,16 +1296,24 @@ def touch_runs(conn: sqlite3.Connection, run_ids: Iterable[int], run_agent_ids: 
 
     The runs table's own trigger stamps the time, on the database clock, as
     it does for every other saved change.
+
+    Each run is refreshed on its own, without the Azure SQL write lock and
+    waiting at most a second for its row. A run whose row is held is skipped:
+    a save for that run is in progress, and its own trigger stamps the time.
     """
-    runs = sorted({int(r) for r in run_ids})
+    ids = {int(r) for r in run_ids}
     agents = sorted({int(a) for a in run_agent_ids})
-    owners = []
-    if runs:
-        owners.append(f"id IN ({','.join('?' * len(runs))})")
     if agents:
-        owners.append(f"id IN (SELECT run_id FROM run_agents WHERE id IN ({','.join('?' * len(agents))}))")
-    if owners:
-        conn.execute(f"UPDATE runs SET updated_at = updated_at WHERE {' OR '.join(owners)}", (*runs, *agents))
+        ids.update(int(r[0]) for r in conn.execute(
+            f"SELECT DISTINCT run_id FROM run_agents WHERE id IN ({','.join('?' * len(agents))})",
+            agents).fetchall())
+    for run_id in sorted(ids):
+        try:
+            db_engine.run_batch(conn, [("UPDATE runs SET updated_at = updated_at WHERE id = ?", (run_id,))],
+                                lock_free=True, row_lock_wait_ms=1000)
+            conn.commit()
+        except sqlite3.OperationalError:
+            conn.rollback()
 
 
 def log_run_event(

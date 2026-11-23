@@ -862,3 +862,44 @@ async def test_a_stopped_report_agent_finishes_its_save_before_it_reports_stoppe
     with pytest.raises(asyncio.CancelledError):
         await task
     assert finished.is_set()
+
+
+@pytest.mark.asyncio
+async def test_report_save_prepared_on_a_copy_yields_to_a_change_made_meanwhile(report_run, monkeypatch):
+    """The save is prepared on a copy and sent in one batch. If the report
+    changed after the copy was taken, the copy's writes are dropped and the
+    save runs on the database, so the newer revision is built on, not lost."""
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.messages import ModelResponse, ToolCallPart, TextPart
+    import reports.agent as report_agent
+    from reports.agent import ReportDeps, create_report_agent
+
+    db, rid = report_run
+    report = "STATEMENT_BY_DIRECTORS"
+    narrative = "ssmt_DisclosureOfStatementByDirectorsExplanatory"
+    with repo.db_session(db) as conn:
+        save_field(conn, rid, report, narrative, "<p>First.</p>", "observed", "Source", [1])
+    class CopyThenEdit(report_agent.FieldSaveCopy):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            with closing(sqlite3.connect(str(db))) as other, other:
+                other.execute("UPDATE report_fields SET revision = 7 WHERE run_id=? AND concept_id=?",
+                              (rid, narrative))
+
+    monkeypatch.setattr(report_agent, "FieldSaveCopy", CopyThenEdit)
+    calls = {"n": 0}
+
+    def respond(messages, info):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            return ModelResponse(parts=[TextPart("Saved.")])
+        return ModelResponse(parts=[ToolCallPart("save_report_fields", {"captured": [
+            {"concept": narrative, "value": "<p>Second.</p>", "status": "observed",
+             "evidence": "Statement source", "pages": [1]}]})])
+
+    deps = ReportDeps("unused.pdf", str(db), rid, report, "mfrs", 1, viewed={1})
+    await create_report_agent(FunctionModel(respond), deps).run("Capture.", deps=deps)
+    with repo.db_session(db) as conn:
+        revision = conn.execute("SELECT revision FROM report_fields WHERE run_id=? AND concept_id=?",
+                                (rid, narrative)).fetchone()[0]
+    assert revision == 8

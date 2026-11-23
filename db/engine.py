@@ -48,7 +48,7 @@ def connect(target: str | os.PathLike, *, timeout: float = 5.0):
     return sqlite3.connect(path, timeout=timeout)
 
 
-def run_batch(conn, statements, *, lock_free: bool = False) -> None:
+def run_batch(conn, statements, *, lock_free: bool = False, row_lock_wait_ms: int | None = None) -> None:
     """Run ``(sql, parameters)`` write statements in order, in the open transaction.
 
     On Azure SQL they travel in as few round trips as possible, so the write
@@ -58,10 +58,12 @@ def run_batch(conn, statements, *, lock_free: bool = False) -> None:
     ``lock_free`` sends the writes in ``db.mssql.LOCK_FREE_WRITES`` (new
     telemetry records, a login's last-seen time) without the Azure SQL
     database-wide write lock. SQLite has one writer at a time either way.
+    ``row_lock_wait_ms`` shortens the Azure SQL wait for a row another
+    transaction holds (see ``db.mssql.Connection.run_batch``).
     """
     batch = getattr(conn, "run_batch", None)
     if batch is not None:
-        batch(statements, lock_free=lock_free)
+        batch(statements, lock_free=lock_free, row_lock_wait_ms=row_lock_wait_ms)
         return
     for sql, params in statements:
         conn.execute(sql, params)

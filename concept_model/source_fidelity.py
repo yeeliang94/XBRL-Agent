@@ -492,9 +492,14 @@ def source_term_reuse_issues(conn: sqlite3.Connection, run_id: int) -> list[dict
         if row[2] == "allocation":
             allocations.setdefault(scope, []).append(row)
     arithmetic_parents = {}
+    # Only the links of this run's own concepts: every figure save runs this
+    # check, and on Azure SQL under the write lock, so reading every template's
+    # links each time held the lock for seconds.
     for child, parent in conn.execute(
         "SELECT e.child_uuid,e.parent_uuid FROM concept_edges e "
-        "JOIN concept_nodes p ON p.concept_uuid=e.parent_uuid WHERE p.kind='COMPUTED' AND e.coefficient=1"
+        "JOIN concept_nodes p ON p.concept_uuid=e.parent_uuid WHERE p.kind='COMPUTED' AND e.coefficient=1 "
+        "AND e.child_uuid IN (SELECT r.concept_uuid FROM fact_source_receipts r WHERE r.run_id=?)",
+        (run_id,),
     ):
         arithmetic_parents.setdefault(child, []).append(parent)
     for row in rows:
@@ -524,29 +529,41 @@ def persist_source_term_reuse_issues(
     run_id: int,
     issues: list[dict],
 ) -> None:
-    """Replace run-level source-reuse conflicts with the current result."""
+    """Replace run-level source-reuse conflicts with the current result.
+
+    Figure saves run this under the Azure SQL write lock, so it reads every
+    issue's anchor in one query and sends its writes in one batch.
+    """
+    from db import engine as db_engine
+
     now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-    conn.execute(
+    writes = [(
         "UPDATE run_concept_conflicts SET status='resolved',resolved_at=? "
         "WHERE run_id=? AND kind='source_term_reuse' AND status='open'",
         (now, run_id),
-    )
-    for issue in issues:
-        anchor = conn.execute(
-            "SELECT r.concept_uuid,r.period,r.entity_scope,r.dimension_key "
+    )]
+    anchors: dict = {}
+    terms = sorted({issue["source_term_id"] for issue in issues})
+    if terms:
+        # Each term's first receipt, as the per-issue lookup took it (ORDER BY r.id).
+        for term, _receipt, *anchor in conn.execute(
+            "SELECT t.source_term_id,r.id,r.concept_uuid,r.period,r.entity_scope,r.dimension_key "
             "FROM fact_source_terms t JOIN fact_source_receipts r ON r.id=t.receipt_id "
-            "WHERE r.run_id=? AND t.source_term_id=? ORDER BY r.id LIMIT 1",
-            (run_id, issue["source_term_id"]),
-        ).fetchone()
+            f"WHERE r.run_id=? AND t.source_term_id IN ({','.join('?' * len(terms))}) ORDER BY r.id",
+            (run_id, *terms),
+        ).fetchall():
+            anchors.setdefault(term, tuple(anchor))
+    for issue in issues:
+        anchor = anchors.get(issue["source_term_id"])
         if anchor is None:
             continue
-        conn.execute(
+        writes.append((
             "INSERT INTO run_concept_conflicts("
             "run_id,concept_uuid,period,entity_scope,dimension_key,kind,detail,"
             "status,created_at) VALUES (?,?,?,?,?,'source_term_reuse',?,'open',?)",
             (run_id, *anchor, json.dumps(issue, sort_keys=True), now),
-        )
-
+        ))
+    db_engine.run_batch(conn, writes)
 
 # Backward-friendly name for callers written against the first receipt draft.
 duplicate_source_terms = source_term_reuse_issues

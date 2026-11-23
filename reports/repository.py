@@ -132,6 +132,51 @@ def save_field(conn, run_id: int, report: str, concept: str, value: str | None,
     return revision + 1
 
 
+
+class FieldSaveCopy:
+    """The rows ``save_field`` reads for some fields, copied once.
+
+    The fields are saved against an in-memory copy (``db/scratch.py``) and the
+    writes sent together, so on Azure SQL the save holds the database-wide
+    write lock for one batch instead of four round trips per field. As in
+    ``concept_model/write_snapshot.py``, ``still_current`` re-reads, under
+    the lock, the rows others can change and compares them with the copy.
+    """
+
+    def __init__(self, conn, run_id: int, report: str, concepts: list[str]) -> None:
+        self._run_id, self._report = run_id, report
+        marks = ",".join("?" * len(concepts))
+        self._tables = {
+            "runs": _read(conn, "SELECT * FROM runs WHERE id = ?", (run_id,)),
+            "template_slots": _read(
+                conn, f"SELECT * FROM template_slots WHERE taxonomy_element_id IN ({marks})", tuple(concepts)),
+            **self._changeable(conn),
+        }
+
+    def _changeable(self, conn) -> dict:
+        return {
+            "report_fields": _read(conn, "SELECT * FROM report_fields WHERE run_id = ? AND report_type = ? "
+                                         "ORDER BY concept_id", (self._run_id, self._report)),
+            "notes_cells": _read(conn, "SELECT * FROM notes_cells WHERE run_id = ? AND sheet = ? ORDER BY id",
+                                 (self._run_id, REPORTS[self._report][2])),
+        }
+
+    def scratch(self):
+        from db.scratch import Scratch
+
+        copy = Scratch(self._tables)
+        copy.row_factory = sqlite3.Row
+        return copy
+
+    def still_current(self, conn) -> bool:
+        return all(rows[1] == self._tables[name][1] for name, rows in self._changeable(conn).items())
+
+
+def _read(conn, sql: str, params: tuple) -> tuple[list[str], list[tuple]]:
+    cur = conn.execute(sql, params)
+    rows = [tuple(r) for r in cur.fetchall()]
+    return [d[0] for d in cur.description], rows
+
 def snapshot(conn, run_id: int) -> dict:
     standard, _, run = family(conn, run_id)
     requested = set((run.config or {}).get("reports_to_run", []))

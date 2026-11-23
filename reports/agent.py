@@ -20,7 +20,7 @@ from agent_tracing import MAX_AGENT_ITERATIONS, agent_usage_limits
 from model_settings import build_model_settings
 from db import repository as repo
 from reports.registry import REPORTS, ROOT, fields
-from reports.repository import save_field, report_view, export_internal
+from reports.repository import FieldSaveCopy, save_field, report_view, export_internal
 from tools.pdf_viewer import render_page_png, count_pdf_pages
 import task_registry
 
@@ -168,32 +168,74 @@ def create_report_agent(model, deps: ReportDeps):
                     f"Permitted concept IDs (copy exactly): {json.dumps(permitted_concepts)}")
             if len({f.concept for f in captured}) != len(captured):
                 raise ValueError("Assess each field once within a call")
+            for f in captured:
+                if f.status == "observed" and (not f.evidence.strip() or not f.pages or not set(f.pages) <= ctx.deps.viewed):
+                    raise ValueError("Observed fields require evidence from pages you inspected")
+                if f.status in {"user_override", "cleared"}:
+                    raise ValueError("Only a human may author a user override")
+            if not captured:
+                return json.dumps({"saved": 0})
+
+            def save_all(conn) -> None:
+                for f in captured:
+                    save_field(conn, ctx.deps.run_id, ctx.deps.report, f.concept, f.value, f.status, f.evidence, f.pages)
+
             def save() -> None:
+                # Saved against an in-memory copy, then sent in one batch.
                 with closing(db_engine.connect(ctx.deps.db_path)) as conn, conn:
                     conn.execute("PRAGMA busy_timeout=5000")
+                    prepared = FieldSaveCopy(conn, ctx.deps.run_id, ctx.deps.report,
+                                             [f.concept for f in captured])
+                    copy = prepared.scratch()
+                    try:
+                        save_all(copy)
+                    finally:
+                        copy.close()
                     conn.execute("BEGIN IMMEDIATE")
-                    for f in captured:
-                        if f.status == "observed" and (not f.evidence.strip() or not f.pages or not set(f.pages) <= ctx.deps.viewed):
-                            raise ValueError("Observed fields require evidence from pages you inspected")
-                        if f.status in {"user_override", "cleared"}:
-                            raise ValueError("Only a human may author a user override")
-                        save_field(conn, ctx.deps.run_id, ctx.deps.report, f.concept, f.value, f.status, f.evidence, f.pages)
+                    if prepared.still_current(conn):
+                        db_engine.run_batch(conn, copy.writes)
+                    else:
+                        # The report changed since the copy: save it the original way.
+                        save_all(conn)
 
-            # In a worker thread: waiting for the database here must not stop
-            # every other agent and request on the server's loop. A thread
-            # cannot be stopped, so a stop request waits for the save to end
-            # before the run reports it stopped, as it did when the save ran
-            # on the loop; a save never lands after its run has ended.
-            saving = asyncio.ensure_future(asyncio.to_thread(save))
-            try:
-                await asyncio.shield(saving)
-            except asyncio.CancelledError:
-                await asyncio.wait({saving})
-                raise
+            await _in_thread(save)
             return json.dumps({"saved": len(captured)})
         except ValueError as exc:
             raise ModelRetry(str(exc)) from exc
     return agent
+
+
+async def _in_thread(work):
+    """Run a database save in a worker thread, off the server's event loop.
+
+    Waiting for the database there would stop every other agent and request.
+    A thread cannot be stopped, so a stop request waits for the save to end
+    before it goes on, as it did when the save ran on the loop: a save never
+    lands after its run has ended.
+    """
+    saving = asyncio.ensure_future(asyncio.to_thread(work))
+    try:
+        return await asyncio.shield(saving)
+    except asyncio.CancelledError:
+        await asyncio.wait({saving})
+        raise
+
+
+def _finish_report_agent(db_path, rai, turns, result, attempt_usages, error_type) -> None:
+    """Record a report agent's turns and final status."""
+    with closing(db_engine.connect(db_path)) as conn, conn:
+        repo.insert_agent_turns(conn, rai, turns)
+        repo.finish_run_agent(conn, rai, result.status, workbook_path=result.workbook_path,
+                              total_tokens=sum(u["total_tokens"] for u in attempt_usages),
+                              total_cost=sum(u["cost_estimate"] for u in attempt_usages),
+                              prompt_tokens=sum(u["prompt_tokens"] for u in attempt_usages),
+                              completion_tokens=sum(u["completion_tokens"] for u in attempt_usages),
+                              reasoning_tokens=sum(u["thinking_tokens"] for u in attempt_usages),
+                              cache_read_tokens=sum(u["cache_read_tokens"] for u in attempt_usages),
+                              cache_write_tokens=sum(u["cache_write_tokens"] for u in attempt_usages),
+                              tool_call_count=sum(t.get("_n_tool_calls", 0) for t in turns),
+                              turn_count=len(turns), error_message=result.error,
+                              error_type=error_type)
 
 
 async def run_reports(config, requested, models, run_agent_ids, event_queue, session_id):
@@ -280,22 +322,12 @@ async def run_reports(config, requested, models, run_agent_ids, event_queue, ses
             logger.exception("Report extraction failed for %s", report)
             result.error = "Report extraction failed. Captured values are retained for review."
         finally:
-            with closing(db_engine.connect(config.db_path)) as conn, conn:
-                rai = run_agent_ids[report]
-                repo.insert_agent_turns(conn, rai, turns)
-                repo.finish_run_agent(conn, rai, result.status, workbook_path=result.workbook_path,
-                                      total_tokens=sum(u["total_tokens"] for u in attempt_usages),
-                                      total_cost=sum(u["cost_estimate"] for u in attempt_usages),
-                                      prompt_tokens=sum(u["prompt_tokens"] for u in attempt_usages),
-                                      completion_tokens=sum(u["completion_tokens"] for u in attempt_usages),
-                                      reasoning_tokens=sum(u["thinking_tokens"] for u in attempt_usages),
-                                      cache_read_tokens=sum(u["cache_read_tokens"] for u in attempt_usages),
-                                      cache_write_tokens=sum(u["cache_write_tokens"] for u in attempt_usages),
-                                      tool_call_count=sum(t.get("_n_tool_calls", 0) for t in turns),
-                                      turn_count=len(turns), error_message=result.error,
-                                      error_type=error_type)
-            task_registry.unregister(session_id, agent_id)
-            await emit("complete", {"status": result.status, "message": result.error or "Report captured", "success": result.status == "succeeded"})
+            try:
+                await _in_thread(lambda: _finish_report_agent(config.db_path, run_agent_ids[report], turns,
+                                                              result, attempt_usages, error_type))
+            finally:
+                task_registry.unregister(session_id, agent_id)
+                await emit("complete", {"status": result.status, "message": result.error or "Report captured", "success": result.status == "succeeded"})
         return result
 
     tasks = []
