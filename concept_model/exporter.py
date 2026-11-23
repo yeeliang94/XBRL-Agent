@@ -395,9 +395,8 @@ def export_run_to_xlsx(
     #      column PARITY, which holds across every layout: value columns are
     #      CY, PY, CY, PY from B — Company B(CY)/C(PY); Group B(GrpCY)/C(GrpPY)/
     #      D(CoCY)/E(CoPY); SOCIE B(CY) only. Even cols (B=2,D=4) → CY, odd
-    #      (C=3,E=5) → PY. Layout-independent and fixes Group, whose dates live
-    #      in row 2 (row 1 holds the Group/Company labels) — a row the writer
-    #      guard won't let an agent fill.
+    #      (C=3,E=5) → PY. Layout-independent, including Group, whose dates
+    #      live in row 2 (row 1 holds the Group/Company labels).
     #   2. Fallback for no-scout runs: the agent's scratch workbook, where it
     #      typed the dates into row 1 itself. Copied cell-for-cell.
     #

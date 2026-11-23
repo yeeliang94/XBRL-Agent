@@ -3,6 +3,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
+from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Callable, Literal, Optional, Sequence, TypedDict, Union
 
@@ -130,6 +131,37 @@ class FillResult:
 # header so we fall back to this. MPERS templates declare a real Source
 # header at col D / F and `_resolve_socie_evidence_col` honours that.
 _DEFAULT_MATRIX_SOCIE_EVIDENCE_COL = 25
+
+
+_PERIOD_PLACEHOLDER = re.compile(r"\d{2}/\d{2}/YYYY\s*-\s*\d{2}/\d{2}/YYYY")
+
+
+@lru_cache(maxsize=128)
+def _period_cells_cached(path: str, mtime_ns: int) -> dict[str, frozenset[tuple[int, int]]]:
+    wb = openpyxl.load_workbook(path, read_only=True)
+    try:
+        found: dict[str, set[tuple[int, int]]] = {}
+        for ws in wb.worksheets:
+            for row in ws.iter_rows(min_row=1, max_row=3):
+                if row and row[0].value not in (None, ""):
+                    continue
+                for cell in row:
+                    if isinstance(cell.value, str) and _PERIOD_PLACEHOLDER.fullmatch(cell.value.strip()):
+                        found.setdefault(ws.title, set()).add((cell.row, cell.column))
+        return {sheet: frozenset(cells) for sheet, cells in found.items()}
+    finally:
+        wb.close()
+
+
+def _period_cells(template: Path) -> dict[str, frozenset[tuple[int, int]]]:
+    """The reporting-period date cells of a template, by sheet: (row, col).
+
+    They hold the ``01/01/YYYY - 31/12/YYYY`` placeholder and have no label
+    in column A. Company templates keep them in row 1; Group templates in
+    row 2, under the Group / Company headings. Read from the original
+    template, because a filled workbook has already replaced the placeholder.
+    """
+    return _period_cells_cached(str(template), template.stat().st_mtime_ns)
 
 
 def _resolve_socie_evidence_col(ws) -> int:
@@ -346,6 +378,21 @@ def fill_workbook(
         if filing_level == "group"
         else frozenset({2, 3})
     )
+    period_cells = _period_cells(canonical_template)
+
+    def is_period_cell(sheet: str, row: int, col: int) -> bool:
+        # The template's own date cells. Row 1 only on a sheet that has none
+        # (a workbook built without placeholders): on Group templates row 1
+        # holds the Group / Company headings.
+        cells = period_cells.get(sheet)
+        return (row, col) in cells if cells else row == 1
+
+    def period_hint(sheet: str) -> str:
+        cells = sorted(period_cells.get(sheet, ()))
+        if not cells:
+            return ""
+        names = ", ".join(f"{openpyxl.utils.get_column_letter(c)}{r}" for r, c in cells)
+        return f" The reporting-period date cells on this sheet are {names}."
 
     wb = openpyxl.load_workbook(template_path)
     errors: list[str] = []
@@ -487,16 +534,19 @@ def fill_workbook(
                 # A date placeholder is cell content, not a column-A label.
                 # Retain its proven destination solely for retry reconciliation;
                 # still refuse the label write and require explicit coordinates.
-                period_cell = ws.cell(row=1, column=mapping.col)
+                period_row = next(
+                    (r for r, c in sorted(period_cells.get(mapping.sheet, ())) if c == mapping.col), 1)
+                period_cell = ws.cell(row=period_row, column=mapping.col)
                 period_retry = (
                     isinstance(mapping.value, str)
                     and _normalize_label(str(period_cell.value or "")) == _normalize_label(mapping.field_label)
-                    and re.fullmatch(r"\d{2}/\d{2}/YYYY\s*-\s*\d{2}/\d{2}/YYYY", str(period_cell.value))
-                    and ws.cell(row=1, column=1).value is None
+                    and _PERIOD_PLACEHOLDER.fullmatch(str(period_cell.value))
+                    and ws.cell(row=period_row, column=1).value is None
                 )
                 if period_retry:
-                    msg += " This is the reporting-period placeholder; use row=1, the same col, and field_label=''."
-                reject(mapping, msg, candidate_rows=[1] if period_retry else None,
+                    msg += (f" This is the reporting-period placeholder; use row={period_row}, "
+                            "the same col, and field_label=''.")
+                reject(mapping, msg, candidate_rows=[period_row] if period_retry else None,
                        redirect_target=redirect_target)
                 continue
         elif mapping.row is not None:
@@ -506,11 +556,12 @@ def fill_workbook(
             # SOCIE bug was exactly this: socie.md's MFRS-matrix instructions
             # told the agent to write at rows 30/35/49, which on the MPERS
             # Company template have NO label in col A — the writes landed on
-            # blank cells silently. Row 1 is the documented carve-out for
-            # date cells (see `prompts/_base.md`). Any other labelless row
-            # means the agent is targeting a row that does not exist in the
-            # current template.
-            if target_row != 1:
+            # blank cells silently. The template's reporting-period date
+            # cells are the documented carve-out (see `prompts/_base.md`):
+            # row 1 on Company templates, row 2 on Group. Any other labelless
+            # row means the agent is targeting a row that does not exist in
+            # the current template.
+            if not is_period_cell(mapping.sheet, target_row, mapping.col):
                 col_a_value = ws.cell(row=target_row, column=1).value
                 if col_a_value is None or not str(col_a_value).strip():
                     # S-5: earlier wording said "this row does not exist in
@@ -524,7 +575,8 @@ def fill_workbook(
                         f"Refusing to write to {mapping.sheet} row {target_row}: "
                         f"col A is empty — this row has no label. Use "
                         f"field_label matching, or call read_template() to "
-                        f"confirm the row is the one you intended.",
+                        f"confirm the row is the one you intended."
+                        + period_hint(mapping.sheet),
                     )
                     continue
         else:
@@ -533,7 +585,7 @@ def fill_workbook(
 
         cell = ws.cell(row=target_row, column=mapping.col)
 
-        # Row 1 is the existing period-metadata carve-out. Every other write
+        # The period date cells are the carve-out. Every other write
         # must resolve to a reportable primary item on an INPUT slot.
         exact_coordinates = writable_coordinates_by_sheet.get(mapping.sheet)
         if exact_coordinates is None:
@@ -547,7 +599,7 @@ def fill_workbook(
                 target_row,
                 openpyxl.utils.get_column_letter(mapping.col),
             ) in exact_coordinates
-        if writable_targets and target_row != 1 and not coordinate_is_writable:
+        if writable_targets and not is_period_cell(mapping.sheet, target_row, mapping.col) and not coordinate_is_writable:
             label_text = ws.cell(row=target_row, column=1).value
             row_is_writable = target_row in writable_rows_by_sheet.get(
                 mapping.sheet, frozenset()

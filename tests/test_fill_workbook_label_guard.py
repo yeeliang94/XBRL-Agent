@@ -54,6 +54,7 @@ class TestWriterRejectsBlankRowWrites:
         template = _make_company_socie_like(tmp_path)
         wb = openpyxl.load_workbook(template)
         wb.active["B1"] = "01/01/YYYY - 31/12/YYYY"
+        wb.active["C1"] = "01/01/YYYY - 31/12/YYYY"  # as on every Company template
         wb.save(template)
         wb.close()
         output = str(tmp_path / "filled.xlsx")
@@ -76,6 +77,32 @@ class TestWriterRejectsBlankRowWrites:
         _update_unresolved_fill_errors(deps, corrected)
         assert len(deps.last_fill_errors) == 1
         assert "Missing disclosure" in deps.last_fill_errors[0]
+
+    @pytest.mark.parametrize("level, date_row", [("company", 1), ("group", 2)])
+    def test_period_dates_land_where_the_template_keeps_them(self, tmp_path, level, date_row):
+        """Group templates keep the period dates in row 2, under the Group /
+        Company headings. Refusing row 2 left Group SOCF unable to save."""
+        template = Path(__file__).resolve().parents[1] / "XBRL-template-MFRS" / level.capitalize() / "07-SOCF-Indirect.xlsx"
+        output = str(tmp_path / "filled.xlsx")
+        value_cols = (2, 3, 4, 5) if level == "group" else (2, 3)
+        result = fill_workbook(str(template), output, [
+            {"sheet": "SOCF-Indirect", "row": date_row, "col": col, "field_label": "",
+             "value": "01/01/2024 - 31/12/2024", "evidence": "Statement header, page 9"}
+            for col in value_cols
+        ], filing_level=level)
+        assert result.errors == [], result.errors
+        ws = openpyxl.load_workbook(output)["SOCF-Indirect"]
+        assert [ws.cell(date_row, col).value for col in value_cols] == ["01/01/2024 - 31/12/2024"] * len(value_cols)
+        # Every other unlabelled cell is still refused, with the date cells named:
+        # Company row 2; on Group the row-1 headings and the Source column's row 2.
+        strays = [(2, 2)] if level == "company" else [(1, 2), (1, 4), (2, 6)]
+        for row, col in strays:
+            stray = fill_workbook(str(template), str(tmp_path / "stray.xlsx"), [
+                {"sheet": "SOCF-Indirect", "row": row, "col": col, "field_label": "",
+                 "value": "01/01/2024 - 31/12/2024"},
+            ], filing_level=level)
+            assert stray.fields_written == 0, (row, col)
+            assert any("col A is empty" in e and f"B{date_row}" in e for e in stray.errors), stray.errors
 
     def test_rejects_row_coord_write_when_col_a_is_blank(self, tmp_path):
         template = _make_company_socie_like(tmp_path)
