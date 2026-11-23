@@ -3060,9 +3060,9 @@ def _check_auth_startup_config() -> None:
         conn.close()
     if enabled == 0:
         raise RuntimeError(
-            "No enabled login accounts exist. Seed at least one with "
-            "`python -m auth.manage add-user EMAIL --name \"...\"` before "
-            "starting the server in production."
+            "No enabled login accounts exist. For the first start, set the "
+            "BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD App settings; "
+            "delete them after logging in."
         )
 
 
