@@ -149,7 +149,7 @@ if errorlevel 1 ( echo ERROR: az webapp deploy failed. & exit /b 1 )
 echo.
 echo ========================================
 echo   Deployed commit %GIT_HASH% to %AZ_APP_NAME%.
-echo   Reminder: seed accounts on first deploy with
-echo     python -m auth.manage add-user EMAIL --name "..."
+echo   First deploy: set BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD
+echo   in App settings, log in, change the password, then delete both.
 echo ========================================
 endlocal
