@@ -5,16 +5,19 @@ On Azure the live SQLite file sits on the container's own disk
 module keeps it safe:
 
 - ``restore`` runs at startup, before the schema check. It keeps a live file
-  this container already has, or else loads the newest good copy.
+  this container already has, or else loads the newest good copy. When copies
+  exist but none can be read, startup stops rather than run an empty database
+  whose copies would push the good ones out.
 - ``CopySaver`` runs on one background thread. Every minute, if anything
   changed, it saves a compressed copy to ``<output directory>/db-copies`` on
   the ``/home`` drive. It also saves soon after a run finishes, and once more
   when the app is told to stop. It keeps the newest ``KEEP`` copies.
 
 Azure starts a new container before it stops the old one. ``owner.json`` names
-the container that may save: the newest one claims it at startup, and an
-older container's saves are refused from then on, so it cannot overwrite the
-newer container's copies. Changes the old container makes in that minute are
+the container that may save: the newest one claims it once its startup has
+succeeded (a container that fails to start never takes saving away from the
+one still serving), and an older container's saves are refused from then on,
+so it cannot overwrite the newer container's copies. Changes the old container makes in that minute are
 lost; the owner accepted this (2026-11-23).
 
 Copies are only ever read whole and replaced by rename, never opened live on
@@ -104,13 +107,13 @@ def _passes_check(path: Path) -> bool:
         return False
 
 
-def restore(live: Path, copies: Path, me: str) -> str:
-    """Make sure the live database is ready, then claim ``owner.json`` for ``me``.
+def restore(live: Path, copies: Path) -> str:
+    """Make sure the live database is ready. Claims nothing.
 
-    Returns what happened: ``"kept"``, ``"restored"`` or ``"new"``.
+    Returns what happened: ``"kept"``, ``"restored"`` or ``"new"``. Raises
+    RuntimeError when copies exist but none can be restored.
     """
     previous = read_owner(copies)
-    claim(copies, me)
     safe_path(live.parent).mkdir(parents=True, exist_ok=True)
     if live.exists():
         # Only this container can have written it: the app process restarted
@@ -141,9 +144,12 @@ def restore(live: Path, copies: Path, me: str) -> str:
     if staging.exists():
         staging.unlink()
     if candidates:
-        logger.error("database copies: no copy could be restored; starting an empty database")
-    else:
-        logger.info("database copies: no copies yet; starting an empty database")
+        raise RuntimeError(
+            f"None of the {len(candidates)} saved database copies in {copies.name}/ could be "
+            "restored. Startup stopped so an empty database cannot replace them. Check "
+            "that /home is reachable and restart. To start empty on purpose, move the "
+            "copies folder aside first.")
+    logger.info("database copies: no copies yet; starting an empty database")
     return "new"
 
 
@@ -219,6 +225,8 @@ class CopySaver:
                     self._stopping.wait(self._request_delay_s)
                 self._wake.clear()
                 self.save_if_changed()
+            # Commits made while the last save ran.
+            self.save_if_changed()
         finally:
             try:
                 self._conn.close()
@@ -243,8 +251,14 @@ class CopySaver:
                                  int(STALE_S // 60))
 
     def _owns(self) -> bool:
-        if read_owner(self._copies) == self._me:
+        owner = read_owner(self._copies)
+        if owner == self._me:
             return True
+        if owner is None:
+            # Unreadable, not taken over: skip this save and try again on the
+            # next tick. The stale warning still fires if this lasts.
+            logger.warning("database copies: could not read %s; will try again", OWNER_FILE)
+            return False
         if not self._lost:
             self._lost = True
             logger.warning("database copies: a newer copy of the app took over; "
@@ -289,14 +303,36 @@ class CopySaver:
 _saver: CopySaver | None = None
 
 
-def start(live: Path, copies: Path) -> CopySaver:
-    """Restore, then start saving. Azure only; the caller decides."""
+_restored: tuple[Path, Path, str] | None = None
+
+
+def restore_at_startup(live: Path, copies: Path) -> None:
+    """First step of startup on Azure, before anything opens the database."""
+    global _restored
+    _restored = (live, copies, restore(live, copies))
+
+
+def start_saving() -> CopySaver:
+    """Last step of a successful startup: claim ``owner.json`` and start saving."""
     global _saver
+    live, copies, outcome = _restored
     me = container_id()
-    outcome = restore(live, copies, me)
+    claim(copies, me)
+    _remove_stale_parts(copies)
     _saver = CopySaver(live, copies, me, dirty=outcome != "restored")
     _saver.start()
     return _saver
+
+
+def _remove_stale_parts(copies: Path) -> None:
+    """Delete half-written copies left by a container killed mid-save."""
+    cutoff = time.time() - STALE_S
+    for part in safe_path(copies).glob("xbrl_agent-*.part"):
+        try:
+            if part.stat().st_mtime < cutoff:
+                safe_entry_path(part).unlink()
+        except OSError:
+            pass
 
 
 def request_save() -> None:

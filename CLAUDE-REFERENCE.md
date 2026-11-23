@@ -678,10 +678,13 @@ container side by side during a deploy (the 2026-11-11 failure). Azure SQL
 was tried and removed (2026-11-23): its one-writer lock queued busy runs
 into "database is locked". Now `db/location.py` puts the live file on the
 container's own disk (`/tmp/xbrl-live`) and refuses a `/home` path at
-startup. `db/copies.py` restores the newest good copy before `init_db`, then
-saves a compressed `VACUUM INTO` copy to `<output dir>/db-copies` every
-minute when the data changed, soon after a run finishes, and on SIGTERM.
-`owner.json` lets only the newest container save. Runs mid-way at a restart
+startup. `db/copies.py` restores the newest good copy before `init_db` (and
+stops startup when copies exist but none restores), then saves a compressed
+`VACUUM INTO` copy to `<output dir>/db-copies` every minute when the data
+changed, soon after a run finishes, and on SIGTERM. `owner.json` lets only
+the newest container save; it is claimed only after startup succeeds, so a
+container that fails to start never stops the serving one saving. An
+unreadable `owner.json` skips one save, never stops saving. Runs mid-way at a restart
 are lost and marked failed (accepted by the owner); one uvicorn process
 only. Pinned by `tests/test_db_copies.py`.
 

@@ -208,7 +208,16 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     # Resolve + ensure the DB exists (idempotent) so a first-run add-user works
     # against a brand-new install.
-    args.db = str(args.db) if args.db else str(_default_db_path())
+    if not args.db:
+        from db.location import on_azure
+
+        args.db = _default_db_path()
+        if on_azure() and not args.db.exists():
+            # Creating it here would leave an empty database that the server
+            # then keeps instead of restoring its saved copy.
+            raise SystemExit(f"No live database at {args.db} yet. Start the app first; "
+                             "it restores the database from its saved copy.")
+    args.db = str(args.db)
     init_db(args.db)
     args.func(args)
 

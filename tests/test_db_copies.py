@@ -79,9 +79,8 @@ def test_a_restart_brings_back_the_newest_good_copy(tmp_path, folder):
     damaged.write_bytes(gzip.compress(gzip.decompress(good.read_bytes())[:8192]))
 
     fresh = tmp_path / "new" / "xbrl_agent.db"
-    assert copies.restore(fresh, folder, "b") == "restored"
+    assert copies.restore(fresh, folder) == "restored"
     assert _runs(fresh) == ["finished.pdf"]
-    assert copies.read_owner(folder) == "b"
 
 
 def test_the_previous_owners_copy_wins_over_a_late_copy_from_an_older_container(tmp_path, folder):
@@ -98,7 +97,7 @@ def test_the_previous_owners_copy_wins_over_a_late_copy_from_an_older_container(
     copies.claim(folder, "newer")
 
     restored = tmp_path / "next" / "xbrl_agent.db"
-    copies.restore(restored, folder, "next")
+    copies.restore(restored, folder)
     assert _runs(restored) == ["newer.pdf"]
 
 
@@ -136,7 +135,7 @@ def test_only_the_newest_copies_are_kept(tmp_path, folder):
     kept = _saved(folder)
     assert len(kept) == copies.KEEP
     fresh = tmp_path / "fresh" / "xbrl_agent.db"
-    copies.restore(fresh, folder, "b")
+    copies.restore(fresh, folder)
     assert len(_runs(fresh)) == copies.KEEP + 2
 
 
@@ -145,12 +144,12 @@ def test_a_live_database_already_on_this_disk_is_kept(tmp_path, folder):
     _saver(live, folder, "a").save_if_changed()
     _add_run(live, "after-last-copy.pdf")  # newer than every copy
 
-    assert copies.restore(live, folder, "a2") == "kept"
+    assert copies.restore(live, folder) == "kept"
     assert _runs(live) == ["after-last-copy.pdf"]
 
 
 def test_no_copies_starts_an_empty_database(tmp_path, folder):
-    assert copies.restore(tmp_path / "x" / "xbrl_agent.db", folder, "a") == "new"
+    assert copies.restore(tmp_path / "x" / "xbrl_agent.db", folder) == "new"
 
 
 def test_saving_that_falls_behind_is_reported(tmp_path, folder, monkeypatch, caplog):
@@ -201,5 +200,103 @@ def test_a_finished_run_triggers_a_copy(tmp_path, folder):
         copies.stop()
     assert _saved(folder), "no copy saved after the run finished"
     restored = tmp_path / "after" / "xbrl_agent.db"
-    copies.restore(restored, folder, "b")
+    copies.restore(restored, folder)
     assert _runs(restored) == ["done.pdf"]
+
+
+def test_copies_that_cannot_be_restored_stop_startup(tmp_path, folder):
+    folder.mkdir()
+    (folder / "xbrl_agent-20261123T000000.000000Z-a.db.gz").write_bytes(b"not a database")
+    with pytest.raises(RuntimeError, match="could be restored"):
+        copies.restore(tmp_path / "x" / "xbrl_agent.db", folder)
+
+
+def test_an_unreadable_owner_file_skips_one_save_but_not_the_rest(tmp_path, folder):
+    live = _live(tmp_path)
+    saver = _saver(live, folder, "a")
+    _add_run(live, "x.pdf")
+    (folder / copies.OWNER_FILE).write_text("{half-writ", encoding="utf-8")
+    assert saver.save_if_changed() is False
+    assert saver.status()["saving"] is True
+
+    copies.claim(folder, "a")  # the drive answers again
+    assert saver.save_if_changed() is True
+
+
+def test_stopping_saves_the_last_changes(tmp_path, folder):
+    live = _live(tmp_path)
+    copies.claim(folder, "a")
+    saver = copies.CopySaver(live, folder, "a", interval_s=3600)
+    saver.start()
+    _add_run(live, "just-before-stop.pdf")
+    saver.stop()
+    restored = tmp_path / "after" / "xbrl_agent.db"
+    copies.restore(restored, folder)
+    assert _runs(restored) == ["just-before-stop.pdf"]
+
+
+def _azure_startup(tmp_path, monkeypatch):
+    """Point the server at a pretend Azure container and run its real startup."""
+    import asyncio
+    import server
+    import concept_model.bootstrap as boot
+
+    home = tmp_path / "home-data"
+    live = tmp_path / "container" / "xbrl_agent.db"
+    monkeypatch.setenv("WEBSITE_SITE_NAME", "xbrl-test")
+    monkeypatch.delenv("AUTH_MODE", raising=False)  # the suite's default; refused on Azure
+    monkeypatch.setattr(server, "OUTPUT_DIR", home)
+    monkeypatch.setattr(server, "AUDIT_DB_PATH", live)
+    monkeypatch.setattr(boot, "import_all_face_templates", lambda *a, **k: [])
+    monkeypatch.setattr(boot, "import_all_notes_templates", lambda *a, **k: [])
+
+    async def run():
+        async with server._lifespan(server.app):
+            pass
+
+    return home / "db-copies", live, lambda: asyncio.run(run())
+
+
+def _seed_copy_with_admin(tmp_path, folder, owner):
+    from auth import passwords
+
+    seed = _live(tmp_path, "seed")
+    conn = sqlite3.connect(seed)
+    repo.upsert_auth_user(conn, "owner@example.com", "Owner", passwords.hash_password("x" * 16))
+    conn.commit()
+    conn.close()
+    _add_run(seed, "kept.pdf")
+    copies.claim(folder, owner)
+    copies.CopySaver(seed, folder, owner, dirty=True).save_if_changed()
+
+
+def test_azure_startup_restores_first_and_claims_saving_last(tmp_path, monkeypatch):
+    folder, live, start = _azure_startup(tmp_path, monkeypatch)
+    monkeypatch.setenv("SESSION_SECRET", "s" * 64)
+    _seed_copy_with_admin(tmp_path, folder, "previous")
+
+    start()
+
+    assert "kept.pdf" in _runs(live)
+    assert copies.read_owner(folder) != "previous"
+    assert copies.status() is None  # stopped at shutdown
+
+
+def test_a_container_that_fails_to_start_leaves_saving_with_the_old_one(tmp_path, monkeypatch):
+    folder, live, start = _azure_startup(tmp_path, monkeypatch)
+    monkeypatch.delenv("SESSION_SECRET", raising=False)  # this startup will fail
+    _seed_copy_with_admin(tmp_path, folder, "serving")
+
+    with pytest.raises(RuntimeError, match="SESSION_SECRET"):
+        start()
+    assert copies.read_owner(folder) == "serving"
+
+
+def test_the_account_tool_refuses_to_create_the_azure_database(tmp_path, monkeypatch):
+    from auth import manage
+
+    monkeypatch.setenv("WEBSITE_SITE_NAME", "xbrl-test")
+    monkeypatch.setattr(location, "AZURE_LIVE_DIR", tmp_path / "not-started")
+    with pytest.raises(SystemExit, match="Start the app first"):
+        manage.main(["list-users"])
+    assert not (tmp_path / "not-started").exists()

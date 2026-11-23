@@ -3129,7 +3129,9 @@ async def _lifespan(app: FastAPI):
     configure_logging()
     db_location.check_live_location(AUDIT_DB_PATH)
     if db_location.on_azure():
-        _start_database_copies()
+        from db import copies as db_copies
+
+        db_copies.restore_at_startup(AUDIT_DB_PATH, db_location.copies_dir(OUTPUT_DIR))
     init_db(AUDIT_DB_PATH)
     try:
         from agent_tracing import purge_expired_diagnostics
@@ -3314,6 +3316,8 @@ async def _lifespan(app: FastAPI):
                 "projection will skip every cell. Fix the import and restart.",
                 exc_info=True,
             )
+    if db_location.on_azure():
+        _start_database_copies()
     yield
     # Save a last copy if anything changed. Azure may stop the container
     # before this runs; the stop-signal handler has already asked for it.
@@ -3323,17 +3327,18 @@ async def _lifespan(app: FastAPI):
 
 
 def _start_database_copies() -> None:
-    """Azure: load the newest saved copy, then save copies in the background.
+    """Azure: start saving copies, once startup has succeeded.
 
-    Runs before the schema check so a restored database is the one upgraded.
-    Azure sends SIGTERM before it stops the container; the handler asks the
-    saver for a copy at once (on the saver's thread) and then lets uvicorn
-    shut down as usual.
+    The copy was restored at the top of startup, before the schema check.
+    Claiming the right to save only now means a container that fails to start
+    leaves saving with the container still serving. Azure sends SIGTERM before
+    it stops the container; the handler asks the saver for a copy at once (on
+    the saver's thread) and then lets uvicorn shut down as usual.
     """
     import signal
     from db import copies as db_copies
 
-    db_copies.start(AUDIT_DB_PATH, db_location.copies_dir(OUTPUT_DIR))
+    db_copies.start_saving()
     previous = signal.getsignal(signal.SIGTERM)
 
     def _on_stop(sig, frame):
