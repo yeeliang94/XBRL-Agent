@@ -92,13 +92,8 @@ def _clear_session_cookie(response: Response) -> None:
 
 @router.get("/api/health")
 async def health() -> dict:
-    """Unauthenticated liveness probe (Azure health check + smoke test).
-
-    ``database`` names the kind of store in use, never its address.
-    """
-    from db import engine
-
-    return {"status": "ok", "database": "azure-sql" if engine.dialect() == "mssql" else "sqlite"}
+    """Unauthenticated liveness probe (Azure health check + smoke test)."""
+    return {"status": "ok"}
 
 
 @router.post("/api/auth/login/password")

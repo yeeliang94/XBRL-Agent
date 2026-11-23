@@ -71,7 +71,7 @@ def test_bootstrap_imports_targets_and_is_idempotent(fresh_db: Path):
 
 
 def test_startup_rewrites_only_templates_whose_rows_would_change(fresh_db: Path, monkeypatch):
-    """On Azure SQL a full import is tens of thousands of round trips per start."""
+    """A start with unchanged templates rewrites none of them."""
     from concept_model import bootstrap
 
     written: list[str] = []

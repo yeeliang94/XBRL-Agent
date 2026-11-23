@@ -248,9 +248,8 @@ from pathlib import Path
 # administrator audit log, and reported issues with their attached files.
 # v56 keeps a run's notes-side status verdicts, so a retry of one agent that
 # does not repeat the notes passes cannot report a clean run over them.
-# v57 changes nothing in SQLite. On Azure SQL every link between tables
-# becomes a foreign key, so a row whose parent was deleted is refused there
-# too (db/mssql_v57.py).
+# v57 changes nothing. It belonged to the Azure SQL store, since removed; the
+# step stays so the version sequence never goes backwards.
 # v58 records each imported template's fingerprint so server startup skips
 # templates that have not changed.
 CURRENT_SCHEMA_VERSION = 58
@@ -1822,7 +1821,7 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
 
     # v58: the fingerprint of each template the startup bootstrap imported
     # (template file plus the import code). An unchanged template is not
-    # imported again; on Azure SQL every re-import is thousands of round trips.
+    # imported again, which keeps server startup short.
     """
     CREATE TABLE IF NOT EXISTS template_imports (
         source_path  TEXT PRIMARY KEY,
@@ -2311,15 +2310,6 @@ def init_db(path: str | Path) -> None:
     # Make sure the parent directory exists so callers can pass paths like
     # ``output/xbrl_agent.db`` without pre-creating the folder themselves.
     safe_path(p.parent).mkdir(parents=True, exist_ok=True)
-
-    url = db_engine.database_url()
-    if url:
-        # Azure SQL has no history to replay: an empty database gets the
-        # generated baseline, an older one gets db/mssql.py's steps.
-        from db import mssql
-
-        mssql.init_schema(url, CURRENT_SCHEMA_VERSION)
-        return
 
     conn = db_engine.connect(str(p))
     try:

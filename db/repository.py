@@ -3096,14 +3096,11 @@ def _parse_iso_duration(start: str, end: str) -> Optional[float]:
 
 
 def _escape_like(value: str) -> str:
-    """Escape SQL LIKE metachars so users searching for literal `_`, `%` or `[`
+    """Escape SQL LIKE metachars so users searching for literal `_` or `%`
     in a filename get exact matches instead of wildcard behaviour
     (peer-review I9). Pair the returned pattern with `ESCAPE '\\'` in SQL.
     """
-    # `[` is a character set in SQL Server's LIKE (Azure SQL); escaping it is
-    # harmless in SQLite.
-    return (value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            .replace("[", "\\["))
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def list_runs(

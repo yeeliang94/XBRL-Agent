@@ -17,9 +17,8 @@ targets inline so the importer writes them directly.
 Idempotent — the importer's deterministic UUID5 keys make re-imports a no-op.
 A template is written again only when what it would write has changed
 (``template_imports``, schema v58): the fingerprint covers the parser's output
-for the template, its filing manifest and the code that writes the rows. On
-Azure SQL a full import is tens of thousands of round trips, so an unchanged
-start must not repeat it.
+for the template, its filing manifest and the code that writes the rows, so
+an unchanged start does not repeat a full import.
 """
 from __future__ import annotations
 
@@ -28,11 +27,10 @@ import json
 import logging
 import tempfile
 import time
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable
 
 from db import engine as db_engine
 from statement_types import VARIANTS, template_path
@@ -57,7 +55,6 @@ _ROOT = Path(__file__).resolve().parent.parent
 _WRITERS = ("concept_model/bootstrap.py", "concept_model/importer.py",
             "concept_model/notes_importer.py", "concept_model/filing_targets.py",
             "reports/registry.py")
-_LOCK = "xbrl-template-bootstrap"
 
 
 def import_all_face_templates(db_path: str | Path) -> list[str]:
@@ -184,9 +181,8 @@ def _prose_job(db_path: str | Path, path: Path, sheet: str,
 def _run(db_path: str | Path, label: str, jobs: list[tuple[Path, _Job]]) -> list[str]:
     started = time.monotonic()
     imported = 0
-    with _bootstrap_lock(db_path):
-        for path, (template_id, parsed, write) in jobs:
-            imported += _write_if_changed(db_path, path, template_id, parsed, write)
+    for path, (template_id, parsed, write) in jobs:
+        imported += _write_if_changed(db_path, path, template_id, parsed, write)
     logger.info("bootstrap: %d %s templates, %d imported, %d unchanged, %.1fs",
                 len(jobs), label, imported, len(jobs) - imported, time.monotonic() - started)
     return [template_id for _path, (template_id, _parsed, _write) in jobs]
@@ -243,31 +239,6 @@ def _write_if_changed(db_path: str | Path, path: Path, template_id: str, parsed:
     finally:
         conn.close()
     return True
-
-
-@contextmanager
-def _bootstrap_lock(db_path: str | Path) -> Iterator[None]:
-    """One server at a time checks and writes templates.
-
-    During a deploy the old and new servers can start against the same Azure
-    SQL database. Without this, one could record its fingerprint over rows the
-    other has just written, and a later start would skip a needed import.
-    SQLite is never shared between servers, so it needs no lock.
-    """
-    conn = db_engine.connect(str(db_path))
-    try:
-        if getattr(conn, "dialect", None) != "mssql":
-            yield
-            return
-        from db import mssql
-
-        held = mssql.hold_session_lock(conn, _LOCK, timeout_ms=30 * 60 * 1000)
-    finally:
-        conn.close()
-    try:
-        yield
-    finally:
-        mssql.release_session_lock(held, _LOCK)
 
 
 def main() -> None:

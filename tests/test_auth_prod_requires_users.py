@@ -64,20 +64,6 @@ def test_prod_zero_enabled_users_aborts(db, monkeypatch):
         server._check_auth_startup_config()
 
 
-def test_prod_refuses_to_keep_data_in_sqlite(monkeypatch):
-    from db import engine
-
-    monkeypatch.setenv("WEBSITE_SITE_NAME", "xbrl-prod")
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    with pytest.raises(RuntimeError, match="DATABASE_URL is not set"):
-        engine.check_production_database()
-    monkeypatch.setenv("DATABASE_URL", "Driver={ODBC Driver 18 for SQL Server};Server=tcp:x;")
-    engine.check_production_database()  # no raise
-    monkeypatch.delenv("WEBSITE_SITE_NAME")
-    monkeypatch.delenv("DATABASE_URL")
-    engine.check_production_database()  # local SQLite: no raise
-
-
 def test_prod_with_one_enabled_user_boots(db, monkeypatch):
     monkeypatch.setenv("WEBSITE_SITE_NAME", "xbrl-prod")
     monkeypatch.setenv("SESSION_SECRET", "x" * 64)

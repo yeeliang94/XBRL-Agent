@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-import time
 from db import engine as db_engine
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -26,7 +25,6 @@ from fastapi import HTTPException
 from openpyxl.utils import get_column_letter
 from pydantic import ValidationError
 
-from concept_model import write_snapshot
 from concept_model.facts_api import FactWrite, apply_fact, validate_scalar_fact
 
 logger = logging.getLogger(__name__)
@@ -147,20 +145,9 @@ def canonical_cell_write_validator(
     apply_fact will enforce during projection.
     """
     conn = db_engine.connect(str(db_path))
-    try:
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.row_factory = sqlite3.Row
-        # Validate against an in-memory copy of the template's rules: a fixed
-        # number of queries for the call instead of several per cell.
-        snapshot = write_snapshot.take(conn, template_id, run_id, with_facts=False)
-        if snapshot is not None:
-            conn.close()
-            conn = snapshot.scratch()
-            conn.row_factory = sqlite3.Row
-    except Exception:
-        conn.close()
-        raise
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.row_factory = sqlite3.Row
 
     def validate(write: dict) -> Optional[str]:
         sheet = str(write["sheet"])
@@ -214,234 +201,147 @@ def project_writes(
     so callers can see how many facts landed vs were skipped/rejected — a
     single bad cell never aborts a run, but the gaps are no longer silent.
     """
-    writes = list(writes)
+    conn = db_engine.connect(str(db_path))
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.row_factory = sqlite3.Row
+    result = ProjectionResult()
     source_catalog = None
     if source_pdf_path:
         from concept_model.source_fidelity import PreparedSourceCatalog
         source_catalog = PreparedSourceCatalog.load(source_pdf_path)
-    conn = db_engine.connect(str(db_path))
     try:
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.row_factory = sqlite3.Row
-        for attempt in range(1, _SAVE_ATTEMPTS + 1):
-            try:
-                return _project(conn, run_id, template_id, writes, source_catalog)
-            except sqlite3.OperationalError as exc:
-                conn.rollback()
-                # The save is all-or-nothing, so a busy database is safe to
-                # try again; anything else fails the same way next time.
-                if attempt == _SAVE_ATTEMPTS or not _is_busy(exc):
-                    raise
-                logger.warning(
-                    "project_writes: database busy (attempt %d of %d), retrying",
-                    attempt, _SAVE_ATTEMPTS,
+        for w in writes:
+            sheet = w["sheet"]
+            row = int(w["row"])
+            col = int(w["col"])
+            cell_desc = f"{sheet}!{get_column_letter(col)}{row}"
+            resolved = resolve_cell(conn, template_id, sheet, row, col)
+            if resolved is None:
+                result.skipped.append(cell_desc)
+                result.skipped_cells.add((sheet, row, col))
+                logger.debug(
+                    "project_writes: unresolved cell %s (template %s)",
+                    cell_desc, template_id,
                 )
-                time.sleep(_RETRY_DELAY_S * attempt)
-            except Exception:
-                conn.rollback()
-                raise
+                continue
+            concept_uuid, period, entity_scope = resolved
+            try:
+                source_receipt = w.get("source_receipt")
+                source_evidence_error = w.get("source_evidence_error")
+                if not source_receipt and not source_evidence_error and source_catalog is not None and isinstance(
+                    w.get("value"), (int, float),
+                ) and not isinstance(w.get("value"), bool):
+                    concept_label = conn.execute(
+                        "SELECT canonical_label FROM concept_nodes "
+                        "WHERE concept_uuid=?",
+                        (concept_uuid,),
+                    ).fetchone()[0]
+                    inferred, inference_error = source_catalog.infer_receipt(
+                        target_label=str(concept_label),
+                        target_value=w["value"],
+                        evidence=str(w.get("evidence") or ""),
+                    )
+                    if inferred is not None:
+                        source_receipt = inferred.to_dict()
+                        source_evidence_error = None
+                    else:
+                        # Failure of a heuristic match does not disprove the
+                        # agent's mapping. Retain the limitation as evidence,
+                        # without making every ambiguous zero a run conflict.
+                        source_receipt = {
+                            "transform": "direct", "terms": [],
+                            "arithmetic_status": "unassessed",
+                            "semantic_status": "unassessed",
+                            "rationale": inference_error,
+                        }
+                # Defer the commit — the whole batch lands in one transaction
+                # so a mid-batch crash rolls back cleanly (no half-projected
+                # run) instead of leaving committed-up-to-cell-N state.
+                apply_fact(
+                    conn,
+                    run_id,
+                    FactWrite(
+                        concept_uuid=concept_uuid,
+                        period=period,
+                        entity_scope=entity_scope,
+                        dimensions=w.get("dimensions") or {},
+                        value=w.get("value"),
+                        value_status="observed",
+                        source=w.get("evidence") or None,
+                        evidence=w.get("evidence") or None,
+                        actor="extraction",
+                    ),
+                    commit=False,
+                )
+                if source_receipt:
+                    from concept_model.source_fidelity import persist_receipt
+                    persist_receipt(
+                        conn,
+                        run_id=run_id,
+                        concept_uuid=concept_uuid,
+                        period=period,
+                        entity_scope=entity_scope,
+                        dimension_key="",
+                        receipt=source_receipt,
+                    )
+                elif source_evidence_error:
+                    from concept_model.source_fidelity import (
+                        persist_unresolved_source_evidence,
+                    )
+                    persist_unresolved_source_evidence(
+                        conn,
+                        run_id=run_id,
+                        concept_uuid=concept_uuid,
+                        period=period,
+                        entity_scope=entity_scope,
+                        dimension_key="",
+                        detail=str(source_evidence_error),
+                    )
+                    result.source_evidence_unresolved.append(cell_desc)
+                result.projected += 1
+                result.projected_cells.add((sheet, row, col))
+            except HTTPException as exc:
+                result.rejected.append(f"{cell_desc} ({exc.detail})")
+                logger.info(
+                    "project_writes: facts API rejected %s — %s",
+                    cell_desc, exc.detail,
+                )
+            except ValidationError as exc:
+                # The agent-controlled `value` is the only free field, and the
+                # tool layer accepts Union[int, float, str] (for row-1 date
+                # cells). A non-numeric value on a *resolvable* concept — e.g. a
+                # text-disclosure/title row — makes FactWrite(value=...) raise
+                # here because facts_api.FactWrite.value is Optional[float].
+                # Before this catch it escaped to the outer rollback and aborted
+                # the ENTIRE batch (run 49: one SOCI text row nuked both numeric
+                # profit facts -> projection_failed). Reject this one cell and
+                # keep projecting the numeric facts — restoring the docstring's
+                # "a single bad cell never aborts a run" contract.
+                # Truncate the raw value: a text/title row can carry a long
+                # sentence and `rejected` surfaces into the run/review summary.
+                raw = repr(w.get("value"))
+                if len(raw) > 80:
+                    raw = raw[:77] + "..."
+                result.rejected.append(f"{cell_desc} (non-numeric value {raw})")
+                logger.info(
+                    "project_writes: non-numeric/invalid value for %s — %s",
+                    cell_desc, exc,
+                )
+        from concept_model.source_fidelity import (
+            persist_source_term_reuse_issues,
+            source_term_reuse_issues,
+        )
+        result.source_fidelity_issues = source_term_reuse_issues(conn, run_id)
+        persist_source_term_reuse_issues(
+            conn,
+            run_id=run_id,
+            issues=result.source_fidelity_issues,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
-
-
-_SAVE_ATTEMPTS = 3
-_PREPARED_ATTEMPTS = 2
-_RETRY_DELAY_S = 1.0
-
-
-def _is_busy(exc: BaseException) -> bool:
-    text = str(exc).lower()
-    return "locked" in text or "busy" in text
-
-
-def _project(conn, run_id: int, template_id: str, writes: list, source_catalog) -> ProjectionResult:
-    """Save the batch the short-lock way; fall back to holding the lock throughout."""
-    for _ in range(_PREPARED_ATTEMPTS):
-        result = _project_prepared(conn, run_id, template_id, writes, source_catalog)
-        if result is not None:
-            return result
-    logger.warning(
-        "project_writes: template %s could not be saved the short-lock way for run %s "
-        "(no usable copy, or its facts kept changing); saving cell by cell with the "
-        "write lock held", template_id, run_id,
-    )
-    return _project_locked(conn, run_id, template_id, writes, source_catalog)
-
-
-def _project_prepared(
-    conn, run_id: int, template_id: str, writes: list, source_catalog,
-) -> Optional[ProjectionResult]:
-    """Prepare the batch on an in-memory copy, then save it under a short lock.
-
-    Every check runs against the copy, where it costs no database round trip
-    and holds no lock. The writes it produced are then sent together. Returns
-    ``None`` when a copy cannot stand in for the database, or when another
-    writer changed the template's facts between the copy and the save.
-    """
-    snapshot = write_snapshot.take(conn, template_id, run_id, with_facts=True)
-    if snapshot is None:
-        return None
-    result = ProjectionResult()
-    scratch = snapshot.scratch()
-    try:
-        scratch.row_factory = sqlite3.Row
-        _project_cells(scratch, run_id, template_id, writes, source_catalog, result)
-    finally:
-        scratch.close()
-    conn.execute("BEGIN IMMEDIATE")
-    if not snapshot.still_current(conn):
-        conn.rollback()
-        return None
-    db_engine.run_batch(conn, scratch.writes)
-    _save_reuse_issues(conn, run_id, result)
-    conn.commit()
     return result
-
-
-def _project_locked(
-    conn, run_id: int, template_id: str, writes: list, source_catalog,
-) -> ProjectionResult:
-    """Check and save each cell on the real connection, one statement at a time."""
-    result = ProjectionResult()
-    _project_cells(conn, run_id, template_id, writes, source_catalog, result)
-    _save_reuse_issues(conn, run_id, result)
-    conn.commit()
-    return result
-
-
-def _save_reuse_issues(conn, run_id: int, result: ProjectionResult) -> None:
-    from concept_model.source_fidelity import (
-        persist_source_term_reuse_issues,
-        source_term_reuse_issues,
-    )
-    result.source_fidelity_issues = source_term_reuse_issues(conn, run_id)
-    persist_source_term_reuse_issues(
-        conn,
-        run_id=run_id,
-        issues=result.source_fidelity_issues,
-    )
-
-
-def _project_cells(
-    conn, run_id: int, template_id: str, writes: list, source_catalog,
-    result: ProjectionResult,
-) -> None:
-    """Resolve, check and write each cell on ``conn`` without committing."""
-    for w in writes:
-        sheet = w["sheet"]
-        row = int(w["row"])
-        col = int(w["col"])
-        cell_desc = f"{sheet}!{get_column_letter(col)}{row}"
-        resolved = resolve_cell(conn, template_id, sheet, row, col)
-        if resolved is None:
-            result.skipped.append(cell_desc)
-            result.skipped_cells.add((sheet, row, col))
-            logger.debug(
-                "project_writes: unresolved cell %s (template %s)",
-                cell_desc, template_id,
-            )
-            continue
-        concept_uuid, period, entity_scope = resolved
-        try:
-            source_receipt = w.get("source_receipt")
-            source_evidence_error = w.get("source_evidence_error")
-            if not source_receipt and not source_evidence_error and source_catalog is not None and isinstance(
-                w.get("value"), (int, float),
-            ) and not isinstance(w.get("value"), bool):
-                concept_label = conn.execute(
-                    "SELECT canonical_label FROM concept_nodes "
-                    "WHERE concept_uuid=?",
-                    (concept_uuid,),
-                ).fetchone()[0]
-                inferred, inference_error = source_catalog.infer_receipt(
-                    target_label=str(concept_label),
-                    target_value=w["value"],
-                    evidence=str(w.get("evidence") or ""),
-                )
-                if inferred is not None:
-                    source_receipt = inferred.to_dict()
-                    source_evidence_error = None
-                else:
-                    # Failure of a heuristic match does not disprove the
-                    # agent's mapping. Retain the limitation as evidence,
-                    # without making every ambiguous zero a run conflict.
-                    source_receipt = {
-                        "transform": "direct", "terms": [],
-                        "arithmetic_status": "unassessed",
-                        "semantic_status": "unassessed",
-                        "rationale": inference_error,
-                    }
-            # Defer the commit — the whole batch lands in one transaction
-            # so a mid-batch crash rolls back cleanly (no half-projected
-            # run) instead of leaving committed-up-to-cell-N state.
-            apply_fact(
-                conn,
-                run_id,
-                FactWrite(
-                    concept_uuid=concept_uuid,
-                    period=period,
-                    entity_scope=entity_scope,
-                    dimensions=w.get("dimensions") or {},
-                    value=w.get("value"),
-                    value_status="observed",
-                    source=w.get("evidence") or None,
-                    evidence=w.get("evidence") or None,
-                    actor="extraction",
-                ),
-                commit=False,
-            )
-            if source_receipt:
-                from concept_model.source_fidelity import persist_receipt
-                persist_receipt(
-                    conn,
-                    run_id=run_id,
-                    concept_uuid=concept_uuid,
-                    period=period,
-                    entity_scope=entity_scope,
-                    dimension_key="",
-                    receipt=source_receipt,
-                )
-            elif source_evidence_error:
-                from concept_model.source_fidelity import (
-                    persist_unresolved_source_evidence,
-                )
-                persist_unresolved_source_evidence(
-                    conn,
-                    run_id=run_id,
-                    concept_uuid=concept_uuid,
-                    period=period,
-                    entity_scope=entity_scope,
-                    dimension_key="",
-                    detail=str(source_evidence_error),
-                )
-                result.source_evidence_unresolved.append(cell_desc)
-            result.projected += 1
-            result.projected_cells.add((sheet, row, col))
-        except HTTPException as exc:
-            result.rejected.append(f"{cell_desc} ({exc.detail})")
-            logger.info(
-                "project_writes: facts API rejected %s — %s",
-                cell_desc, exc.detail,
-            )
-        except ValidationError as exc:
-            # The agent-controlled `value` is the only free field, and the
-            # tool layer accepts Union[int, float, str] (for row-1 date
-            # cells). A non-numeric value on a *resolvable* concept — e.g. a
-            # text-disclosure/title row — makes FactWrite(value=...) raise
-            # here because facts_api.FactWrite.value is Optional[float].
-            # Before this catch it escaped to the outer rollback and aborted
-            # the ENTIRE batch (run 49: one SOCI text row nuked both numeric
-            # profit facts -> projection_failed). Reject this one cell and
-            # keep projecting the numeric facts — restoring the docstring's
-            # "a single bad cell never aborts a run" contract.
-            # Truncate the raw value: a text/title row can carry a long
-            # sentence and `rejected` surfaces into the run/review summary.
-            raw = repr(w.get("value"))
-            if len(raw) > 80:
-                raw = raw[:77] + "..."
-            result.rejected.append(f"{cell_desc} (non-numeric value {raw})")
-            logger.info(
-                "project_writes: non-numeric/invalid value for %s — %s",
-                cell_desc, exc,
-            )
