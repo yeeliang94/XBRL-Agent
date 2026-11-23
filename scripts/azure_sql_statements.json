@@ -237,7 +237,7 @@
  {
   "sql": "\n        INSERT INTO concept_fact_events(\n            run_id, concept_uuid, period, entity_scope,\n            actor, turn, ts, before_json, after_json, dimension_key\n        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n        ",
   "params": 10,
-  "origin": "db/engine.py"
+  "origin": "concept_model/facts_api.py"
  },
  {
   "sql": "\n        INSERT INTO run_concept_conflicts(\n            run_id, concept_uuid, period, entity_scope, kind, residual,\n            detail, status, created_at, dimension_key\n        ) VALUES (?, ?, ?, ?, 'parent_child_disagree', NULL, ?, 'open', ?, ?)\n        ",
@@ -247,7 +247,7 @@
  {
   "sql": "\n        INSERT INTO run_concept_facts(\n            run_id, concept_uuid, period, entity_scope, value,\n            value_status, children_status, source, evidence,\n            updated_at, dimension_key\n        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n        ON CONFLICT(run_id, concept_uuid, period, entity_scope, dimension_key)\n        DO UPDATE SET\n            value = excluded.value,\n            value_status = excluded.value_status,\n            children_status = excluded.children_status,\n            source = excluded.source,\n            evidence = excluded.evidence,\n            updated_at = excluded.updated_at\n        ",
   "params": 11,
-  "origin": "db/engine.py"
+  "origin": "concept_model/facts_api.py"
  },
  {
   "sql": "\n        SELECT n.canonical_label, n.render_sheet, n.kind, f.period,\n               f.entity_scope\n        FROM run_concept_facts f\n        JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid\n        WHERE f.run_id = ? AND n.template_id LIKE ?\n          AND f.value_status = 'conflict'\n        ORDER BY n.render_sheet, n.render_row\n        ",
@@ -317,7 +317,7 @@
  {
   "sql": "DELETE FROM fact_source_receipts WHERE run_id=? AND concept_uuid=? AND period=? AND entity_scope=? AND dimension_key=?",
   "params": 5,
-  "origin": "db/engine.py"
+  "origin": "concept_model/facts_api.py"
  },
  {
   "sql": "DELETE FROM fact_source_terms WHERE receipt_id=(SELECT id FROM fact_source_receipts WHERE run_id=? AND concept_uuid=? AND period=? AND entity_scope=? AND dimension_key=?)",
@@ -900,6 +900,11 @@
   "origin": "notes/source_repository.py"
  },
  {
+  "sql": "SELECT * FROM notes_block_placements WHERE run_id = ?",
+  "params": 1,
+  "origin": "notes/rehearsal_copy.py"
+ },
+ {
   "sql": "SELECT * FROM notes_block_placements WHERE run_id = ? AND sheet = ? AND row = ? AND active = 1",
   "params": 3,
   "origin": "notes/review_move.py"
@@ -910,9 +915,24 @@
   "origin": "notes/source_repository.py"
  },
  {
+  "sql": "SELECT * FROM notes_block_usages WHERE run_id = ?",
+  "params": 1,
+  "origin": "notes/rehearsal_copy.py"
+ },
+ {
   "sql": "SELECT * FROM notes_block_usages WHERE run_id = ? AND sheet = ? AND row = ?",
   "params": 3,
   "origin": "notes/review_move.py"
+ },
+ {
+  "sql": "SELECT * FROM notes_cell_provenance WHERE run_id = ?",
+  "params": 1,
+  "origin": "notes/rehearsal_copy.py"
+ },
+ {
+  "sql": "SELECT * FROM notes_cell_tombstones WHERE run_id = ?",
+  "params": 1,
+  "origin": "notes/rehearsal_copy.py"
  },
  {
   "sql": "SELECT * FROM notes_cells WHERE run_id = ? AND sheet = ? AND row = ?",
@@ -932,7 +952,7 @@
  {
   "sql": "SELECT * FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
   "params": 3,
-  "origin": "notes/agent.py"
+  "origin": "notes/review_move.py"
  },
  {
   "sql": "SELECT * FROM notes_cleanup_receipts WHERE run_id=? AND sheet=? AND row=? AND generation_id IS ?",
@@ -940,9 +960,29 @@
   "origin": "notes/cleanup_repository.py"
  },
  {
+  "sql": "SELECT * FROM notes_coverage_rows WHERE run_id = ?",
+  "params": 1,
+  "origin": "notes/rehearsal_copy.py"
+ },
+ {
+  "sql": "SELECT * FROM notes_disposition_events WHERE run_id = ? AND generation_id = ?",
+  "params": 2,
+  "origin": "notes/rehearsal_copy.py"
+ },
+ {
   "sql": "SELECT * FROM notes_integrity_runs WHERE run_id = ? ORDER BY id DESC LIMIT 1",
   "params": 1,
   "origin": "notes/integrity_runner.py"
+ },
+ {
+  "sql": "SELECT * FROM notes_nodes WHERE sheet = ?",
+  "params": 1,
+  "origin": "notes/rehearsal_copy.py"
+ },
+ {
+  "sql": "SELECT * FROM notes_source_blocks WHERE generation_id = ?",
+  "params": 1,
+  "origin": "notes/rehearsal_copy.py"
  },
  {
   "sql": "SELECT * FROM notes_source_blocks WHERE generation_id = ? ORDER BY reading_order, id",
@@ -955,9 +995,19 @@
   "origin": "notes/source_repository.py"
  },
  {
+  "sql": "SELECT * FROM notes_source_generations WHERE run_id = ?",
+  "params": 1,
+  "origin": "notes/rehearsal_copy.py"
+ },
+ {
   "sql": "SELECT * FROM notes_source_generations WHERE run_id = ? AND status = ? ORDER BY generation_no",
   "params": 2,
   "origin": "notes/source_repository.py"
+ },
+ {
+  "sql": "SELECT * FROM notes_source_notes WHERE generation_id = ?",
+  "params": 1,
+  "origin": "notes/rehearsal_copy.py"
  },
  {
   "sql": "SELECT * FROM notes_source_notes WHERE generation_id = ? ORDER BY id",
@@ -1030,9 +1080,19 @@
   "origin": "concept_model/write_snapshot.py"
  },
  {
+  "sql": "SELECT * FROM taxonomy_concepts WHERE source_element_id IN (SELECT taxonomy_element_id FROM template_slots WHERE sheet = ?)",
+  "params": 1,
+  "origin": "notes/rehearsal_copy.py"
+ },
+ {
   "sql": "SELECT * FROM template_slots WHERE canonical_target_id IN (SELECT concept_uuid FROM concept_nodes WHERE template_id = ?)",
   "params": 1,
   "origin": "concept_model/write_snapshot.py"
+ },
+ {
+  "sql": "SELECT * FROM template_slots WHERE sheet = ?",
+  "params": 1,
+  "origin": "notes/rehearsal_copy.py"
  },
  {
   "sql": "SELECT 1 FROM concept_edges WHERE parent_uuid = ? LIMIT 1",
@@ -1197,7 +1257,7 @@
  {
   "sql": "SELECT 1 FROM template_slots WHERE template_id LIKE ? LIMIT 1",
   "params": 1,
-  "origin": "api/notes.py"
+  "origin": "notes/persistence.py"
  },
  {
   "sql": "SELECT 1 FROM template_slots ts LEFT JOIN taxonomy_concepts tc ON tc.source_element_id = ts.taxonomy_element_id WHERE ts.canonical_target_id = ? AND (ts.value_kind = 'html' OR LOWER(COALESCE(tc.data_type, '')) LIKE '%textblockitemtype') LIMIT 1",
@@ -1252,7 +1312,7 @@
  {
   "sql": "SELECT COUNT(*) FROM run_concept_facts WHERE run_id = ?",
   "params": 1,
-  "origin": "server.py"
+  "origin": "concept_model/versioning.py"
  },
  {
   "sql": "SELECT COUNT(*) FROM run_concept_facts WHERE run_id = ? AND period = ? AND entity_scope = ? AND dimension_key = ? AND value_status = 'observed' AND concept_uuid IN (?)",
@@ -1702,7 +1762,7 @@
  {
   "sql": "SELECT content_revision FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
   "params": 3,
-  "origin": "notes/agent.py"
+  "origin": "notes/review_move.py"
  },
  {
   "sql": "SELECT content_revision, html, source_generation_id FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
@@ -1882,7 +1942,7 @@
  {
   "sql": "SELECT id FROM notes_review_flags WHERE run_id=? AND finding_id=? AND status='open'",
   "params": 2,
-  "origin": "notes/agent.py"
+  "origin": "notes/source_write.py"
  },
  {
   "sql": "SELECT id FROM notes_source_generations WHERE run_id = ? AND status = 'active'",
@@ -1988,6 +2048,11 @@
   "sql": "SELECT id, run_id, created_at, downloaded_at, operator, status, source_sha256, output_sha256, template_fingerprint, translation_version, snapshot_fact_count, snapshot_digest, snapshot_max_updated, snapshot_notes_count, snapshot_notes_digest, snapshot_notes_updated, column_map_json, preflight_json, preflight_override, degraded_ack, report_json, readiness_classification, taxonomy_version, manifest_versions_json, semantic_coverage_json FROM mtool_fill_receipts WHERE run_id = ? ORDER BY id DESC",
   "params": 1,
   "origin": "mtool/receipt.py"
+ },
+ {
+  "sql": "SELECT id, run_id, sheet, row, label, CASE WHEN sheet = ? THEN html ELSE NULL END AS html, evidence, source_pages, updated_at, concept_uuid, style_source, source_generation_id, source_rendered_sha256, current_html_sha256, content_origin, source_diverged_at, content_revision, source_render_version, invalid_target, invalid_target_reason FROM notes_cells WHERE run_id = ?",
+  "params": 2,
+  "origin": "notes/rehearsal_copy.py"
  },
  {
   "sql": "SELECT id, statement_type, model, status, prompt_tokens, completion_tokens, cache_read_tokens, cache_write_tokens, started_at, ended_at, total_cost FROM run_agents WHERE run_id = ? ORDER BY id",
@@ -2137,7 +2202,7 @@
  {
   "sql": "SELECT notes_integrity_mode FROM runs WHERE id = ?",
   "params": 1,
-  "origin": "db/repository.py"
+  "origin": "mtool/preflight.py"
  },
  {
   "sql": "SELECT notes_verdicts_json FROM runs WHERE id = ?",
@@ -2412,7 +2477,7 @@
  {
   "sql": "SELECT sheet, row FROM notes_cells WHERE run_id = ? AND sheet NOT IN ('Report-Auditors', 'Report-Directors', 'Report-StatementByDirectors')",
   "params": 1,
-  "origin": "notes/integrity_runner.py"
+  "origin": "notes/versioning.py"
  },
  {
   "sql": "SELECT sheet, row FROM run_notes_cell_snapshots WHERE run_id = ? AND sheet NOT IN ('Report-Auditors', 'Report-Directors', 'Report-StatementByDirectors')",
@@ -2672,7 +2737,7 @@
  {
   "sql": "UPDATE auth_sessions SET last_seen_at = ? WHERE session_id = ?",
   "params": 2,
-  "origin": "db/repository.py"
+  "origin": "db/engine.py"
  },
  {
   "sql": "UPDATE auth_users SET disabled = ? WHERE email = ?",

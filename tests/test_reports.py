@@ -818,3 +818,47 @@ async def test_report_tool_rejects_unknown_batch_with_exact_catalogue_and_recove
         assert by_concept[narrative]["value"] == "<p>Complete statement.</p>"
         assert all(by_concept[c]["value_status"] == "not_disclosed" for c in correct)
         assert conn.execute("SELECT count(*) FROM report_fields WHERE run_id=?", (rid,)).fetchone()[0] == 3
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_report_agent_finishes_its_save_before_it_reports_stopped(report_run, monkeypatch):
+    """The save runs in a worker thread so a wait for the database does not
+    stop the server. A thread cannot be stopped, so stopping the agent waits
+    for the save: no save may land after the run has reported it stopped."""
+    import asyncio
+    import threading
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    import reports.agent as report_agent
+    from reports.agent import ReportDeps, create_report_agent
+
+    db, rid = report_run
+    report = "STATEMENT_BY_DIRECTORS"
+    narrative = "ssmt_DisclosureOfStatementByDirectorsExplanatory"
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+    real_save = report_agent.save_field
+
+    def slow_save(*args, **kwargs):
+        started.set()
+        assert release.wait(10)
+        real_save(*args, **kwargs)
+        finished.set()
+
+    monkeypatch.setattr(report_agent, "save_field", slow_save)
+
+    def respond(messages, info):
+        return ModelResponse(parts=[ToolCallPart("save_report_fields", {"captured": [
+            {"concept": narrative, "value": "<p>Statement.</p>", "status": "observed",
+             "evidence": "Statement source", "pages": [1]}]})])
+
+    deps = ReportDeps("unused.pdf", str(db), rid, report, "mfrs", 1, viewed={1})
+    agent = create_report_agent(FunctionModel(respond), deps)
+    task = asyncio.create_task(agent.run("Capture the statement.", deps=deps))
+    assert await asyncio.to_thread(started.wait, 10)
+    task.cancel()
+    await asyncio.sleep(0.2)
+    assert not task.done()  # still waiting for the save in progress
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert finished.is_set()

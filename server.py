@@ -29,6 +29,8 @@ except ImportError:
     pass
 
 import asyncio
+import contextvars
+import concurrent.futures
 import dataclasses
 import json
 import logging
@@ -9077,8 +9079,6 @@ async def _auth_guard(request: Request, call_next):
     """
     from auth import config as auth_config
     from auth import middleware as auth_mw
-    from auth import sessions as auth_sessions
-    from db import repository as repo
 
     path = request.url.path
     if auth_config.dev_bypass_active() or not auth_mw.is_guarded(path):
@@ -9093,6 +9093,29 @@ async def _auth_guard(request: Request, call_next):
     _maybe_log_proxy_header_diag(request)
 
     cookie_value = request.cookies.get(auth_config.cookie_name())
+    # In a worker thread: on Azure SQL these are network round trips, and a
+    # wait here must not stop every run and request on the server's loop.
+    # Its own small pool, so a login check never queues behind agent saves
+    # that are waiting for the database in the shared one.
+    refused, email = await asyncio.get_running_loop().run_in_executor(
+        _AUTH_CHECK_POOL, contextvars.copy_context().run,
+        _check_session, cookie_value, path, request.method)
+    if refused is not None:
+        return refused
+    # Make the identity available to downstream handlers (audit/attribution).
+    request.state.auth_email = email
+    return await call_next(request)
+
+
+_AUTH_CHECK_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="auth-check")
+
+
+def _check_session(cookie_value, path: str, method: str):
+    """Resolve the session cookie: (refusal response or None, signed-in email)."""
+    from auth import middleware as auth_mw
+    from auth import sessions as auth_sessions
+    from db import repository as repo
+
     conn = _open_audit_conn()
     try:
         session, _status = auth_mw.resolve_session(conn, cookie_value)
@@ -9103,12 +9126,12 @@ async def _auth_guard(request: Request, call_next):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Not authenticated.", "reason": _status},
-            )
+            ), None
         # Bump the sliding window only on real activity, and only when the
         # stored timestamp is actually stale (auth_sessions.should_bump_activity)
         # — skipping the write on back-to-back requests avoids one UPDATE per
         # API call on the busy run page.
-        if auth_mw.counts_as_activity(path, request.method) and auth_sessions.should_bump_activity(session):
+        if auth_mw.counts_as_activity(path, method) and auth_sessions.should_bump_activity(session):
             repo.touch_auth_session(conn, session.session_id)
         conn.commit()
         # An admin-issued temporary password unlocks only /api/auth/* (exempt
@@ -9121,12 +9144,10 @@ async def _auth_guard(request: Request, call_next):
                     "detail": "Choose a new password to continue.",
                     "reason": "password_change_required",
                 },
-            )
+            ), None
+        return None, session.email
     finally:
         conn.close()
-    # Make the identity available to downstream handlers (audit/attribution).
-    request.state.auth_email = session.email
-    return await call_next(request)
 
 
 @app.middleware("http")

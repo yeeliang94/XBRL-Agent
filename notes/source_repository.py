@@ -13,6 +13,8 @@ supersedes the old, and it refuses to promote anything empty or failed.
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -65,10 +67,41 @@ def begin_generation(
     return int(cur.lastrowid)
 
 
+# Inside one locked save nothing else can change a generation, its blocks or
+# its notes, yet a single save reads the whole document several times over.
+# Within ``reuse_source_reads`` each is read once per connection while that
+# connection is in a transaction; a read outside one is never kept, so the
+# "did the source change while I was rendering" check after BEGIN IMMEDIATE
+# always reads the database. Open it only around a save that takes the write
+# lock first. On Azure SQL each read is a network round trip made while
+# holding the write lock.
+_reuse: contextvars.ContextVar[dict | None] = contextvars.ContextVar("notes_source_reads", default=None)
+
+
+@contextlib.contextmanager
+def reuse_source_reads():
+    token = _reuse.set({})
+    try:
+        yield
+    finally:
+        _reuse.reset(token)
+
+
+def _read_once(conn, key: tuple, read):
+    memo = _reuse.get()
+    if memo is None or not conn.in_transaction:
+        return read()
+    key = (id(conn), *key)
+    if key not in memo:
+        memo[key] = read()
+    value = memo[key]
+    return list(value) if isinstance(value, list) else value
+
+
 def fetch_generation(conn: sqlite3.Connection, generation_id: int):
-    return conn.execute(
+    return _read_once(conn, ("generation", generation_id), lambda: conn.execute(
         "SELECT * FROM notes_source_generations WHERE id = ?", (generation_id,)
-    ).fetchone()
+    ).fetchone())
 
 
 def active_generation(conn: sqlite3.Connection, run_id: int):
@@ -194,11 +227,11 @@ def write_blocks(
 
 
 def fetch_blocks(conn: sqlite3.Connection, generation_id: int) -> list:
-    return conn.execute(
+    return _read_once(conn, ("blocks", generation_id), lambda: conn.execute(
         "SELECT * FROM notes_source_blocks WHERE generation_id = ? "
         "ORDER BY reading_order, id",
         (generation_id,),
-    ).fetchall()
+    ).fetchall())
 
 
 def write_notes(
@@ -224,10 +257,10 @@ def write_notes(
 
 
 def fetch_notes(conn: sqlite3.Connection, generation_id: int) -> list:
-    return conn.execute(
+    return _read_once(conn, ("notes", generation_id), lambda: conn.execute(
         "SELECT * FROM notes_source_notes WHERE generation_id = ? ORDER BY id",
         (generation_id,),
-    ).fetchall()
+    ).fetchall())
 
 
 # --------------------------------------------------------------------------

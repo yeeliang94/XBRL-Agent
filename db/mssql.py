@@ -62,8 +62,9 @@ _DB_DIR = os.path.join(_REPO_ROOT, "db") + os.sep
 _CONNECT_ATTEMPTS = 4
 # New-record-only telemetry tables that may be written without the write lock
 # (see Connection.run_batch). Nothing reads them in order to write elsewhere.
-APPEND_ONLY_TABLES = frozenset({"agent_events", "run_events"})
-_APPEND_TARGET = re.compile(r"\s*INSERT\s+INTO\s+(\w+)\s*\(", re.IGNORECASE)
+LOCK_FREE_WRITES = frozenset({("INSERT", "agent_events"), ("INSERT", "run_events"),
+                              ("UPDATE", "auth_sessions")})
+_WRITE_TARGET = re.compile(r"\s*(INSERT\s+INTO|UPDATE)\s+(\w+)\b", re.IGNORECASE)
 # SQL Server accepts 2,100 parameters in one request; stay under it.
 _BATCH_MAX_PARAMS = 2000
 _BATCH_MAX_STATEMENTS = 200
@@ -268,10 +269,21 @@ def _caller() -> str:
     frames = [f for f in traceback.extract_stack()[:-2]
               if f.filename.startswith(_REPO_ROOT) and not f.filename.startswith(_DB_DIR)
               and "site-packages" not in f.filename]
-    if not frames:
-        return "unknown"
+    where = " <- ".join(f"{f.filename[len(_REPO_ROOT):]}:{f.lineno} {f.name}" for f in reversed(frames[-2:]))
     # The nearest two app frames: the save itself and what called it.
-    return " <- ".join(f"{f.filename[len(_REPO_ROOT):]}:{f.lineno} {f.name}" for f in reversed(frames[-2:]))
+    return (where or "unknown") + (" [on the server's main loop]" if _on_main_loop() else "")
+
+
+def _on_main_loop() -> bool:
+    """True on the server's event loop: a wait here stops every run and request."""
+    if threading.current_thread() is not threading.main_thread():
+        return False
+    try:
+        import asyncio
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        return False
 
 
 def _map_error(exc: BaseException) -> sqlite3.Error:
@@ -322,15 +334,16 @@ class Connection:
     def executemany(self, sql: str, seq_of_parameters: Iterable) -> "Cursor":
         return self.cursor().executemany(sql, seq_of_parameters)
 
-    def run_batch(self, statements: Iterable[tuple[str, Sequence]], *, append_only: bool = False) -> None:
+    def run_batch(self, statements: Iterable[tuple[str, Sequence]], *, lock_free: bool = False) -> None:
         """Run write statements in as few round trips as the server allows.
 
         One statement per round trip keeps the write lock for the whole list.
         Here the statements travel together, in order, inside the caller's
         transaction. Nothing is returned: no rows, row counts or new ids.
 
-        ``append_only`` is for new telemetry records (``APPEND_ONLY_TABLES``).
-        They read nothing and change no existing row, so they do not need the
+        ``lock_free`` is for writes listed in ``LOCK_FREE_WRITES``: new
+        telemetry records and the login session's last-seen time. They read
+        nothing first and touch one row each, so they do not need the
         database-wide write lock that keeps read-then-write saves one at a
         time; SQL Server's own row locks are enough. They then do not queue
         for that lock. A run event still checks its run's row, which a save in
@@ -353,12 +366,12 @@ class Connection:
             bound = _bind(params, t.order)
             if len(bound) > _BATCH_MAX_PARAMS:
                 raise sqlite3.ProgrammingError("too many parameters for one statement")
-            if not append_only:
+            if not lock_free:
                 self._before_write()
             else:
-                target = _APPEND_TARGET.match(sql)
-                if target is None or target.group(1) not in APPEND_ONLY_TABLES:
-                    raise sqlite3.ProgrammingError("append_only takes inserts into telemetry tables only")
+                target = _WRITE_TARGET.match(sql)
+                if target is None or (target.group(1).split()[0].upper(), target.group(2)) not in LOCK_FREE_WRITES:
+                    raise sqlite3.ProgrammingError("lock_free takes only the writes in LOCK_FREE_WRITES")
                 if not self._in_tx:
                     self._begin(immediate=False)
             if len(args) + len(bound) > _BATCH_MAX_PARAMS or len(parts) >= _BATCH_MAX_STATEMENTS:

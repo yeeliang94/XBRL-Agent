@@ -689,10 +689,11 @@ Each statement is a network round trip there, so hold that lock briefly:
 it reads (`concept_model/write_snapshot.py`, `db/scratch.py`), confirms under
 the lock that nothing it relied on changed, and sends the writes together
 with `db.engine.run_batch`. A write prepared this way addresses rows by their
-keys, never by a row id read earlier. New agent and run events are the one
-exception to the database-wide lock: `db.engine.append_records` inserts them
-without it (`db/mssql.py::APPEND_ONLY_TABLES`), since they read nothing and
-change no existing row. From v59 telemetry records (events, turns, usage
+keys, never by a row id read earlier. New agent and run events and a login's
+last-seen time are the exceptions to the database-wide lock:
+`db.engine.run_batch(..., lock_free=True)` sends them without it
+(`db/mssql.py::LOCK_FREE_WRITES`), since each reads nothing first and touches
+one row. From v59 telemetry records (events, turns, usage
 calls) no longer update `runs.updated_at` per record; the event writer
 refreshes it every 30 seconds and when it closes.
 After query changes, refresh `scripts/azure_sql_statements.json` (see

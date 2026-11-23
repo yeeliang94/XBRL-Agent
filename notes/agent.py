@@ -2766,6 +2766,8 @@ def _write_from_source_impl(
     if not deps.db_path or deps.source_generation_id is None:
         return "rejected: this run has no frozen source reading to build from."
     try:
+        # No reuse_source_reads here: write_cell_from_blocks reads the
+        # generation before it takes the lock, then checks it again after.
         with repo.db_session(deps.db_path) as conn:
             built = _write_from_source_in_connection(
                 conn, deps, sheet, row, block_ids, source_pages, evidence,
@@ -2957,7 +2959,7 @@ def _move_own_source_impl(
                     return result
                 message, _ = result
             else:
-                with repo.db_session(deps.db_path) as conn:
+                with repo.db_session(deps.db_path) as conn, srepo.reuse_source_reads():
                     conn.execute('BEGIN IMMEDIATE')
                     ids = _move_owned_in_connection(
                         conn, deps, source_row, destination_row, target_label,
@@ -2991,12 +2993,51 @@ def _move_own_source_impl(
         return f'rejected: {exc}'
 
 
+class _CopyPlanMismatch(Exception):
+    """The practice run on the copy disagreed with the real save."""
+
+
+def _rehearse_on_copy(
+    deps: "NotesDeps", sheet: str, row: int, block_ids: List[str],
+    source_pages: List[int], evidence: Optional[str],
+    format_ops: Optional[List[dict]], target_label: Optional[str],
+    move_from: Optional[int],
+):
+    """The practice run on an in-memory copy: no database write lock.
+
+    Returns (message, payload) as the locked practice run does. Any error,
+    including a rejection, sends the caller back to the locked practice run,
+    which gives the authoritative answer.
+    """
+    import sqlite3
+    from db import repository as repo
+    from notes import rehearsal_copy
+
+    with repo.db_session(deps.db_path) as conn:
+        copy = rehearsal_copy.take(
+            conn, run_id=deps.run_id, generation_id=deps.source_generation_id,
+            sheet=deps.sheet_name,
+        )
+    try:
+        copy.row_factory = sqlite3.Row
+        copy.execute("BEGIN IMMEDIATE")
+        if move_from is not None:
+            _move_owned_in_connection(copy, deps, move_from, row, target_label)
+        return _write_from_source_in_connection(
+            copy, deps, sheet, row, block_ids, source_pages, evidence,
+            format_ops, target_label=target_label,
+        )
+    finally:
+        copy.close()
+
+
 def _write_source_and_project_impl(
     deps: "NotesDeps", sheet: str, row: int, block_ids: List[str],
     source_pages: List[int], evidence: Optional[str],
     format_ops: Optional[List[dict]],
     *, target_label: Optional[str] = None,
     move_from: Optional[int] = None,
+    plan_on_copy: bool = True,
 ):
     """Commit source lineage only when its workbook projection succeeds.
 
@@ -3005,7 +3046,8 @@ def _write_source_and_project_impl(
     are promoted only inside the short final commit boundary.
     """
     from db import repository as repo
-    from notes import source_write
+    from notes import source_repository as srepo, source_write
+    from notes.review_move import MoveConflict
 
     if not deps.db_path or deps.source_generation_id is None:
         return "rejected: this run has no frozen source reading to build from."
@@ -3016,18 +3058,40 @@ def _write_source_and_project_impl(
     staged_source: Path | None = None
     try:
         with deps.io_lock:
-            # Build the exact payload using the canonical writer, but roll this
-            # planning transaction back.  This validates the request and keeps
+            # Build the exact payload using the canonical writer, but throw
+            # the planning writes away.  This validates the request and keeps
             # a projection failure from leaving cell/lineage rows behind.
-            with repo.db_session(deps.db_path) as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                if move_from is not None:
-                    _move_owned_in_connection(conn, deps, move_from, row, target_label)
-                message, payload = _write_from_source_in_connection(
-                    conn, deps, sheet, row, block_ids, source_pages, evidence,
-                    format_ops, target_label=target_label,
-                )
-                conn.rollback()
+            # First on an in-memory copy, which needs no database write lock;
+            # the real save below confirms its payload. Any trouble there, and
+            # the plan is made the original way, on the database under the lock.
+            planned_on_copy = False
+            if plan_on_copy:
+                try:
+                    message, payload = _rehearse_on_copy(
+                        deps, sheet, row, block_ids, source_pages, evidence,
+                        format_ops, target_label, move_from,
+                    )
+                    planned_on_copy = True
+                except (source_write.SourceWriteError, MoveConflict) as exc:
+                    # A refusal is decided under the lock: the copy is read
+                    # without it and may be a moment out of date.
+                    logger.info("Notes practice save on a copy refused (%s); planning under the lock",
+                                str(exc)[:200])
+                except Exception as exc:  # noqa: BLE001 - the locked plan below decides
+                    # Expected never: the copy lacks something the save reads.
+                    # Each one costs this save the longer hold of the write lock.
+                    logger.warning("Notes practice save on a copy failed (%s: %s); planning under the lock",
+                                   type(exc).__name__, str(exc)[:200])
+            if not planned_on_copy:
+                with repo.db_session(deps.db_path) as conn, srepo.reuse_source_reads():
+                    conn.execute("BEGIN IMMEDIATE")
+                    if move_from is not None:
+                        _move_owned_in_connection(conn, deps, move_from, row, target_label)
+                    message, payload = _write_from_source_in_connection(
+                        conn, deps, sheet, row, block_ids, source_pages, evidence,
+                        format_ops, target_label=target_label,
+                    )
+                    conn.rollback()
 
             output_path = Path(deps.output_dir) / deps.filled_filename
             source_path = (
@@ -3066,7 +3130,7 @@ def _write_source_and_project_impl(
             output_promoted = False
             sidecar_promoted = False
             try:
-                with repo.db_session(deps.db_path) as conn:
+                with repo.db_session(deps.db_path) as conn, srepo.reuse_source_reads():
                     conn.execute("BEGIN IMMEDIATE")
                     if move_from is not None:
                         _move_owned_in_connection(conn, deps, move_from, row, target_label)
@@ -3075,6 +3139,8 @@ def _write_source_and_project_impl(
                         format_ops, target_label=target_label,
                     )
                     revision = _source_revision(conn, deps, row)
+                    if committed_payload != payload and planned_on_copy:
+                        raise _CopyPlanMismatch()
                     if committed_payload != payload:
                         raise source_write.SourceWriteError(
                             "the source or destination changed during workbook "
@@ -3127,6 +3193,14 @@ def _write_source_and_project_impl(
                                          if (c['sheet'], c['row']) != (sheet, move_from)]
             _merge_writer_result(deps, result)
             return committed_message, result
+    except _CopyPlanMismatch:
+        # Nothing was saved and no file moved. Plan again on the database.
+        logger.warning("Notes practice save on a copy disagreed with the real save for %s row %s; "
+                       "repeating under the lock", sheet, row)
+        return _write_source_and_project_impl(
+            deps, sheet, row, block_ids, source_pages, evidence, format_ops,
+            target_label=target_label, move_from=move_from, plan_on_copy=False,
+        )
     except source_write.SourcePlacementConflict as exc:
         return _record_source_placement_conflict(deps, exc, source_pages)
     except source_write.SourceWriteError as exc:

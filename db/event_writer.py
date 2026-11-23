@@ -7,7 +7,7 @@ statement is a network round trip. Events are history, not state, so they are
 queued and written in order by one thread with its own connection. Events
 that arrive within about a second of each other are saved together: one
 transaction, and on Azure SQL one request that does not wait for the
-database-wide write lock (``db.engine.append_records``). Saving an event no
+database-wide write lock (``db.engine.run_batch(..., lock_free=True)``). Saving an event no
 longer updates the run's activity time; the writer refreshes it at most every
 ``touch_interval_s`` seconds, and once more when it closes.
 A write that fails is retried; a single lost event no longer stops an agent's
@@ -139,7 +139,7 @@ class EventWriter:
                 statements = _Statements()
                 for item in items:
                     item.write(statements, **item.kwargs)
-                db_engine.run_batch(conn, statements.collected, append_only=True)
+                db_engine.run_batch(conn, statements.collected, lock_free=True)
                 conn.commit()
                 return
             except Exception as exc:

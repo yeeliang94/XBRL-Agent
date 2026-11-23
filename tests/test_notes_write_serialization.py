@@ -347,6 +347,91 @@ def test_source_projection_does_not_hold_sqlite_writer_lock(tmp_path, monkeypatc
     assert sidecar[0]["source_pages"] == [1]
 
 
+
+@pytest.mark.parametrize("plan", ["copy", "wrong_copy"])
+def test_source_write_plans_without_the_write_lock_and_never_keeps_a_wrong_plan(
+        tmp_path, monkeypatch, plan):
+    """The practice save runs on an in-memory copy, so on Azure SQL it holds
+    no database write lock. Only the real save decides what is kept: a copy
+    that planned the wrong content is caught and planned again on the database."""
+    import dataclasses
+    from db import engine as db_engine
+
+    kind = NotesTemplateType.CORP_INFO
+    template = notes_template_path(kind, level="company")
+    sheet = NOTES_REGISTRY[kind].sheet_name
+    db = tmp_path / "audit.sqlite"
+    init_db(db)
+    template_id, nodes = parse_notes_template(str(template), sheet)
+    import_notes_template(db, template_id, nodes)
+    persist_template_manifest(db, template)
+    with repo.db_session(db) as conn:
+        run_id = repo.create_run(conn, "source.pdf", session_id="s", output_dir=str(tmp_path))
+        generation_id = srepo.begin_generation(conn, run_id, input_kind="prepared_document")
+        srepo.write_blocks(conn, generation_id, [SourceBlock(
+            "b1", "paragraph", 1, "<p>Source disclosure.</p>", source_note_id="n1", page=1,
+        )])
+        srepo.write_notes(conn, generation_id, [SourceNote("n1", "1", "Disclosure", ["b1"])])
+        srepo.activate_generation(conn, generation_id)
+    target_row = min(node.row for node in nodes if node.kind == "LEAF")
+    agent, deps = notes_agent.create_notes_agent(
+        template_type=kind, pdf_path=str(tmp_path / "source.pdf"),
+        inventory=[], filing_level="company", model=TestModel(),
+        output_dir=str(tmp_path), run_id=run_id, db_path=str(db),
+        source_generation_id=generation_id,
+    )
+    if plan == "wrong_copy":
+        real_plan = notes_agent._rehearse_on_copy
+
+        def wrong_plan(*args, **kwargs):
+            message, payload = real_plan(*args, **kwargs)
+            return message, dataclasses.replace(payload, content="<p>Not in the source.</p>")
+
+        monkeypatch.setattr(notes_agent, "_rehearse_on_copy", wrong_plan)
+
+    # Count write-locked transactions that were thrown away (practice saves).
+    discarded = []
+    real_connect = db_engine.connect
+
+    def traced(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        state = {"locked": False}
+
+        def watch(sql):
+            text = sql.strip().upper()
+            if text.startswith("BEGIN IMMEDIATE"):
+                state["locked"] = True
+            elif text.startswith("ROLLBACK") and state["locked"]:
+                discarded.append(1)
+                state["locked"] = False
+            elif text.startswith("COMMIT"):
+                state["locked"] = False
+
+        conn.set_trace_callback(watch)
+        return conn
+
+    monkeypatch.setattr(db_engine, "connect", traced)
+    result = asyncio.run(_tool(agent, "write_note_from_source")(
+        SimpleNamespace(deps=deps), sheet=sheet, row=target_row,
+        target_label=next(node.label for node in nodes if node.row == target_row),
+        block_ids=["b1"], evidence="Page 1",
+    ))
+
+    assert result.startswith("ok:"), result
+    # A good copy plan needs no locked practice save. A wrong one costs the
+    # rolled-back real save and one locked practice save.
+    assert len(discarded) == (0 if plan == "copy" else 2)
+    with repo.db_session(db) as conn:
+        html = conn.execute(
+            "SELECT html FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
+            (run_id, sheet, target_row),
+        ).fetchone()["html"]
+    from notes.writer import payload_sidecar_path
+    sidecar = json.loads(Path(payload_sidecar_path(deps.filled_path)).read_text())
+    assert "Source disclosure." in html and "Not in the source." not in html
+    assert "Source disclosure." in sidecar[0]["content_preview"]
+
+
 @pytest.mark.parametrize('operation', ['replace', 'move', 'move_ok', 'human', 'stale', 'occupied', 'sink'])
 def test_failed_final_promotion_restores_previous_artifacts_and_db(
     tmp_path, monkeypatch, operation,
@@ -468,3 +553,46 @@ def test_failed_final_promotion_restores_previous_artifacts_and_db(
         assert "First version" in cell["html"]
         assert [row["block_id"] for row in srepo.active_placements(
             conn, generation_id)] == ["b1"]
+
+
+def test_source_write_rejects_a_source_replaced_while_it_was_rendering(tmp_path, monkeypatch):
+    """Reusing source reads inside a save must not hide a newer reading: the
+    check after the lock is taken has to see the database, not an earlier read."""
+    from notes import source_render, source_write
+
+    kind = NotesTemplateType.CORP_INFO
+    template = notes_template_path(kind, level="company")
+    sheet = NOTES_REGISTRY[kind].sheet_name
+    db = tmp_path / "audit.sqlite"
+    init_db(db)
+    template_id, nodes = parse_notes_template(str(template), sheet)
+    import_notes_template(db, template_id, nodes)
+    persist_template_manifest(db, template)
+    with repo.db_session(db) as conn:
+        run_id = repo.create_run(conn, "source.pdf", session_id="s", output_dir=str(tmp_path))
+        generation_id = srepo.begin_generation(conn, run_id, input_kind="prepared_document")
+        srepo.write_blocks(conn, generation_id, [SourceBlock(
+            "b1", "paragraph", 1, "<p>Source disclosure.</p>", source_note_id="n1", page=1,
+        )])
+        srepo.write_notes(conn, generation_id, [SourceNote("n1", "1", "Disclosure", ["b1"])])
+        srepo.activate_generation(conn, generation_id)
+    target_row = min(node.row for node in nodes if node.kind == "LEAF")
+    real_render = source_render.render_blocks
+
+    def render_then_replace_source(*args, **kwargs):
+        rendered = real_render(*args, **kwargs)
+        with sqlite3.connect(str(db)) as other:
+            other.execute("UPDATE notes_source_generations SET status = 'superseded' WHERE id = ?",
+                          (generation_id,))
+        return rendered
+
+    monkeypatch.setattr(source_render, "render_blocks", render_then_replace_source)
+    with repo.db_session(db) as conn, srepo.reuse_source_reads():
+        with pytest.raises(source_write.SourceWriteError, match="changed during rendering"):
+            source_write.write_cell_from_blocks(
+                conn, run_id=run_id, generation_id=generation_id, sheet=sheet, row=target_row,
+                block_ids=["b1"], evidence="Page 1", source_pages=[1], format_ops=None,
+                actor="notes_agent", template_prefix="mfrs-company-",
+                target_label=next(node.label for node in nodes if node.row == target_row),
+                allowed_sheets=[sheet],
+            )

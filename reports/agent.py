@@ -168,15 +168,28 @@ def create_report_agent(model, deps: ReportDeps):
                     f"Permitted concept IDs (copy exactly): {json.dumps(permitted_concepts)}")
             if len({f.concept for f in captured}) != len(captured):
                 raise ValueError("Assess each field once within a call")
-            with closing(db_engine.connect(ctx.deps.db_path)) as conn, conn:
-                conn.execute("PRAGMA busy_timeout=5000")
-                conn.execute("BEGIN IMMEDIATE")
-                for f in captured:
-                    if f.status == "observed" and (not f.evidence.strip() or not f.pages or not set(f.pages) <= ctx.deps.viewed):
-                        raise ValueError("Observed fields require evidence from pages you inspected")
-                    if f.status in {"user_override", "cleared"}:
-                        raise ValueError("Only a human may author a user override")
-                    save_field(conn, ctx.deps.run_id, ctx.deps.report, f.concept, f.value, f.status, f.evidence, f.pages)
+            def save() -> None:
+                with closing(db_engine.connect(ctx.deps.db_path)) as conn, conn:
+                    conn.execute("PRAGMA busy_timeout=5000")
+                    conn.execute("BEGIN IMMEDIATE")
+                    for f in captured:
+                        if f.status == "observed" and (not f.evidence.strip() or not f.pages or not set(f.pages) <= ctx.deps.viewed):
+                            raise ValueError("Observed fields require evidence from pages you inspected")
+                        if f.status in {"user_override", "cleared"}:
+                            raise ValueError("Only a human may author a user override")
+                        save_field(conn, ctx.deps.run_id, ctx.deps.report, f.concept, f.value, f.status, f.evidence, f.pages)
+
+            # In a worker thread: waiting for the database here must not stop
+            # every other agent and request on the server's loop. A thread
+            # cannot be stopped, so a stop request waits for the save to end
+            # before the run reports it stopped, as it did when the save ran
+            # on the loop; a save never lands after its run has ended.
+            saving = asyncio.ensure_future(asyncio.to_thread(save))
+            try:
+                await asyncio.shield(saving)
+            except asyncio.CancelledError:
+                await asyncio.wait({saving})
+                raise
             return json.dumps({"saved": len(captured)})
         except ValueError as exc:
             raise ModelRetry(str(exc)) from exc

@@ -51,6 +51,10 @@ class Scratch:
         self._conn.commit()
 
     @property
+    def in_transaction(self) -> bool:
+        return self._conn.in_transaction
+
+    @property
     def row_factory(self):
         return self._conn.row_factory
 

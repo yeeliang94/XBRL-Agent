@@ -3717,10 +3717,12 @@ def touch_auth_session(conn: sqlite3.Connection, session_id: str) -> None:
     """Bump last_seen_at to now — the sliding-window 'activity' write. Called
     only for real user activity, never for background polls/SSE (so an idle tab
     still times out)."""
-    conn.execute(
+    # Without the Azure SQL write lock: a page request must not queue behind
+    # a document save to record that someone is still using the app.
+    db_engine.run_batch(conn, [(
         "UPDATE auth_sessions SET last_seen_at = ? WHERE session_id = ?",
         (_now(), session_id),
-    )
+    )], lock_free=True)
 
 
 def delete_auth_session(conn: sqlite3.Connection, session_id: str) -> None:
