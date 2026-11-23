@@ -903,3 +903,35 @@ async def test_report_save_prepared_on_a_copy_yields_to_a_change_made_meanwhile(
         revision = conn.execute("SELECT revision FROM report_fields WHERE run_id=? AND concept_id=?",
                                 (rid, narrative)).fetchone()[0]
     assert revision == 8
+
+
+@pytest.mark.asyncio
+async def test_report_agents_respect_the_agents_running_at_once_limit(report_run, monkeypatch):
+    """Report agents share the statement and notes agents' limit (Settings:
+    "Agents running at once"); before, they ran on top of it."""
+    import asyncio
+    from types import SimpleNamespace
+    import agent_concurrency
+    import reports.agent as report_agent
+
+    db, rid = report_run
+    monkeypatch.setenv(agent_concurrency.ENV_VAR, "1")
+    running = peak = 0
+
+    async def fake_run(*, attempt, policy, make_terminal, on_retry, label):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.02)
+        running -= 1
+        return report_agent.ReportResult(label.split()[-1], "succeeded")
+
+    monkeypatch.setattr(report_agent, "run_agent_with_retries", fake_run)
+    requested = list(REPORTS)[:2]
+    with repo.db_session(db) as conn:
+        agent_ids = {r: repo.create_run_agent(conn, rid, r) for r in requested}
+    config = SimpleNamespace(pdf_path="unused.pdf", db_path=str(db), run_id=rid, filing_standard="mfrs",
+                             output_dir="unused", model=None)
+    results = await report_agent.run_reports(config, requested, {}, agent_ids, asyncio.Queue(), "session")
+    assert [r.status for r in results] == ["succeeded", "succeeded"]
+    assert peak == 1

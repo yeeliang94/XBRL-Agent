@@ -310,11 +310,17 @@ async def run_reports(config, requested, models, run_agent_ids, event_queue, ses
             await asyncio.sleep(compute_backoff_delay(retry_error, 0))
 
         try:
-            result = await run_agent_with_retries(
-                attempt=attempt,
-                policy=RetryPolicy(rate_limit_retries=0, generic_retries=1,
-                                   is_rate_limit=lambda _: False),
-                make_terminal=terminal, on_retry=on_retry, label=f"Report {report}")
+            # Under the same "Agents running at once" limit as the statement
+            # and notes agents (agent_concurrency); a stop while waiting for a
+            # slot ends here as cancelled, like a stop mid-run.
+            from agent_concurrency import agent_slot
+
+            async with agent_slot(f"Report {report}"):
+                result = await run_agent_with_retries(
+                    attempt=attempt,
+                    policy=RetryPolicy(rate_limit_retries=0, generic_retries=1,
+                                       is_rate_limit=lambda _: False),
+                    make_terminal=terminal, on_retry=on_retry, label=f"Report {report}")
         except asyncio.CancelledError:
             result.status, result.error = "cancelled", "Report extraction stopped. Captured values are retained."
             error_type = "cancelled"
