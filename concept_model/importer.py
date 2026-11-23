@@ -40,8 +40,8 @@ def _now() -> str:
 def _parents_first(seen: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     """The concepts in their parse order, except that each comes after its parent.
 
-    SQLite can defer the parent check to COMMIT; Azure SQL checks each row as
-    it is written, so a child must not be written before its parent.
+    A child is never written before its parent, so the import does not rely
+    on SQLite deferring the parent check to COMMIT.
     """
     ordered: list[dict[str, Any]] = []
     placed: set[str] = set()

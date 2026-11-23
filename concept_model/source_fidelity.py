@@ -391,30 +391,25 @@ def persist_receipt(
             receipt["arithmetic_status"], receipt["semantic_status"], now,
         ),
     )
-    # The receipt is addressed by its fact, never by its row id, so these
-    # statements can be prepared on a copy of the data and sent later.
-    key = (run_id, concept_uuid, period, entity_scope, dimension_key)
-    receipt_row = (
-        "FROM fact_source_receipts WHERE run_id=? AND concept_uuid=? "
-        "AND period=? AND entity_scope=? AND dimension_key=?"
-    )
-    conn.execute(
-        f"DELETE FROM fact_source_terms WHERE receipt_id=(SELECT id {receipt_row})", key,
-    )
+    receipt_id = conn.execute(
+        "SELECT id FROM fact_source_receipts WHERE run_id=? AND concept_uuid=? "
+        "AND period=? AND entity_scope=? AND dimension_key=?",
+        (run_id, concept_uuid, period, entity_scope, dimension_key),
+    ).fetchone()[0]
+    conn.execute("DELETE FROM fact_source_terms WHERE receipt_id=?", (receipt_id,))
     for term in receipt.get("terms", []):
         conn.execute(
             "INSERT INTO fact_source_terms("
             "receipt_id,source_term_id,source_page,source_block_id,row_label,"
             "column_label,raw_value,numeric_value,coefficient,capture_status,"
-            f"uncertainty_json) SELECT id,?,?,?,?,?,?,?,?,?,? {receipt_row}",
+            "uncertainty_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (
-                term["source_term_id"], term["source_page"],
+                receipt_id, term["source_term_id"], term["source_page"],
                 term["source_block_id"], term.get("row_label"),
                 term.get("column_label"), term["raw_value"],
                 term["numeric_value"], term["coefficient"],
                 term.get("capture_status"),
                 json.dumps(term.get("uncertainties") or []),
-                *key,
             ),
         )
 

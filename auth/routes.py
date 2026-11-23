@@ -94,11 +94,15 @@ def _clear_session_cookie(response: Response) -> None:
 async def health() -> dict:
     """Unauthenticated liveness probe (Azure health check + smoke test).
 
-    ``database`` names the kind of store in use, never its address.
+    On Azure it also says when the last database copy was saved, and whether
+    saving has fallen behind (``db/copies.py``). Never a path.
     """
-    from db import engine
+    from db import copies as db_copies
 
-    return {"status": "ok", "database": "azure-sql" if engine.dialect() == "mssql" else "sqlite"}
+    copy_status = db_copies.status()
+    if copy_status is None:
+        return {"status": "ok"}
+    return {"status": "ok", "database_copy": copy_status}
 
 
 @router.post("/api/auth/login/password")

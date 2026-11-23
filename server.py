@@ -102,7 +102,10 @@ from runtime_settings import apply_settings as _apply_local_settings
 _apply_local_settings(SETTINGS_FILE)
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
 # Shared SQLite audit store (one file per installation, grows over time).
-AUDIT_DB_PATH = OUTPUT_DIR / "xbrl_agent.db"
+# On Azure it sits on the container's own disk, with copies saved under
+# OUTPUT_DIR (db/location.py, db/copies.py).
+from db import location as db_location
+AUDIT_DB_PATH = db_location.live_database_path(OUTPUT_DIR)
 
 
 def _reload_runtime_settings() -> None:
@@ -3057,9 +3060,9 @@ def _check_auth_startup_config() -> None:
         conn.close()
     if enabled == 0:
         raise RuntimeError(
-            "No enabled login accounts exist. Seed at least one with "
-            "`python -m auth.manage add-user EMAIL --name \"...\"` before "
-            "starting the server in production."
+            "No enabled login accounts exist. For the first start, set the "
+            "BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD App settings; "
+            "delete them after logging in."
         )
 
 
@@ -3124,7 +3127,11 @@ async def _lifespan(app: FastAPI):
     # Uvicorn installs its handlers before lifespan begins. Add correlation to
     # those handlers and attach the optional rotating JSONL sink now.
     configure_logging()
-    db_engine.check_production_database()
+    db_location.check_live_location(AUDIT_DB_PATH)
+    if db_location.on_azure():
+        from db import copies as db_copies
+
+        db_copies.restore_at_startup(AUDIT_DB_PATH, db_location.copies_dir(OUTPUT_DIR))
     init_db(AUDIT_DB_PATH)
     try:
         from agent_tracing import purge_expired_diagnostics
@@ -3309,7 +3316,40 @@ async def _lifespan(app: FastAPI):
                 "projection will skip every cell. Fix the import and restart.",
                 exc_info=True,
             )
+    if db_location.on_azure():
+        _start_database_copies()
     yield
+    # Save a last copy if anything changed. Azure may stop the container
+    # before this runs; the stop-signal handler has already asked for it.
+    from db import copies as db_copies
+
+    await asyncio.to_thread(db_copies.stop)
+
+
+def _start_database_copies() -> None:
+    """Azure: start saving copies, once startup has succeeded.
+
+    The copy was restored at the top of startup, before the schema check.
+    Claiming the right to save only now means a container that fails to start
+    leaves saving with the container still serving. Azure sends SIGTERM before
+    it stops the container; the handler asks the saver for a copy at once (on
+    the saver's thread) and then lets uvicorn shut down as usual.
+    """
+    import signal
+    from db import copies as db_copies
+
+    db_copies.start_saving()
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def _on_stop(sig, frame):
+        db_copies.request_save()
+        if callable(previous):
+            previous(sig, frame)
+
+    try:
+        signal.signal(signal.SIGTERM, _on_stop)
+    except ValueError:  # not the main thread: the 60-second saves still run
+        logger.warning("database copies: could not watch the stop signal")
 
 
 # The built-in API pages stay off: nothing uses them, they would need a looser
@@ -4264,6 +4304,9 @@ def _safe_mark_finished(
                 run_id, exc_info=True,
             )
         db_conn.commit()
+        # A finished run is what the user keeps: save a copy soon (Azure).
+        from db import copies as db_copies
+        db_copies.request_save()
         return True
     except Exception:
         logger.warning(

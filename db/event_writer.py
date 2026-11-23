@@ -2,11 +2,10 @@
 
 The run orchestrator streams events from the server's event loop. Writing
 them there made the whole server wait whenever another writer held the
-database lock: up to 5 seconds on SQLite, longer on Azure SQL, where every
-statement is a network round trip. Events are history, not state, so they are
+database lock, for up to 5 seconds. Events are history, not state, so they are
 queued and written in order by one thread with its own connection. Events
-that arrive within about a second of each other are saved together: one
-transaction, and on Azure SQL one request.
+that arrive within about a second of each other are saved together in one
+transaction.
 A write that fails is retried; a single lost event no longer stops an agent's
 history.
 """
@@ -27,19 +26,6 @@ logger = logging.getLogger(__name__)
 _ATTEMPTS = 3
 _GROUP_MAX = 200
 _STOP = object()
-
-
-class _Statements:
-    """Stands in for a connection to collect the inserts of a group of events."""
-
-    lastrowid = 0  # the save functions return the new row id; nothing here uses it
-
-    def __init__(self) -> None:
-        self.collected: list[tuple[str, tuple]] = []
-
-    def execute(self, sql: str, parameters=()) -> "_Statements":
-        self.collected.append((sql, tuple(parameters)))
-        return self
 
 
 class EventWriter:
@@ -104,10 +90,8 @@ class EventWriter:
     def _write_group(self, conn, group: list) -> None:
         for attempt in range(1, _ATTEMPTS + 1) if len(group) > 1 else ():
             try:
-                statements = _Statements()
                 for write, kwargs in group:
-                    write(statements, **kwargs)
-                db_engine.run_batch(conn, statements.collected)
+                    write(conn, **kwargs)
                 conn.commit()
                 return
             except Exception as exc:

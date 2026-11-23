@@ -166,9 +166,8 @@ def _recompute_scope(
     }
 
     # Open partial_state conflicts for this scope, read once. Closing or
-    # updating one is then a write only when one exists: on Azure SQL each
-    # statement is a network round trip, and an unconditional close per
-    # parent per pass held the write lock for many seconds per recompute.
+    # updating one is then a write only when one exists, not an
+    # unconditional close per parent per pass.
     open_conflicts: dict[str, int] = {}
     for conflict_id, concept_uuid in conn.execute(
         "SELECT id, concept_uuid FROM run_concept_conflicts WHERE run_id = ? "

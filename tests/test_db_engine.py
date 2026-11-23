@@ -1,9 +1,8 @@
 """The application opens its database in exactly one place: ``db.engine.connect``.
 
 Source inspection is the available seam here. A module that calls
-``sqlite3.connect`` itself still works today, because SQLite is the only
-database; it fails only once ``DATABASE_URL`` points the app at Azure SQL,
-when that module would silently write to a local SQLite file instead.
+``sqlite3.connect`` itself skips the approved-folder check in
+``db.engine.connect`` and could open a database file anywhere.
 """
 from __future__ import annotations
 
@@ -32,10 +31,7 @@ def _product_modules():
 def test_no_product_module_opens_sqlite_directly():
     offenders = []
     for path in _product_modules():
-        # engine.py opens the audit database; mssql.py opens only an in-memory
-        # SQLite database to build sqlite3.Row objects for Azure SQL rows;
-        # scratch.py opens only an in-memory copy of rows read through engine.py.
-        if path in (ROOT / "db" / "engine.py", ROOT / "db" / "mssql.py", ROOT / "db" / "scratch.py"):
+        if path == ROOT / "db" / "engine.py":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         sqlite_names = {"sqlite3"}

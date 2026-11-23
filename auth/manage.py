@@ -9,9 +9,9 @@ runs this to create or rotate accounts. Usage:
     python -m auth.manage enable-user back@firm.com
     python -m auth.manage list-users
 
-It targets the same SQLite DB the server uses (OUTPUT_DIR/xbrl_agent.db, with
-the XBRL_OUTPUT_DIR override Phase 3 also wires into the server), or an explicit
---db path. Passwords are read interactively (never as an argv that would land in
+It targets the same SQLite DB the server uses (``db/location.py``: on a laptop
+OUTPUT_DIR/xbrl_agent.db with the XBRL_OUTPUT_DIR override, on Azure the live
+file on the container's own disk), or an explicit --db path. Passwords are read interactively (never as an argv that would land in
 shell history) and stored only as argon2id hashes.
 """
 from __future__ import annotations
@@ -34,9 +34,11 @@ _MIN_PASSWORD_LEN = passwords.MIN_PASSWORD_LEN
 
 
 def _default_db_path() -> Path:
+    from db.location import live_database_path
+
     base = Path(__file__).resolve().parent.parent
     output_dir = Path(os.environ.get("XBRL_OUTPUT_DIR") or (base / "output"))
-    return output_dir / "xbrl_agent.db"
+    return live_database_path(output_dir)
 
 
 def _prompt_new_password() -> str:
@@ -206,7 +208,16 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     # Resolve + ensure the DB exists (idempotent) so a first-run add-user works
     # against a brand-new install.
-    args.db = str(args.db) if args.db else str(_default_db_path())
+    if not args.db:
+        from db.location import on_azure
+
+        args.db = _default_db_path()
+        if on_azure() and not args.db.exists():
+            # Creating it here would leave an empty database that the server
+            # then keeps instead of restoring its saved copy.
+            raise SystemExit(f"No live database at {args.db} yet. Start the app first; "
+                             "it restores the database from its saved copy.")
+    args.db = str(args.db)
     init_db(args.db)
     args.func(args)
 

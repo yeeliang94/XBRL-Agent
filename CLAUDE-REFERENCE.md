@@ -672,26 +672,21 @@ Two rules govern every step:
   status value must not require a full-table migration (same for the
   `error_type` columns).
 
-**Azure SQL keeps step with SQLite.** With `DATABASE_URL` set (Azure), the app
-stores data in Azure SQL through `db/mssql.py`, which translates the same
-SQLite SQL (`db/mssql_translate.py`). A new Azure database gets
-`db/mssql_baseline.py`, generated from the SQLite schema by
-`scripts/export_mssql_schema.py`; never edit it by hand. Every schema change
-therefore also (1) regenerates the baseline and (2) adds a SQL Server step to
-`db/mssql.py::MIGRATIONS` keyed by the new version, for databases already on
-Azure. `tests/test_mssql_schema.py` fails until both are done. Every link
-is a foreign key there; cascading deletes are INSTEAD OF DELETE triggers on
-the parent (v57). SQL Server checks each link as the row is written, with no
-`defer_foreign_keys`, so write a parent before its children. Every write transaction takes one
-database-wide lock so read-then-write code keeps SQLite's one-writer rule.
-Each statement is a network round trip there, so hold that lock briefly:
-`project_writes` prepares a batch of figures on an in-memory copy of the rows
-it reads (`concept_model/write_snapshot.py`, `db/scratch.py`), confirms under
-the lock that nothing it relied on changed, and sends the writes together
-with `db.engine.run_batch`. A write prepared this way addresses rows by their
-keys, never by a row id read earlier.
-After query changes, refresh `scripts/azure_sql_statements.json` (see
-`scripts/sql_capture_plugin.py`) and run `scripts/azure_sql_check.py` on Azure.
+**On Azure the live file never sits on `/home`.** That drive is a network
+share that cannot lock a live SQLite file, and Azure runs the old and new
+container side by side during a deploy (the 2026-11-11 failure). Azure SQL
+was tried and removed (2026-11-23): its one-writer lock queued busy runs
+into "database is locked". Now `db/location.py` puts the live file on the
+container's own disk (`/tmp/xbrl-live`) and refuses a `/home` path at
+startup. `db/copies.py` restores the newest good copy before `init_db` (and
+stops startup when copies exist but none restores), then saves a compressed
+`VACUUM INTO` copy to `<output dir>/db-copies` every minute when the data
+changed, soon after a run finishes, and on SIGTERM. `owner.json` lets only
+the newest container save; it is claimed only after startup succeeds, so a
+container that fails to start never stops the serving one saving. An
+unreadable `owner.json` skips one save, never stops saving. Runs mid-way at a restart
+are lost and marked failed (accepted by the owner); one uvicorn process
+only. Pinned by `tests/test_db_copies.py`.
 
 These items are **retained but inert — do NOT "clean them up":**
 
