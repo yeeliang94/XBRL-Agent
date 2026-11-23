@@ -92,8 +92,17 @@ def _clear_session_cookie(response: Response) -> None:
 
 @router.get("/api/health")
 async def health() -> dict:
-    """Unauthenticated liveness probe (Azure health check + smoke test)."""
-    return {"status": "ok"}
+    """Unauthenticated liveness probe (Azure health check + smoke test).
+
+    On Azure it also says when the last database copy was saved, and whether
+    saving has fallen behind (``db/copies.py``). Never a path.
+    """
+    from db import copies as db_copies
+
+    copy_status = db_copies.status()
+    if copy_status is None:
+        return {"status": "ok"}
+    return {"status": "ok", "database_copy": copy_status}
 
 
 @router.post("/api/auth/login/password")

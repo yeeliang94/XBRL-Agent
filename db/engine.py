@@ -16,12 +16,14 @@ import sqlite3
 from utils.paths import safe_db_target
 
 
-def connect(target: str | os.PathLike, *, timeout: float = 5.0) -> sqlite3.Connection:
+def connect(target: str | os.PathLike, *, timeout: float = 5.0,
+            check_same_thread: bool = True) -> sqlite3.Connection:
     """Open the database at ``target`` after checking the path is allowed.
 
     ``timeout`` is how many seconds to wait for another writer's lock, the same
-    meaning and default as ``sqlite3.connect``.
+    meaning and default as ``sqlite3.connect``; so is ``check_same_thread``.
     """
     # Looked up on the module at call time so tests that patch
     # ``sqlite3.connect`` still intercept every connection.
-    return sqlite3.connect(safe_db_target(target), timeout=timeout)
+    return sqlite3.connect(safe_db_target(target), timeout=timeout,
+                           check_same_thread=check_same_thread)

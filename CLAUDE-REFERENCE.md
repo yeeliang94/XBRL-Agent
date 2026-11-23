@@ -672,6 +672,19 @@ Two rules govern every step:
   status value must not require a full-table migration (same for the
   `error_type` columns).
 
+**On Azure the live file never sits on `/home`.** That drive is a network
+share that cannot lock a live SQLite file, and Azure runs the old and new
+container side by side during a deploy (the 2026-11-11 failure). Azure SQL
+was tried and removed (2026-11-23): its one-writer lock queued busy runs
+into "database is locked". Now `db/location.py` puts the live file on the
+container's own disk (`/tmp/xbrl-live`) and refuses a `/home` path at
+startup. `db/copies.py` restores the newest good copy before `init_db`, then
+saves a compressed `VACUUM INTO` copy to `<output dir>/db-copies` every
+minute when the data changed, soon after a run finishes, and on SIGTERM.
+`owner.json` lets only the newest container save. Runs mid-way at a restart
+are lost and marked failed (accepted by the owner); one uvicorn process
+only. Pinned by `tests/test_db_copies.py`.
+
 These items are **retained but inert — do NOT "clean them up":**
 
 - **`runs.orchestration`** (v10, `TEXT DEFAULT 'split'`) — the monolith
