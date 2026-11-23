@@ -50,6 +50,8 @@ STALE_S = 600.0
 # commit lands first and a burst of requests becomes one save.
 REQUEST_DELAY_S = 2.0
 OWNER_FILE = "owner.json"
+# Next to the live file: which saving process this disk's database belongs to.
+SAVED_BY_FILE = "saved-by"
 _COPY_RE = re.compile(r"^xbrl_agent-(\d{8}T\d{6}\.\d{6}Z)-(.+)\.db\.gz$")
 
 
@@ -100,7 +102,11 @@ def _passes_check(path: Path) -> bool:
     try:
         conn = db_engine.connect(path)
         try:
-            return conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+            if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                return False
+            # An empty file passes quick_check; a real copy has the app's tables.
+            return conn.execute("SELECT 1 FROM sqlite_master WHERE name = "
+                                "'schema_version'").fetchone() is not None
         finally:
             conn.close()
     except sqlite3.DatabaseError:
@@ -116,11 +122,16 @@ def restore(live: Path, copies: Path) -> str:
     previous = read_owner(copies)
     safe_path(live.parent).mkdir(parents=True, exist_ok=True)
     if live.exists():
-        # Only this container can have written it: the app process restarted
-        # inside the same container. File dates are not compared; in WAL mode
+        # Keep it only when it belongs to the process that owns saving now:
+        # the app restarted inside the same container. A database left by a
+        # start that failed, or one another container has since moved past,
+        # is older than the copies. File dates are not compared; in WAL mode
         # the main file's date lags its newest data.
-        logger.info("database copies: keeping the live database already on this disk")
-        return "kept"
+        if previous is None or _saved_by(live) == previous:
+            logger.info("database copies: keeping the live database already on this disk")
+            return "kept"
+        logger.info("database copies: the database on this disk is older than the copies; "
+                    "restoring instead")
     candidates = _copies(copies)
     # A late copy from an older container must not win over the previous
     # owner's work, so the previous owner's copies are tried first.
@@ -170,7 +181,7 @@ class CopySaver:
         self._dirty = dirty
         self._version: int | None = None
         self._last_saved_at: float | None = None
-        self._started_at = time.time()
+        self._dirty_since: float | None = time.time() if dirty else None
         self._stale_logged = False
         # Autocommit: the saver only reads, and must never hold a read open,
         # which would stop SQLite trimming its write log. Used from the saver
@@ -207,15 +218,15 @@ class CopySaver:
     def _changed(self) -> bool:
         """Whether another connection committed since the last copy was taken."""
         version = self._data_version()
-        if version != self._version:
+        if version != self._version and not self._dirty:
             self._dirty = True
+            self._dirty_since = time.time()
         return self._dirty
 
     def _is_stale(self) -> bool:
-        if self._lost or not self._dirty:
+        if self._lost or not self._dirty or self._dirty_since is None:
             return False
-        since = self._last_saved_at or self._started_at
-        return time.time() - since > STALE_S
+        return time.time() - self._dirty_since > STALE_S
 
     def _loop(self) -> None:
         try:
@@ -290,6 +301,7 @@ class CopySaver:
         self._version = version
         self._dirty = self._data_version() != version
         self._last_saved_at = time.time()
+        self._dirty_since = self._last_saved_at if self._dirty else None
         self._stale_logged = False
         for _stamp, _owner, old in _copies(self._copies)[KEEP:]:
             try:
@@ -315,13 +327,25 @@ def restore_at_startup(live: Path, copies: Path) -> None:
 def start_saving() -> CopySaver:
     """Last step of a successful startup: claim ``owner.json`` and start saving."""
     global _saver
-    live, copies, outcome = _restored
+    live, copies, _outcome = _restored
     me = container_id()
+    # Startup itself writes (migrations, the bootstrap admin, failed-run
+    # cleanup), so the first copy is always due. Everything that can fail is
+    # done before the claim, so a failure leaves saving with the old owner.
+    saver = CopySaver(live, copies, me, dirty=True)
+    safe_entry_path(live.parent / SAVED_BY_FILE).write_text(me, encoding="utf-8")
     claim(copies, me)
     _remove_stale_parts(copies)
-    _saver = CopySaver(live, copies, me, dirty=outcome != "restored")
-    _saver.start()
-    return _saver
+    saver.start()
+    _saver = saver
+    return saver
+
+
+def _saved_by(live: Path) -> str | None:
+    try:
+        return safe_path(live.parent / SAVED_BY_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
 
 
 def _remove_stale_parts(copies: Path) -> None:

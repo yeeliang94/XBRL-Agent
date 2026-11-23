@@ -139,13 +139,57 @@ def test_only_the_newest_copies_are_kept(tmp_path, folder):
     assert len(_runs(fresh)) == copies.KEEP + 2
 
 
+def _start_saving_on(live: Path, folder: Path) -> copies.CopySaver:
+    """The startup path: restore, then claim saving."""
+    copies.restore_at_startup(live, folder)
+    return copies.start_saving()
+
+
 def test_a_live_database_already_on_this_disk_is_kept(tmp_path, folder):
     live = _live(tmp_path)
-    _saver(live, folder, "a").save_if_changed()
-    _add_run(live, "after-last-copy.pdf")  # newer than every copy
+    try:
+        _start_saving_on(live, folder).save_if_changed()
+    finally:
+        copies.stop()
+    _add_run(live, "after-last-copy.pdf")  # the app restarted before the next copy
 
     assert copies.restore(live, folder) == "kept"
     assert _runs(live) == ["after-last-copy.pdf"]
+
+
+def test_a_database_left_by_a_start_that_failed_is_replaced_by_the_copies(tmp_path, folder):
+    serving = _live(tmp_path, "serving")
+    copies.claim(folder, "serving")
+    _add_run(serving, "saved-by-the-serving-container.pdf")
+    copies.CopySaver(serving, folder, "serving", dirty=True).save_if_changed()
+    # This disk restored an older state, then its startup failed before claiming.
+    stale = _live(tmp_path, "retrying")
+    _add_run(stale, "older.pdf")
+
+    assert copies.restore(stale, folder) == "restored"
+    assert _runs(stale) == ["saved-by-the-serving-container.pdf"]
+
+
+def test_an_empty_copy_is_skipped(tmp_path, folder):
+    live = _live(tmp_path)
+    saver = _saver(live, folder, "a")
+    _add_run(live, "real.pdf")
+    saver.save_if_changed()
+    (folder / "xbrl_agent-29991231T000000.000000Z-a.db.gz").write_bytes(gzip.compress(b""))
+
+    fresh = tmp_path / "fresh" / "xbrl_agent.db"
+    assert copies.restore(fresh, folder) == "restored"
+    assert _runs(fresh) == ["real.pdf"]
+
+
+def test_a_failure_before_the_claim_leaves_saving_with_the_old_owner(tmp_path, folder, monkeypatch):
+    live = _live(tmp_path)
+    copies.claim(folder, "serving")
+    copies.restore_at_startup(live, folder)
+    monkeypatch.setattr(copies, "CopySaver", _refuse)
+    with pytest.raises(OSError):
+        copies.start_saving()
+    assert copies.read_owner(folder) == "serving"
 
 
 def test_no_copies_starts_an_empty_database(tmp_path, folder):
@@ -280,6 +324,8 @@ def test_azure_startup_restores_first_and_claims_saving_last(tmp_path, monkeypat
     assert "kept.pdf" in _runs(live)
     assert copies.read_owner(folder) != "previous"
     assert copies.status() is None  # stopped at shutdown
+    # Startup's own writes (schema check, failed-run cleanup) were saved too.
+    assert any(copies.read_owner(folder) in p.name for p in _saved(folder))
 
 
 def test_a_container_that_fails_to_start_leaves_saving_with_the_old_one(tmp_path, monkeypatch):

@@ -211,6 +211,9 @@ def project_writes(
         from concept_model.source_fidelity import PreparedSourceCatalog
         source_catalog = PreparedSourceCatalog.load(source_pdf_path)
     try:
+        # Take the write lock before the first read, so a value apply_fact
+        # reads as "previous" cannot change before it writes.
+        conn.execute("BEGIN IMMEDIATE")
         for w in writes:
             sheet = w["sheet"]
             row = int(w["row"])
