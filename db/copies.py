@@ -35,6 +35,7 @@ import socket
 import sqlite3
 import threading
 import time
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -142,7 +143,7 @@ def restore(live: Path, copies: Path) -> str:
         try:
             with gzip.open(safe_path(path), "rb") as src, open(staging, "wb") as dst:
                 shutil.copyfileobj(src, dst)
-        except (OSError, EOFError, gzip.BadGzipFile):
+        except (OSError, EOFError, zlib.error):  # BadGzipFile is an OSError
             logger.warning("database copies: skipping unreadable copy %s", path.name, exc_info=True)
             continue
         if not _passes_check(staging):

@@ -346,3 +346,17 @@ def test_the_account_tool_refuses_to_create_the_azure_database(tmp_path, monkeyp
     with pytest.raises(SystemExit, match="Start the app first"):
         manage.main(["list-users"])
     assert not (tmp_path / "not-started").exists()
+
+
+def test_a_copy_with_damaged_compressed_data_is_skipped(tmp_path, folder):
+    live = _live(tmp_path)
+    saver = _saver(live, folder, "a")
+    _add_run(live, "real.pdf")
+    saver.save_if_changed()
+    good = gzip.compress(b"x" * 1000)
+    damaged = good[:10] + b"\xff" * 20 + good[30:]  # valid header, broken payload
+    (folder / "xbrl_agent-29991231T000000.000000Z-a.db.gz").write_bytes(damaged)
+
+    fresh = tmp_path / "fresh" / "xbrl_agent.db"
+    assert copies.restore(fresh, folder) == "restored"
+    assert _runs(fresh) == ["real.pdf"]
