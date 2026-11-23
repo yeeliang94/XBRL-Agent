@@ -380,3 +380,13 @@ def test_a_claim_that_fails_does_not_make_the_next_start_discard_this_disk(tmp_p
 
     assert copies.restore(live, folder) == "kept"
     assert _runs(live) == ["after-last-copy.pdf"]
+
+
+def test_a_failure_after_the_claim_hands_saving_back(tmp_path, folder):
+    live = _live(tmp_path)
+    copies.claim(folder, "serving")
+    copies.restore_at_startup(live, folder)
+    (live.parent / copies.SAVED_BY_FILE).mkdir()  # the local note cannot be written
+    with pytest.raises(OSError):
+        copies.start_saving()
+    assert copies.read_owner(folder) == "serving"

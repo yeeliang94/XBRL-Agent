@@ -336,10 +336,17 @@ def start_saving() -> CopySaver:
     # marker changes only after the claim succeeds: if the claim fails, the
     # marker still names the owner, and a retry keeps this disk's database.
     saver = CopySaver(live, copies, me, dirty=True)
+    previous = read_owner(copies)
     claim(copies, me)
-    safe_entry_path(live.parent / SAVED_BY_FILE).write_text(me, encoding="utf-8")
-    _remove_stale_parts(copies)
-    saver.start()
+    try:
+        safe_entry_path(live.parent / SAVED_BY_FILE).write_text(me, encoding="utf-8")
+        _remove_stale_parts(copies)
+        saver.start()
+    except BaseException:
+        # Hand saving back, so the container still serving keeps saving.
+        if previous and read_owner(copies) == me:
+            claim(copies, previous)
+        raise
     _saver = saver
     return saver
 
