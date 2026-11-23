@@ -50,7 +50,8 @@ def test_document_updates_track_setup_progress_and_completion_without_read_touch
         old = "2026-04-01T10:00:00.000Z"
         for sql, params in [
             ("UPDATE runs SET run_config_json = ? WHERE id = ?", ('{"filing_standard":"mpers"}', rid)),
-            ("INSERT INTO run_events(run_id, ts, event_type) VALUES (?, ?, ?)", (rid, old, "pipeline_stage")),
+            ("INSERT INTO run_incidents(run_id, created_at, source, severity, error_code, user_message) "
+             "VALUES (?, ?, 'run', 'error', 'x', 'failed')", (rid, old)),
             ("UPDATE runs SET status = ?, ended_at = ? WHERE id = ?", ("completed", old, rid)),
         ]:
             conn.execute("UPDATE runs SET updated_at = ? WHERE id = ?", (old, rid))

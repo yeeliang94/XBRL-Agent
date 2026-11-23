@@ -1022,14 +1022,16 @@ def insert_agent_turns(
     if not turns:
         return
     ts = _now()
-    conn.executemany(
+    sql = (
         "INSERT INTO run_agent_turns(run_agent_id, turn_index, node_kind, "
         "tool_names, prompt_tokens, completion_tokens, total_tokens, "
         "cumulative_tokens, cost_estimate, duration_ms, "
         "cache_read_tokens, cache_write_tokens, reasoning_tokens, usage_status, ts) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [
-            (
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    # One request on Azure SQL rather than one per turn (fast_executemany is off).
+    db_engine.run_batch(conn, [
+        (sql, (
                 run_agent_id,
                 int(t.get("turn_index") or 0),
                 t.get("node_kind"),
@@ -1053,10 +1055,9 @@ def insert_agent_turns(
                     else "not_applicable"
                 )),
                 str(t.get("started_at") or ts),
-            )
-            for t in turns
-        ],
-    )
+        ))
+        for t in turns
+    ])
     _replace_model_usage_calls_from_turns(conn, run_agent_id, turns, ts)
 
 
@@ -1087,6 +1088,7 @@ def _replace_model_usage_calls_from_turns(
     conn.execute(
         "DELETE FROM model_usage_calls WHERE run_agent_id = ?", (run_agent_id,),
     )
+    usage_rows: list[tuple[str, tuple]] = []
     for request_index, turn in enumerate(model_turns, start=1):
         model = str(turn.get("model") or stored_model or "")
         prompt = int(turn.get("prompt_tokens") or 0)
@@ -1105,7 +1107,7 @@ def _replace_model_usage_calls_from_turns(
             )
         except Exception:
             adjusted_cost = None
-        conn.execute(
+        usage_rows.append((
             "INSERT INTO model_usage_calls("
             "invocation_id, run_id, run_agent_id, role, worker_id, request_index, "
             "model, provider, transport, started_at, ended_at, status, "
@@ -1129,14 +1131,14 @@ def _replace_model_usage_calls_from_turns(
                     "complete" if total > 0 else "unavailable"
                 )),
             ),
-        )
+        ))
     recorded_total = sum(int(t.get("total_tokens") or 0) for t in model_turns)
     recorded_cost = sum(float(t.get("cost_estimate") or 0.0) for t in model_turns)
     unattributed_tokens = max(int(agent_total or 0) - recorded_total, 0)
     unattributed_cost = max(float(agent_cost or 0.0) - recorded_cost, 0.0)
     if unattributed_tokens or unattributed_cost:
         model = str(stored_model or "")
-        conn.execute(
+        usage_rows.append((
             "INSERT INTO model_usage_calls("
             "invocation_id, run_id, run_agent_id, role, worker_id, request_index, "
             "model, provider, transport, started_at, ended_at, status, "
@@ -1151,10 +1153,10 @@ def _replace_model_usage_calls_from_turns(
                 "unconfirmed" if pricing_is_unconfirmed(model) else "confirmed",
                 "unavailable", "provider_usage_unattributed",
             ),
-        )
+        ))
     elif str(agent_usage_status or "unavailable") != "complete":
         model = str(stored_model or "")
-        conn.execute(
+        usage_rows.append((
             "INSERT INTO model_usage_calls("
             "invocation_id, run_id, run_agent_id, role, worker_id, request_index, "
             "model, provider, transport, started_at, ended_at, status, "
@@ -1169,7 +1171,9 @@ def _replace_model_usage_calls_from_turns(
                 str(agent_usage_status or "unavailable"),
                 "provider_usage_unavailable",
             ),
-        )
+        ))
+    # One request on Azure SQL rather than one per model call.
+    db_engine.run_batch(conn, usage_rows)
 
 
 def fetch_model_usage_rollup(conn: sqlite3.Connection, run_id: int) -> dict[str, Any]:
@@ -1285,6 +1289,23 @@ def log_event(
         (run_agent_id, ts or _now(), event_type, phase, serialized),
     )
     return int(cur.lastrowid)
+
+
+def touch_runs(conn: sqlite3.Connection, run_ids: Iterable[int], run_agent_ids: Iterable[int]) -> None:
+    """Mark runs as active now: the runs given, and the runs of the agents given.
+
+    The runs table's own trigger stamps the time, on the database clock, as
+    it does for every other saved change.
+    """
+    runs = sorted({int(r) for r in run_ids})
+    agents = sorted({int(a) for a in run_agent_ids})
+    owners = []
+    if runs:
+        owners.append(f"id IN ({','.join('?' * len(runs))})")
+    if agents:
+        owners.append(f"id IN (SELECT run_id FROM run_agents WHERE id IN ({','.join('?' * len(agents))}))")
+    if owners:
+        conn.execute(f"UPDATE runs SET updated_at = updated_at WHERE {' OR '.join(owners)}", (*runs, *agents))
 
 
 def log_run_event(

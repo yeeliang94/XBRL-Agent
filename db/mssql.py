@@ -26,6 +26,7 @@ from __future__ import annotations
 import datetime as _dt
 import decimal
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -51,6 +52,10 @@ _POOL_PING_AFTER_S = 30.0
 # long, the same as the row-lock wait below.
 MIN_LOCK_WAIT_S = 30.0
 _CONNECT_ATTEMPTS = 4
+# New-record-only telemetry tables that may be written without the write lock
+# (see Connection.run_batch). Nothing reads them in order to write elsewhere.
+APPEND_ONLY_TABLES = frozenset({"agent_events", "run_events"})
+_APPEND_TARGET = re.compile(r"\s*INSERT\s+INTO\s+(\w+)\s*\(", re.IGNORECASE)
 # SQL Server accepts 2,100 parameters in one request; stay under it.
 _BATCH_MAX_PARAMS = 2000
 _BATCH_MAX_STATEMENTS = 200
@@ -292,12 +297,19 @@ class Connection:
     def executemany(self, sql: str, seq_of_parameters: Iterable) -> "Cursor":
         return self.cursor().executemany(sql, seq_of_parameters)
 
-    def run_batch(self, statements: Iterable[tuple[str, Sequence]]) -> None:
+    def run_batch(self, statements: Iterable[tuple[str, Sequence]], *, append_only: bool = False) -> None:
         """Run write statements in as few round trips as the server allows.
 
         One statement per round trip keeps the write lock for the whole list.
         Here the statements travel together, in order, inside the caller's
         transaction. Nothing is returned: no rows, row counts or new ids.
+
+        ``append_only`` is for new telemetry records (``APPEND_ONLY_TABLES``).
+        They read nothing and change no existing row, so they do not need the
+        database-wide write lock that keeps read-then-write saves one at a
+        time; SQL Server's own row locks are enough. They then do not queue
+        for that lock. A run event still checks its run's row, which a save in
+        progress for the same run holds until it commits.
         """
         parts: list[str] = []
         args: list = []
@@ -316,7 +328,14 @@ class Connection:
             bound = _bind(params, t.order)
             if len(bound) > _BATCH_MAX_PARAMS:
                 raise sqlite3.ProgrammingError("too many parameters for one statement")
-            self._before_write()
+            if not append_only:
+                self._before_write()
+            else:
+                target = _APPEND_TARGET.match(sql)
+                if target is None or target.group(1) not in APPEND_ONLY_TABLES:
+                    raise sqlite3.ProgrammingError("append_only takes inserts into telemetry tables only")
+                if not self._in_tx:
+                    self._begin(immediate=False)
             if len(args) + len(bound) > _BATCH_MAX_PARAMS or len(parts) >= _BATCH_MAX_STATEMENTS:
                 send()
             parts.append(t.sql.strip().rstrip(";").rstrip())
@@ -664,6 +683,12 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "    [imported_at] NVARCHAR(MAX) COLLATE Latin1_General_100_BIN2 NOT NULL,\n"
         "    CONSTRAINT [pk_template_imports] PRIMARY KEY NONCLUSTERED ([source_path])\n"
         ")",
+    ),
+    # Telemetry records no longer update the run's activity time (schema.py v59).
+    59: tuple(
+        f"DROP TRIGGER IF EXISTS [{table}_run_activity_{action}]"
+        for table in ("agent_events", "run_agent_turns", "run_events", "model_usage_calls")
+        for action in ("insert", "update", "delete")
     ),
 }
 

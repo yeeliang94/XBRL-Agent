@@ -253,7 +253,10 @@ from pathlib import Path
 # too (db/mssql_v57.py).
 # v58 records each imported template's fingerprint so server startup skips
 # templates that have not changed.
-CURRENT_SCHEMA_VERSION = 58
+# v59 drops the activity triggers on the telemetry tables (agent events, run
+# events, turns, usage calls). The event writer refreshes the run's activity
+# time once per interval instead of once per record.
+CURRENT_SCHEMA_VERSION = 59
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -2208,7 +2211,7 @@ _V33_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 # Document activity is persisted at the database boundary so every writer,
 # including direct SQL edits and deletion of saved content, uses the same clock.
 _RUN_ACTIVITY_TABLES = (
-    "report_fields", "run_agents", "run_events", "run_incidents", "model_usage_calls",
+    "report_fields", "run_agents", "run_incidents",
     "cross_checks", "run_concept_facts", "concept_fact_events",
     "run_concept_conflicts", "notes_cells", "notes_cell_tombstones",
     "reviewer_flags", "run_review_tasks", "run_notes_review_state",
@@ -2235,7 +2238,14 @@ _RUN_ACTIVITY_EXCLUDED_TABLES = {
     "run_lineage": "Run ancestry is recorded alongside creation of the child run.",
     "notes_block_usages": "Source usage accompanies canonical facts or notes writes.",
     "notes_block_placements": "Source placement accompanies notes_cells writes.",
+    "run_events": "Telemetry: the event writer refreshes the run's activity once per interval.",
+    "model_usage_calls": "Telemetry: saved with the run_agents row, which records the activity.",
 }
+
+# A run writes about a thousand of these records. Updating the run's activity
+# time for each one doubled the writes and, on Azure SQL, queued every record
+# behind the database-wide write lock (v59 removes these triggers).
+_RUN_TELEMETRY_TABLES = ("agent_events", "run_agent_turns", "run_events", "model_usage_calls")
 
 
 def _install_run_activity_tracking(conn: sqlite3.Connection) -> None:
@@ -2249,8 +2259,7 @@ def _install_run_activity_tracking(conn: sqlite3.Connection) -> None:
         WHEN NEW.updated_at = OLD.updated_at AND NEW.updated_at != {clock} BEGIN
         UPDATE runs SET updated_at = {clock} WHERE id = NEW.id; END""")
     owners = {table: "{{row}}.run_id" for table in _RUN_ACTIVITY_TABLES}
-    for table in ("agent_events", "run_agent_turns", "extracted_fields"):
-        owners[table] = "(SELECT run_id FROM run_agents WHERE id = {{row}}.run_agent_id)"
+    owners["extracted_fields"] = "(SELECT run_id FROM run_agents WHERE id = {{row}}.run_agent_id)"
     # Refresh the special-case trigger for databases already using this migration.
     conn.execute("DROP TRIGGER IF EXISTS mtool_fill_receipts_run_activity_update")
     for table, owner in owners.items():
@@ -2276,7 +2285,7 @@ def _backfill_run_activity(conn: sqlite3.Connection) -> None:
     for column in ("started_at", "ended_at"):
         if column in run_columns:
             sources.append(f"SELECT id, {column} FROM runs")
-    for table in _RUN_ACTIVITY_TABLES:
+    for table in (*_RUN_ACTIVITY_TABLES, "run_events", "model_usage_calls"):
         columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         for column in ("updated_at", "created_at", "started_at", "ended_at", "resolved_at", "ts", "uploaded_at"):
             if column in columns:
@@ -3984,6 +3993,21 @@ def init_db(path: str | Path) -> None:
                 latest = conn.execute("SELECT version FROM schema_version").fetchone()[0]
                 if latest < 58:
                     conn.execute("UPDATE schema_version SET version = 58")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v58 -> v59: telemetry records no longer touch the run's activity time.
+        if current_version is not None and current_version < 59:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                latest = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+                if latest < 59:
+                    for table in _RUN_TELEMETRY_TABLES:
+                        for action in ("insert", "update", "delete"):
+                            conn.execute(f"DROP TRIGGER IF EXISTS {table}_run_activity_{action}")
+                    conn.execute("UPDATE schema_version SET version = 59")
                 conn.commit()
             except Exception:
                 conn.rollback()

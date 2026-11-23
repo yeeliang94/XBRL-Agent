@@ -237,7 +237,7 @@
  {
   "sql": "\n        INSERT INTO concept_fact_events(\n            run_id, concept_uuid, period, entity_scope,\n            actor, turn, ts, before_json, after_json, dimension_key\n        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n        ",
   "params": 10,
-  "origin": "concept_model/facts_api.py"
+  "origin": "db/engine.py"
  },
  {
   "sql": "\n        INSERT INTO run_concept_conflicts(\n            run_id, concept_uuid, period, entity_scope, kind, residual,\n            detail, status, created_at, dimension_key\n        ) VALUES (?, ?, ?, ?, 'parent_child_disagree', NULL, ?, 'open', ?, ?)\n        ",
@@ -247,7 +247,7 @@
  {
   "sql": "\n        INSERT INTO run_concept_facts(\n            run_id, concept_uuid, period, entity_scope, value,\n            value_status, children_status, source, evidence,\n            updated_at, dimension_key\n        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n        ON CONFLICT(run_id, concept_uuid, period, entity_scope, dimension_key)\n        DO UPDATE SET\n            value = excluded.value,\n            value_status = excluded.value_status,\n            children_status = excluded.children_status,\n            source = excluded.source,\n            evidence = excluded.evidence,\n            updated_at = excluded.updated_at\n        ",
   "params": 11,
-  "origin": "concept_model/facts_api.py"
+  "origin": "db/engine.py"
  },
  {
   "sql": "\n        SELECT n.canonical_label, n.render_sheet, n.kind, f.period,\n               f.entity_scope\n        FROM run_concept_facts f\n        JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid\n        WHERE f.run_id = ? AND n.template_id LIKE ?\n          AND f.value_status = 'conflict'\n        ORDER BY n.render_sheet, n.render_row\n        ",
@@ -317,7 +317,7 @@
  {
   "sql": "DELETE FROM fact_source_receipts WHERE run_id=? AND concept_uuid=? AND period=? AND entity_scope=? AND dimension_key=?",
   "params": 5,
-  "origin": "concept_model/facts_api.py"
+  "origin": "db/engine.py"
  },
  {
   "sql": "DELETE FROM fact_source_terms WHERE receipt_id=(SELECT id FROM fact_source_receipts WHERE run_id=? AND concept_uuid=? AND period=? AND entity_scope=? AND dimension_key=?)",
@@ -582,17 +582,17 @@
  {
   "sql": "INSERT INTO model_usage_calls(invocation_id, run_id, run_agent_id, role, worker_id, request_index, model, provider, transport, started_at, ended_at, status, input_tokens, cached_input_tokens, cache_write_tokens, visible_output_tokens, reasoning_tokens, total_tokens, estimated_cost_pre_cache, estimated_cost_adjusted, pricing_status, usage_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   "params": 22,
-  "origin": "db/repository.py"
+  "origin": "db/engine.py"
  },
  {
   "sql": "INSERT INTO model_usage_calls(invocation_id, run_id, run_agent_id, role, worker_id, request_index, model, provider, transport, started_at, ended_at, status, pricing_status, usage_status, error_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   "params": 15,
-  "origin": "db/repository.py"
+  "origin": "db/engine.py"
  },
  {
   "sql": "INSERT INTO model_usage_calls(invocation_id, run_id, run_agent_id, role, worker_id, request_index, model, provider, transport, started_at, ended_at, status, total_tokens, estimated_cost_pre_cache, pricing_status, usage_status, error_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   "params": 17,
-  "origin": "db/repository.py"
+  "origin": "db/engine.py"
  },
  {
   "sql": "INSERT INTO mtool_fill_receipts(run_id, snapshot_fact_count, snapshot_digest, snapshot_max_updated, snapshot_notes_count, snapshot_notes_digest, snapshot_notes_updated, source_sha256, output_sha256, template_fingerprint, column_map_json, translation_version, preflight_json, preflight_override, status, report_json, operator, created_at, readiness_classification, taxonomy_version, manifest_versions_json, semantic_coverage_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -712,7 +712,7 @@
  {
   "sql": "INSERT INTO run_agent_turns(run_agent_id, turn_index, node_kind, tool_names, prompt_tokens, completion_tokens, total_tokens, cumulative_tokens, cost_estimate, duration_ms, cache_read_tokens, cache_write_tokens, reasoning_tokens, usage_status, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   "params": 15,
-  "origin": "db/repository.py"
+  "origin": "db/engine.py"
  },
  {
   "sql": "INSERT INTO run_agents(run_id, statement_type, variant, model, status, started_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -932,7 +932,7 @@
  {
   "sql": "SELECT * FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
   "params": 3,
-  "origin": "notes/cleanup_repository.py"
+  "origin": "notes/agent.py"
  },
  {
   "sql": "SELECT * FROM notes_cleanup_receipts WHERE run_id=? AND sheet=? AND row=? AND generation_id IS ?",
@@ -1197,7 +1197,7 @@
  {
   "sql": "SELECT 1 FROM template_slots WHERE template_id LIKE ? LIMIT 1",
   "params": 1,
-  "origin": "notes/persistence.py"
+  "origin": "api/notes.py"
  },
  {
   "sql": "SELECT 1 FROM template_slots ts LEFT JOIN taxonomy_concepts tc ON tc.source_element_id = ts.taxonomy_element_id WHERE ts.canonical_target_id = ? AND (ts.value_kind = 'html' OR LOWER(COALESCE(tc.data_type, '')) LIKE '%textblockitemtype') LIMIT 1",
@@ -1372,7 +1372,7 @@
  {
   "sql": "SELECT DISTINCT sheet FROM notes_cells WHERE run_id = ?",
   "params": 1,
-  "origin": "mtool/notes_exporter.py"
+  "origin": "api/notes.py"
  },
  {
   "sql": "SELECT DISTINCT sheet, row FROM notes_block_placements WHERE generation_id = ? AND sheet = ? AND active = 1",
@@ -1702,7 +1702,7 @@
  {
   "sql": "SELECT content_revision FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
   "params": 3,
-  "origin": "notes/review_move.py"
+  "origin": "notes/agent.py"
  },
  {
   "sql": "SELECT content_revision, html, source_generation_id FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
@@ -1882,7 +1882,7 @@
  {
   "sql": "SELECT id FROM notes_review_flags WHERE run_id=? AND finding_id=? AND status='open'",
   "params": 2,
-  "origin": "notes/source_write.py"
+  "origin": "notes/agent.py"
  },
  {
   "sql": "SELECT id FROM notes_source_generations WHERE run_id = ? AND status = 'active'",
@@ -1897,7 +1897,7 @@
  {
   "sql": "SELECT id FROM run_agents WHERE run_id = ? AND statement_type = ? ORDER BY id DESC LIMIT 1",
   "params": 2,
-  "origin": "db/repository.py"
+  "origin": "api/reviewer.py"
  },
  {
   "sql": "SELECT id FROM run_concept_conflicts WHERE id = ?",
@@ -2027,7 +2027,7 @@
  {
   "sql": "SELECT label, content_revision, content_origin FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
   "params": 3,
-  "origin": "notes/source_repair.py"
+  "origin": "notes/review_move.py"
  },
  {
   "sql": "SELECT label, evidence, source_pages FROM notes_cells WHERE run_id = ? AND sheet = ? AND row = ?",
@@ -3048,5 +3048,50 @@
   "sql": "UPDATE runs SET status=?,ended_at=? WHERE id=?",
   "params": 3,
   "origin": "scripts/audit_field_roundtrip.py"
+ },
+ {
+  "sql": "UPDATE runs SET updated_at = updated_at WHERE id IN (?)",
+  "params": 1,
+  "origin": "db/repository.py"
+ },
+ {
+  "sql": "UPDATE runs SET updated_at = updated_at WHERE id IN (?) OR id IN (SELECT run_id FROM run_agents WHERE id IN (?))",
+  "params": 2,
+  "origin": "db/repository.py"
+ },
+ {
+  "sql": "UPDATE runs SET updated_at = updated_at WHERE id IN (?) OR id IN (SELECT run_id FROM run_agents WHERE id IN (?,?))",
+  "params": 3,
+  "origin": "db/repository.py"
+ },
+ {
+  "sql": "UPDATE runs SET updated_at = updated_at WHERE id IN (?) OR id IN (SELECT run_id FROM run_agents WHERE id IN (?,?,?))",
+  "params": 4,
+  "origin": "db/repository.py"
+ },
+ {
+  "sql": "UPDATE runs SET updated_at = updated_at WHERE id IN (?) OR id IN (SELECT run_id FROM run_agents WHERE id IN (?,?,?,?))",
+  "params": 5,
+  "origin": "db/repository.py"
+ },
+ {
+  "sql": "UPDATE runs SET updated_at = updated_at WHERE id IN (?) OR id IN (SELECT run_id FROM run_agents WHERE id IN (?,?,?,?,?))",
+  "params": 6,
+  "origin": "db/repository.py"
+ },
+ {
+  "sql": "UPDATE runs SET updated_at = updated_at WHERE id IN (?) OR id IN (SELECT run_id FROM run_agents WHERE id IN (?,?,?,?,?,?))",
+  "params": 7,
+  "origin": "db/repository.py"
+ },
+ {
+  "sql": "UPDATE runs SET updated_at = updated_at WHERE id IN (?) OR id IN (SELECT run_id FROM run_agents WHERE id IN (?,?,?,?,?,?,?))",
+  "params": 8,
+  "origin": "db/repository.py"
+ },
+ {
+  "sql": "UPDATE runs SET updated_at = updated_at WHERE id IN (SELECT run_id FROM run_agents WHERE id IN (?))",
+  "params": 1,
+  "origin": "db/repository.py"
  }
 ]

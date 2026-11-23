@@ -48,16 +48,20 @@ def connect(target: str | os.PathLike, *, timeout: float = 5.0):
     return sqlite3.connect(path, timeout=timeout)
 
 
-def run_batch(conn, statements) -> None:
+def run_batch(conn, statements, *, append_only: bool = False) -> None:
     """Run ``(sql, parameters)`` write statements in order, in the open transaction.
 
     On Azure SQL they travel in as few round trips as possible, so the write
     lock is held for a moment instead of one round trip per statement. On
     SQLite they run one by one, as before. No results are returned.
+
+    ``append_only`` inserts new telemetry records without the Azure SQL
+    database-wide write lock (``db.mssql.Connection.run_batch``). SQLite has
+    one writer at a time either way.
     """
     batch = getattr(conn, "run_batch", None)
     if batch is not None:
-        batch(statements)
+        batch(statements, append_only=append_only)
         return
     for sql, params in statements:
         conn.execute(sql, params)

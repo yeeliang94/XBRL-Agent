@@ -317,3 +317,24 @@ def test_a_batch_refuses_statements_that_read(server, tmp_path):
     conn = _connect(tmp_path)
     with pytest.raises(sqlite3.ProgrammingError):
         engine.run_batch(conn, [("SELECT id FROM runs WHERE id = ?", (1,))])
+
+
+def test_new_telemetry_records_are_saved_without_the_writer_lock(server, tmp_path):
+    # Events read nothing and change no existing row, so they must not queue
+    # behind figure and notes saves for the database-wide lock.
+    conn = _connect(tmp_path)
+    engine.run_batch(conn, [
+        ("INSERT INTO agent_events(run_agent_id, ts, event_type, phase, payload_json) VALUES (?, ?, ?, ?, ?)",
+         (1, "t", "tool_call", None, "{}")),
+    ], append_only=True)
+    conn.commit()
+    assert any("INSERT INTO agent_events" in s for s in server.log)
+    assert not any("sp_getapplock" in s for s in server.log)
+    assert server.log[-1] == "COMMIT TRANSACTION"
+
+
+def test_saving_without_the_writer_lock_is_refused_for_other_tables(server, tmp_path):
+    conn = _connect(tmp_path)
+    with pytest.raises(sqlite3.ProgrammingError):
+        engine.run_batch(conn, [("UPDATE runs SET status = ? WHERE id = ?", ("done", 1))], append_only=True)
+    assert not any("UPDATE runs" in s for s in server.log)
