@@ -170,12 +170,11 @@ def inspect_workbook(conn, config: dict, path: Path, unit: str, infopack=None):
         {k: pack.get(k) for k in ("reporting_period_cy", "reporting_period_py")}
     )
     detected = detect_column_map(str(path), doc, data=data)
+    # Sheet-level date differences are a warning (``period_issues`` in the
+    # summary), not a refusal. Each imported comparative is still checked
+    # against its own end-date marker below, and the mTool export marks a
+    # period mismatch as degraded in its report.
     issues = period_compatibility_issues(detected, doc)
-    mismatches = [i for i in issues if i.get("code") == "template_period_mismatch"]
-    if mismatches:
-        raise ValueError(
-            "The workbook reporting dates do not match the financial statements. Use the rolled-forward workbook for this filing year."
-        )
     # Only comparatives are imported. Current-year cells are handled on export.
     read = read_human_file(conn, 0, path, unit, shape=shape, periods=("PY",), include_notes=False, include_typed_totals=True)
     inputs = _prior_year_inputs(conn, read.facts)

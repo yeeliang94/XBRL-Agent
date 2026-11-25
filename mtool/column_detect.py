@@ -138,8 +138,9 @@ def period_compatibility_issues(
     period means an older run cannot be assessed and is left unchanged.  Once
     a source period is available, every requested ordinary period must have a
     parseable physical marker and must match it.  Dimensional layouts expose
-    category columns rather than period roles; their one physical period is
-    compared with CY, while missing comparative sections remain the mapper's
+    category columns rather than period roles. One stacked period block is
+    compared with CY; with several blocks (SOCIE), each requested period must
+    match one of them. Missing comparative sections remain the mapper's
     separate ``template_period_section_missing`` diagnostic.
     """
     meta = doc.get("meta") or {}
@@ -169,10 +170,28 @@ def period_compatibility_issues(
             if target and column in physical_periods:
                 by_period[target].append(physical_periods[column])
 
-        if layout.get("dimensional") and physical_periods and not by_period["CY"]:
-            distinct = list(dict.fromkeys(physical_periods.values()))
-            if len(distinct) == 1:
-                by_period["CY"] = distinct
+        blocks = list(dict.fromkeys(
+            layout.get("period_blocks") or physical_periods.values()))
+        if layout.get("dimensional") and blocks and not by_period["CY"]:
+            if len(blocks) == 1:
+                by_period["CY"] = blocks
+            else:
+                # Several stacked period blocks: each requested period must
+                # match one of them. Block order does not decide the year.
+                for period in sorted(periods):
+                    verdicts = [_period_matches(expected[period], b) for b in blocks]
+                    if any(verdicts):
+                        continue
+                    issues.append({
+                        "code": ("template_period_markers_unresolved"
+                                 if any(v is None for v in verdicts)
+                                 else "template_period_mismatch"),
+                        "sheet": sheet,
+                        "period": period,
+                        "source_period": expected[period],
+                        "template_periods": blocks,
+                    })
+                continue
 
         for period in sorted(periods):
             markers = list(dict.fromkeys(by_period[period]))
@@ -408,8 +427,19 @@ def _semantic_layout(cells: dict, roles: list[str]) -> dict[str, Any] | None:
                         "with consistent year columns, or complete it in mTool.")
                 dates[col] = parsed
     periods = {}
+    # Dimensional sheets (SOCIE) stack one date block per period, so a later
+    # block overwrites an earlier one in ``periods``. Keep every block's
+    # period, in sheet order, for the source-period comparison.
+    period_blocks: list[str] = []
     for row in period_rows:
-        periods.update(_row_values(cells, row))
+        values = _row_values(cells, row)
+        periods.update(values)
+        period_blocks.extend(values.values())
+    if not period_blocks:
+        for row in end_rows:
+            period_blocks.extend(
+                v for v in _row_values(cells, row).values() if _parse_date(v))
+    period_blocks = list(dict.fromkeys(period_blocks))
     unit_scales = {}
     for row in unit_rows:
         unit_scales.update(_row_values(cells, row))
@@ -510,6 +540,7 @@ def _semantic_layout(cells: dict, roles: list[str]) -> dict[str, Any] | None:
         "dimensional": dimensional,
         "entity_scope_columns": scope_rows,
         "period_columns": {c: periods.get(c) for c in sorted(dates)},
+        "period_blocks": period_blocks,
         "declared_unit_scales": {c: parse_unit_scale(v)
                                  for c, v in sorted(unit_scales.items())},
         "notes": notes,

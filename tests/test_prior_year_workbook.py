@@ -798,6 +798,28 @@ def test_import_ignores_current_year_contents_and_refuses_wrong_comparative_date
             )
 
 
+def test_sheet_date_difference_warns_instead_of_refusing_the_workbook(
+    tmp_path, monkeypatch
+):
+    import mtool.column_detect as column_detect
+
+    db, run, session_dir, config, workbook, facts = setup_file(tmp_path)
+    issue = {
+        "code": "template_period_mismatch",
+        "sheet": "SOCIE",
+        "period": "CY",
+        "source_period": "31/12/2025",
+        "template_periods": ["01/01/2024 - 31/12/2024"],
+    }
+    monkeypatch.setattr(
+        column_detect, "period_compatibility_issues", lambda *_: [issue]
+    )
+    with sqlite3.connect(db) as conn:
+        inputs, summary = inspect_workbook(conn, config, workbook, "units")
+    assert len(inputs) == len(facts)
+    assert summary["period_issues"] == [issue]
+
+
 def test_incomplete_comparative_assessment_remains_a_visible_warning(
     tmp_path, monkeypatch
 ):

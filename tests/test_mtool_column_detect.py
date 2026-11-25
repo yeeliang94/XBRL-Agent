@@ -515,3 +515,37 @@ def test_repeated_period_blocks_preserve_supported_layouts(tmp_path, dimensional
     detected = detect_column_map(str(path), doc)
     assert not needs_confirmation(detected)
     assert detected["S"]["dimensional"] is dimensional
+
+
+@pytest.mark.parametrize("years, expected", [
+    ((2025, 2024), []),
+    ((2024, 2023), ["template_period_mismatch:CY"]),
+])
+def test_stacked_dimensional_period_blocks_are_all_compared(tmp_path, years, expected):
+    """SOCIE stacks a current-year block above a prior-year block over the
+    same category columns. The later block must not hide the earlier one."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "S"
+    ws["D2"] = "#PRIM#"
+    for top, year in zip((5, 40), years):
+        ws[f"A{top}"] = "#DOM#"
+        ws[f"E{top}"], ws[f"F{top}"] = "OrdinarySharesMember", "RetainedEarningsMember"
+        ws[f"A{top + 1}"] = "#STDTENDTDATE#"
+        ws[f"E{top + 1}"] = ws[f"F{top + 1}"] = f"01/01/{year} - 31/12/{year}"
+        ws[f"A{top + 2}"] = "#ENDT#"
+        ws[f"E{top + 2}"] = ws[f"F{top + 2}"] = f"31/12/{year}"
+    path = tmp_path / "socie.xlsx"
+    wb.save(path)
+    doc = {
+        "sheets": {"S": {"columns": {"current_year": None}}},
+        "meta": {
+            "reporting_period_cy": "Financial year ended 31 December 2025",
+            "reporting_period_py": "Financial year ended 31 December 2024",
+        },
+        "writes": [{"sheet": "S", "period": "CY"}, {"sheet": "S", "period": "PY"}],
+    }
+    cmap = detect_column_map(str(path), doc)
+    assert cmap["S"]["dimensional"] is True
+    issues = period_compatibility_issues(cmap, doc)
+    assert [f"{i['code']}:{i['period']}" for i in issues] == expected

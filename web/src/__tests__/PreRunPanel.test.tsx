@@ -1860,6 +1860,28 @@ test.each([false, true])("rolled-forward workbook is required before starting; c
   } finally { fetcher.mockRestore(); }
 });
 
+test("a workbook whose sheet dates differ loads with a warning naming the sheet and dates", async () => {
+  const metadata = { id: "c".repeat(64), filename: "rolled.xlsx", unit: "units",
+    summary: { inputs: 5, blank_slots: 0, unresolved_slots: 0, sheets: ["SOCIE"], not_in_file: [],
+      period_issues: [{ code: "template_period_mismatch", sheet: "SOCIE", period: "CY",
+        source_period: "Financial year ended 31 December 2025", template_periods: ["01/01/2024 - 31/12/2024"] }],
+      requires_confirmation: false, layout_digest: "d".repeat(64), layout: {} } };
+  const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(metadata));
+  try {
+    render(<PreRunPanel sessionId="date-warning" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={vi.fn()} />);
+    const source = await screen.findByRole("group", { name: "Prior year" });
+    fireEvent.click(within(source).getByRole("button", { name: "From mTool file" }));
+    fireEvent.change(screen.getByLabelText("Rolled-forward workbook"), { target: { files: [new File(["x"], "rolled.xlsx")] } });
+    await screen.findByText("rolled.xlsx");
+    const warning = screen.getAllByRole("note").find((n) => n.textContent?.includes("Dates differ"));
+    expect(warning).toHaveTextContent("on SOCIE");
+    expect(warning).toHaveTextContent("Workbook: 01/01/2024 - 31/12/2024");
+    expect(warning).toHaveTextContent("Statements: Financial year ended 31 December 2025");
+    expect(screen.queryByRole("alert")).toBeNull();
+    await waitFor(() => expect(screen.getByRole("button", { name: /start extraction/i })).toBeEnabled());
+  } finally { fetcher.mockRestore(); }
+});
+
 test("a pending workbook stops blocking when the filing has no comparatives", async () => {
   render(<PreRunPanel sessionId="first-filing" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={vi.fn()} />);
   const source = await screen.findByRole("group", { name: "Prior year" });

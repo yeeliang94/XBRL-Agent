@@ -21,12 +21,14 @@ type Metadata = {
     unresolved_slots: number;
     sheets: string[];
     not_in_file: unknown[];
-    period_issues: unknown[];
+    period_issues: PeriodIssue[];
     requires_confirmation?: boolean;
     layout_digest?: string;
     layout?: Record<string, { columns: Record<string, string> }>;
   };
 };
+
+type PeriodIssue = { code?: string; sheet?: string; source_period?: string; template_periods?: string[] };
 
 // One choice covers both whether a prior year exists and where its figures
 // come from, so the workbook upload sits next to the answer that needs it.
@@ -251,8 +253,11 @@ export function PriorYearWorkbook({
     !!(
       metadata.summary.unresolved_slots ||
       metadata.summary.not_in_file.length ||
-      metadata.summary.period_issues.length
+      metadata.summary.period_issues.some((issue) => issue.code !== "template_period_mismatch")
     );
+  const dateMismatches = (metadata?.summary.period_issues ?? []).filter(
+    (issue) => issue.code === "template_period_mismatch",
+  );
   const columnRoles = [
     ...new Set(Object.values(metadata?.summary.layout ?? {}).flatMap((mapping) => Object.keys(mapping.columns))),
   ];
@@ -386,6 +391,19 @@ export function PriorYearWorkbook({
               </>
             )}
           </div>
+          {dateMismatches.length > 0 && (
+            <div style={styles.attention}>
+              <p role="note" style={styles.flag}>
+                <StatusIcon symbol={STATUS_SYMBOLS.attention} />
+                <span>
+                  Dates differ from the statements on {dateMismatches.map((i) => i.sheet).join(", ")}.
+                  Workbook: {[...new Set(dateMismatches.flatMap((i) => i.template_periods ?? []))].join("; ")}.
+                  Statements: {[...new Set(dateMismatches.map((i) => i.source_period))].join("; ")}.
+                  Check this is the rolled-forward workbook for this filing year.
+                </span>
+              </p>
+            </div>
+          )}
           {hasCoverageGaps && (
             <div style={styles.attention}>
               <p role="note" style={styles.flag}>
