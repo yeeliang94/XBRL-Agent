@@ -28,9 +28,12 @@ type Metadata = {
   };
 };
 
+// One choice covers both whether a prior year exists and where its figures
+// come from, so the workbook upload sits next to the answer that needs it.
 const SOURCE_OPTIONS = [
-  { value: "report", label: "Statements" },
-  { value: "workbook", label: "mTool workbook" },
+  { value: "report", label: "From statements" },
+  { value: "workbook", label: "From mTool file" },
+  { value: "none", label: "First year", title: "First statements after incorporation" },
 ] as const;
 
 const UNIT_OPTIONS = (["units", "thousands", "millions"] as const).map((value) => ({
@@ -159,7 +162,8 @@ export function PriorYearWorkbook({
   sessionId,
   token,
   layout,
-  enabled,
+  firstYear,
+  onFirstYearChange,
   config,
   onChange,
   onLayoutChange,
@@ -169,7 +173,9 @@ export function PriorYearWorkbook({
   token: string | null;
   layout: string | null;
   onLayoutChange: (digest: string | null) => void;
-  enabled: boolean;
+  /** First statements after incorporation: no prior year to fill. */
+  firstYear: boolean;
+  onFirstYearChange: (firstYear: boolean) => void;
   config: RunConfigPayload;
   onChange: (token: string | null) => void;
   /** Why extraction cannot start yet because of the workbook, or null. */
@@ -238,8 +244,6 @@ export function PriorYearWorkbook({
       setBusy(false);
     }
   };
-  // First statements have no comparative period, so there is nothing to source.
-  if (!enabled) return null;
   const usingWorkbook = token !== null;
   const canDrop = usingWorkbook && !metadata && !busy;
   const hasCoverageGaps =
@@ -254,19 +258,25 @@ export function PriorYearWorkbook({
   ];
   return (
     <>
-      <SetupChoice
-        label="Prior-year figures from"
-        options={SOURCE_OPTIONS}
-        value={usingWorkbook ? "workbook" : "report"}
-        disabled={busy}
-        onChange={(next) => {
-          // Re-clicking the current source must not discard a loaded workbook.
-          if ((next === "workbook") === usingWorkbook) return;
-          onChange(next === "workbook" ? "" : null);
-          setError(null);
-        }}
-      />
-      {usingWorkbook && (
+      {/* Wide: three answers do not fit one grid column. */}
+      <div className="filing-setup-wide" style={{ minWidth: 0 }}>
+        <SetupChoice
+          label="Prior year"
+          options={SOURCE_OPTIONS}
+          value={firstYear ? "none" : usingWorkbook ? "workbook" : "report"}
+          disabled={busy}
+          onChange={(next) => {
+            onFirstYearChange(next === "none");
+            // First year keeps the source underneath, so switching back
+            // restores it. Re-clicking the current source must not discard a
+            // loaded workbook.
+            if (next === "none" || (next === "workbook") === usingWorkbook) return;
+            onChange(next === "workbook" ? "" : null);
+            setError(null);
+          }}
+        />
+      </div>
+      {!firstYear && usingWorkbook && (
         <>
           <SetupChoice
             label="Workbook amounts in"

@@ -1404,17 +1404,10 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             </span>
           )}
         </SetupChoice>
-        <SetupChoice
-          label="Reporting periods"
-          options={[
-            { value: "comparative", label: "Current and prior" },
-            { value: "first", label: "Current only", title: "First statements after incorporation" },
-          ] as const}
-          value={firstFinancialStatements ? "first" : "comparative"}
-          onChange={(next) => setFirstFinancialStatements(next === "first")}
-        />
-        {/* Sits under Reporting periods because that choice controls it. */}
-        <PriorYearWorkbook sessionId={sessionId} token={priorYearWorkbook} layout={priorYearLayout} onLayoutChange={setPriorYearLayout} enabled={!firstFinancialStatements}
+        {/* Prior year: one choice for whether a comparative exists and where
+            its figures come from. */}
+        <PriorYearWorkbook sessionId={sessionId} token={priorYearWorkbook} layout={priorYearLayout} onLayoutChange={setPriorYearLayout}
+          firstYear={firstFinancialStatements} onFirstYearChange={setFirstFinancialStatements}
           config={buildCurrentConfig()} onChange={setPriorYearWorkbook} onBlockedReason={setPriorYearBlockedReason} />
       </section>
       </div>

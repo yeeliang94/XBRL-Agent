@@ -138,11 +138,12 @@ describe("PreRunPanel", () => {
     const onRun = vi.fn();
     render(<PreRunPanel sessionId="first-period" getSettings={vi.fn().mockResolvedValue(mockSettings)}
       initialConfig={{ first_financial_statements: true }} onRun={onRun} />);
-    const periods = await screen.findByRole("group", { name: "Reporting periods" });
-    expect(within(periods).getByRole("button", { name: "Current only" })).toHaveAttribute("aria-pressed", "true");
+    const periods = await screen.findByRole("group", { name: "Prior year" });
+    expect(within(periods).getByRole("button", { name: "First year" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("group", { name: "Workbook amounts in" })).toBeNull();
     startExtraction();
     expect(onRun).toHaveBeenLastCalledWith(expect.objectContaining({ first_financial_statements: true }));
-    fireEvent.click(within(periods).getByRole("button", { name: "Current and prior" }));
+    fireEvent.click(within(periods).getByRole("button", { name: "From statements" }));
     startExtraction();
     expect(onRun).toHaveBeenLastCalledWith(expect.objectContaining({ first_financial_statements: false }));
   });
@@ -1819,15 +1820,15 @@ test.each([false, true])("rolled-forward workbook is required before starting; c
   const onRun = vi.fn();
   try {
     render(<PreRunPanel sessionId="rolled-session" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={onRun} />);
-    const source = await screen.findByRole("group", { name: "Prior-year figures from" });
-    fireEvent.click(within(source).getByRole("button", { name: "mTool workbook" }));
+    const source = await screen.findByRole("group", { name: "Prior year" });
+    fireEvent.click(within(source).getByRole("button", { name: "From mTool file" }));
     expect(screen.getByRole("status")).toHaveTextContent("Choose a workbook");
     expect(screen.getByRole("button", { name: /start extraction/i })).toBeDisabled();
     const workbookUnit = screen.getByRole("group", { name: "Workbook amounts in" });
     expect(within(workbookUnit).getByRole("button", { name: "RM '000" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.change(screen.getByLabelText("Rolled-forward workbook"), { target: { files: [new File(["fixture"], "rolled.xlsx")] } });
     await screen.findByText("rolled.xlsx");
-    fireEvent.click(within(source).getByRole("button", { name: "mTool workbook" }));
+    fireEvent.click(within(source).getByRole("button", { name: "From mTool file" }));
     expect(screen.getByText("rolled.xlsx")).toBeInTheDocument();
     if (requiresConfirmation) {
       const confirmation = await screen.findByRole("checkbox", { name: "These columns match the workbook" });
@@ -1841,21 +1842,30 @@ test.each([false, true])("rolled-forward workbook is required before starting; c
     expect(screen.getByRole("note")).toHaveTextContent("4 current-year values found");
     startExtraction();
     expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ prior_year_workbook: token, first_financial_statements: false }));
+    // First year hides a loaded workbook without discarding it.
+    fireEvent.click(within(source).getByRole("button", { name: "First year" }));
+    expect(screen.queryByText("rolled.xlsx")).toBeNull();
+    fireEvent.click(within(source).getByRole("button", { name: "From mTool file" }));
+    expect(screen.getByText("rolled.xlsx")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Replace workbook" }));
     expect(screen.getByRole("button", { name: /start extraction/i })).toBeDisabled();
-    fireEvent.click(within(source).getByRole("button", { name: "Statements" }));
+    fireEvent.click(within(source).getByRole("button", { name: "From statements" }));
     expect(screen.getByRole("button", { name: /start extraction/i })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Current only" }));
-    expect(screen.queryByRole("group", { name: "Prior-year figures from" })).toBeNull();
+    fireEvent.click(within(source).getByRole("button", { name: "From mTool file" }));
+    fireEvent.click(within(source).getByRole("button", { name: "First year" }));
+    expect(screen.queryByRole("group", { name: "Workbook amounts in" })).toBeNull();
+    expect(screen.queryByLabelText("Rolled-forward workbook")).toBeNull();
+    fireEvent.click(within(source).getByRole("button", { name: "From mTool file" }));
+    expect(screen.getByRole("group", { name: "Workbook amounts in" })).toBeInTheDocument();
   } finally { fetcher.mockRestore(); }
 });
 
 test("a pending workbook stops blocking when the filing has no comparatives", async () => {
   render(<PreRunPanel sessionId="first-filing" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={vi.fn()} />);
-  const source = await screen.findByRole("group", { name: "Prior-year figures from" });
-  fireEvent.click(within(source).getByRole("button", { name: "mTool workbook" }));
+  const source = await screen.findByRole("group", { name: "Prior year" });
+  fireEvent.click(within(source).getByRole("button", { name: "From mTool file" }));
   expect(screen.getByRole("button", { name: /start extraction/i })).toBeDisabled();
-  fireEvent.click(screen.getByRole("button", { name: "Current only" }));
+  fireEvent.click(within(source).getByRole("button", { name: "First year" }));
   expect(screen.getByRole("button", { name: /start extraction/i })).toBeEnabled();
 });
 
@@ -1864,8 +1874,8 @@ test("start names the blocker while reading, and a rejected workbook can be chos
   const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise((resolve) => { reject = resolve; }));
   try {
     render(<PreRunPanel sessionId="rejected-file" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={vi.fn()} />);
-    const source = await screen.findByRole("group", { name: "Prior-year figures from" });
-    fireEvent.click(within(source).getByRole("button", { name: "mTool workbook" }));
+    const source = await screen.findByRole("group", { name: "Prior year" });
+    fireEvent.click(within(source).getByRole("button", { name: "From mTool file" }));
     fireEvent.change(screen.getByLabelText("Rolled-forward workbook"), { target: { files: [new File(["x"], "bad.xlsx")] } });
     expect(await screen.findByText("Reading the workbook")).toBeInTheDocument();
     reject(Response.json({ detail: "The workbook reporting dates do not match." }, { status: 400 }));

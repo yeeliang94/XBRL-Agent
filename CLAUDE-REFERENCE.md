@@ -2372,7 +2372,7 @@ standard, entity level and statement variant. Prior-period writes are refused
 before scratch-workbook mutation and canonical persistence. Export, preview,
 review and human comparison omit PY rather than creating zeros or dates;
 internal comparative template grids may remain but their PY targets are blank.
-The operator selects Reporting periods in filing setup, or uses CLI
+The operator selects Prior year: First year in filing setup, or uses CLI
 `--first-financial-statements`. Pinned by `tests/test_cli_canonical_pipeline.py`,
 `tests/test_extraction_canonical_projection.py`, `tests/test_canonical_export.py`,
 `tests/test_result_preview_canonical.py`, `tests/test_concepts_routes.py`, and
